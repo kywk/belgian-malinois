@@ -1,0 +1,49 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: form-service
+  datasource:
+    url: jdbc:sqlserver://localhost:1433;databaseName=bpm_form_db;encrypt=false;trustServerCertificate=true
+    username: sa
+    password: BpmDev@2026!
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.SQLServerDialect
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: bpm
+    password: bpm_dev
+    listener:
+      simple:
+        retry:
+          enabled: true
+          initial-interval: 1000
+          multiplier: 2.0
+          max-attempts: 3
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+---
+spring:
+  config:
+    activate:
+      on-profile: docker
+  datasource:
+    url: jdbc:sqlserver://mssql:1433;databaseName=bpm_form_db;encrypt=false;trustServerCertificate=true
+  rabbitmq:
+    host: rabbitmq

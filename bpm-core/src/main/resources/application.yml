@@ -1,0 +1,60 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: bpm-core
+  datasource:
+    url: jdbc:sqlserver://localhost:1433;databaseName=bpm_core_db;encrypt=false;trustServerCertificate=true
+    username: sa
+    password: BpmDev@2026!
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.SQLServerDialect
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: bpm
+    password: bpm_dev
+    listener:
+      simple:
+        retry:
+          enabled: true
+          initial-interval: 1000
+          multiplier: 2.0
+          max-attempts: 3
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+flowable:
+  database-schema-update: true
+  async-executor-activate: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+---
+spring:
+  config:
+    activate:
+      on-profile: docker
+  datasource:
+    url: jdbc:sqlserver://mssql:1433;databaseName=bpm_core_db;encrypt=false;trustServerCertificate=true
+  rabbitmq:
+    host: rabbitmq
+  data:
+    redis:
+      host: redis
