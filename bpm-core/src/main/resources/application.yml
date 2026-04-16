@@ -38,12 +38,18 @@ spring:
     properties:
       mail.smtp.auth: false
       mail.smtp.starttls.enable: false
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
 
 flowable:
   database-schema-update: true
   async-executor-activate: true
 
 bpm:
+  upload:
+    dir: ./uploads
   external:
     org-service-url: http://localhost:8080/mock/org
     perm-service-url: http://localhost:8080/mock/perm

@@ -82,6 +82,10 @@ public class TaskController {
             taskService.claim(id, req.assignee());
             auditType = "TASK_CLAIM";
         } else if ("complete".equals(action)) {
+            // Block complete if there are pending subtasks (countersign)
+            if (!taskService.getSubTasks(id).isEmpty()) {
+                return Map.of("taskId", id, "status", "error", "message", "有未完成的加簽子任務");
+            }
             Map<String, Object> vars = new HashMap<>();
             if (req.variables() != null) {
                 req.variables().forEach(v -> vars.put(v.name(), v.value()));
