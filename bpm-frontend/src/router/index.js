@@ -6,6 +6,8 @@ import MyApplications from '../views/MyApplications.vue'
 import AuditLog from '../views/AuditLog.vue'
 import FormEditor from '../views/FormEditor.vue'
 import BpmnEditor from '../views/BpmnEditor.vue'
+import ExternalSystemAdmin from '../views/ExternalSystemAdmin.vue'
+import ProcessVariableSpecAdmin from '../views/ProcessVariableSpecAdmin.vue'
 
 const routes = [
   { path: '/', component: Dashboard },
@@ -14,7 +16,9 @@ const routes = [
   { path: '/my-applications', component: MyApplications },
   { path: '/audit-log', component: AuditLog, meta: { requiresRole: 'auditor' } },
   { path: '/admin/form-editor/:id?', component: FormEditor, meta: { requiresRole: 'admin' } },
-  { path: '/admin/bpmn-editor/:processKey?', component: BpmnEditor, meta: { requiresRole: 'admin' } }
+  { path: '/admin/bpmn-editor/:processKey?', component: BpmnEditor, meta: { requiresRole: 'admin' } },
+  { path: '/admin/external-systems', component: ExternalSystemAdmin, meta: { requiresRole: 'admin' } },
+  { path: '/admin/process-definitions/:key/variables', component: ProcessVariableSpecAdmin, meta: { requiresRole: 'admin' } }
 ]
 
 export default createRouter({
