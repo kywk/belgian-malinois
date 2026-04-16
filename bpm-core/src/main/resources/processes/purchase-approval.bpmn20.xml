@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="http://bpm.com/purchase">
+
+  <process id="purchase-approval" name="採購審核流程" isExecutable="true">
+
+    <startEvent id="start" flowable:initiator="initiator"
+                flowable:formKey="purchase-request"/>
+
+    <sequenceFlow id="flow1" sourceRef="start" targetRef="managerReview"/>
+
+    <userTask id="managerReview" name="主管審核"
+              flowable:assignee="${orgService.getDirectManager(initiator)}"
+              flowable:formKey="purchase-review">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
+      </extensionElements>
+    </userTask>
+
+    <sequenceFlow id="flow2" sourceRef="managerReview" targetRef="gw1"/>
+
+    <exclusiveGateway id="gw1" name="主管審核結果" default="flowDefault1"/>
+
+    <sequenceFlow id="flowApproved1" sourceRef="gw1" targetRef="financeReview">
+      <conditionExpression>${approved == true}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flowRejected1" sourceRef="gw1" targetRef="endRejected">
+      <conditionExpression>${rejected == true}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flowDefault1" sourceRef="gw1" targetRef="endReturned"/>
+
+    <userTask id="financeReview" name="財務審核"
+              flowable:candidateUsers="${permService.getUsersByPermission('finance:payment:approve')}"
+              flowable:formKey="purchase-review">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
+      </extensionElements>
+    </userTask>
+
+    <sequenceFlow id="flow3" sourceRef="financeReview" targetRef="gw2"/>
+
+    <exclusiveGateway id="gw2" name="財務審核結果" default="flowDefault2"/>
+
+    <sequenceFlow id="flowApproved2" sourceRef="gw2" targetRef="endApproved">
+      <conditionExpression>${approved == true}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flowRejected2" sourceRef="gw2" targetRef="endRejected">
+      <conditionExpression>${rejected == true}</conditionExpression>
+    </sequenceFlow>
+    <sequenceFlow id="flowDefault2" sourceRef="gw2" targetRef="endReturned"/>
+
+    <endEvent id="endApproved" name="核准"/>
+    <endEvent id="endRejected" name="拒絕"/>
+    <endEvent id="endReturned" name="退回"/>
+
+  </process>
+</definitions>

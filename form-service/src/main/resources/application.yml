@@ -13,9 +13,13 @@ spring:
     hibernate:
       ddl-auto: update
     show-sql: false
+    defer-datasource-initialization: true
     properties:
       hibernate:
         dialect: org.hibernate.dialect.SQLServerDialect
+  sql:
+    init:
+      mode: always
   rabbitmq:
     host: localhost
     port: 5672
