@@ -33,7 +33,7 @@ jobs:
       - name: Replace EL placeholders
         run: |
           ENV=${{ steps.env.outputs.env }}
-          CONFIG_FILE="config/${ENV}.yml"
+          CONFIG_FILE="cicd/envs/${ENV}.yml"
           if [ ! -f "$CONFIG_FILE" ]; then
             echo "Config file not found: $CONFIG_FILE"
             exit 1

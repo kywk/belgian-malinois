@@ -1,6 +1,3 @@
-<!-- This template is maintained in cicd/templates/merge_request.md -->
-<!-- GitHub requires this file at .github/pull_request_template.md -->
-
 ## 變更說明
 
 ### 變更類型
@@ -20,13 +17,13 @@
 - [ ] infra / config
 
 ### 變更描述
-
+<!-- 簡述此 MR 的目的和主要變更 -->
 
 ### 測試方式
-
+<!-- 說明如何驗證此變更 -->
 
 ### 部署注意事項
-
+<!-- 是否需要資料庫遷移、環境變數變更、服務重啟順序等 -->
 
 ### Checklist
 - [ ] 程式碼已通過本地編譯/build

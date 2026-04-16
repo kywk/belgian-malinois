@@ -1,5 +1,5 @@
 <!-- This template is maintained in cicd/templates/merge_request.md -->
-<!-- GitHub requires this file at .github/pull_request_template.md -->
+<!-- GitLab requires this file at .gitlab/merge_request_templates/ -->
 
 ## 變更說明
 
