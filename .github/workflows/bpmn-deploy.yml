@@ -1,0 +1,61 @@
+name: BPMN Deploy
+
+on:
+  push:
+    branches: [dev, sit]
+    paths: ['bpmn-definitions/**']
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy environment'
+        required: true
+        type: choice
+        options: [dev, sit, uat, prod]
+
+jobs:
+  deploy-bpmn:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || (github.ref == 'refs/heads/sit' && 'sit') || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "env=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" = "refs/heads/sit" ]; then
+            echo "env=sit" >> $GITHUB_OUTPUT
+          else
+            echo "env=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Replace EL placeholders
+        run: |
+          ENV=${{ steps.env.outputs.env }}
+          CONFIG_FILE="cicd/envs/${ENV}.yml"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "Config file not found: $CONFIG_FILE"
+            exit 1
+          fi
+          # Replace placeholders in BPMN files
+          for bpmn in bpmn-definitions/**/*.bpmn*; do
+            [ -f "$bpmn" ] || continue
+            while IFS=': ' read -r key value; do
+              [ -z "$key" ] || [ -z "$value" ] && continue
+              sed -i "s/\${${key}}/${value}/g" "$bpmn"
+            done < <(grep -v '^#' "$CONFIG_FILE" | grep -v '^bpmn\.' | grep ':')
+            echo "Processed: $bpmn"
+          done
+
+      - name: Deploy to Flowable
+        run: |
+          ENV=${{ steps.env.outputs.env }}
+          BPM_URL="${{ vars.BPM_CORE_URL || 'http://localhost:8080' }}"
+          for bpmn in bpmn-definitions/**/*.bpmn*; do
+            [ -f "$bpmn" ] || continue
+            echo "Deploying $bpmn to $ENV..."
+            curl -s -X POST "${BPM_URL}/api/deployments" \
+              -F "file=@${bpmn}" \
+              -F "name=$(basename $bpmn)" || echo "Failed: $bpmn"
+          done

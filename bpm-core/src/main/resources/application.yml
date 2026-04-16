@@ -50,6 +50,9 @@ flowable:
 bpm:
   upload:
     dir: ./uploads
+  bpmn-definitions-dir: ./bpmn-definitions
+  webhook:
+    hmac-secret: bpm-webhook-secret
   external:
     org-service-url: http://localhost:8080/mock/org
     perm-service-url: http://localhost:8080/mock/perm

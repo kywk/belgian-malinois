@@ -1,0 +1,349 @@
+variables:
+  REGISTRY: ${CI_REGISTRY}
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+
+stages:
+  - build
+  - test
+  - docker
+  - deploy
+
+# ──────────────────────────────────────────────
+# Templates
+# ──────────────────────────────────────────────
+
+.java-build: &java-build
+  image: eclipse-temurin:21-jdk
+  cache:
+    key: maven-${CI_JOB_NAME}
+    paths: [.m2/repository]
+
+.docker-build: &docker-build
+  image: docker:24
+  services: [docker:24-dind]
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+
+.deploy-template: &deploy-template
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache curl
+
+# ──────────────────────────────────────────────
+# BPM Core
+# ──────────────────────────────────────────────
+
+bpm-core:build:
+  <<: *java-build
+  stage: build
+  script: mvn -f bpm-core/pom.xml compile -q
+  rules:
+    - changes: [bpm-core/**]
+
+bpm-core:test:
+  <<: *java-build
+  stage: test
+  script: mvn -f bpm-core/pom.xml verify -q
+  rules:
+    - changes: [bpm-core/**]
+
+bpm-core:docker:
+  <<: *docker-build
+  stage: docker
+  script:
+    - docker build -t $REGISTRY/bpm-core:$CI_COMMIT_SHA -t $REGISTRY/bpm-core:latest bpm-core/
+    - docker push $REGISTRY/bpm-core:$CI_COMMIT_SHA
+    - docker push $REGISTRY/bpm-core:latest
+  needs: [bpm-core:test]
+  rules:
+    - changes: [bpm-core/**]
+
+bpm-core:deploy-dev:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: dev }
+  script:
+    - echo "Deploying bpm-core to DEV — $REGISTRY/bpm-core:$CI_COMMIT_SHA"
+    # TODO: kubectl set image / docker compose pull
+  needs: [bpm-core:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+      changes: [bpm-core/**]
+
+bpm-core:deploy-sit:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: sit }
+  script:
+    - echo "Deploying bpm-core to SIT"
+  needs: [bpm-core:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "sit"
+      changes: [bpm-core/**]
+
+bpm-core:deploy-uat:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: uat }
+  script:
+    - echo "Deploying bpm-core to UAT"
+  needs: [bpm-core:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "uat"
+      when: manual
+
+bpm-core:deploy-prod:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: prod }
+  script:
+    - echo "Deploying bpm-core to PROD"
+  needs: [bpm-core:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+
+# ──────────────────────────────────────────────
+# Form Service
+# ──────────────────────────────────────────────
+
+form-service:build:
+  <<: *java-build
+  stage: build
+  script: mvn -f form-service/pom.xml compile -q
+  rules:
+    - changes: [form-service/**]
+
+form-service:test:
+  <<: *java-build
+  stage: test
+  script: mvn -f form-service/pom.xml verify -q
+  rules:
+    - changes: [form-service/**]
+
+form-service:docker:
+  <<: *docker-build
+  stage: docker
+  script:
+    - docker build -t $REGISTRY/form-service:$CI_COMMIT_SHA -t $REGISTRY/form-service:latest form-service/
+    - docker push $REGISTRY/form-service:$CI_COMMIT_SHA
+    - docker push $REGISTRY/form-service:latest
+  needs: [form-service:test]
+  rules:
+    - changes: [form-service/**]
+
+form-service:deploy-dev:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: dev }
+  script: echo "Deploying form-service to DEV"
+  needs: [form-service:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+      changes: [form-service/**]
+
+form-service:deploy-sit:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: sit }
+  script: echo "Deploying form-service to SIT"
+  needs: [form-service:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "sit"
+      changes: [form-service/**]
+
+form-service:deploy-uat:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: uat }
+  script: echo "Deploying form-service to UAT"
+  needs: [form-service:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "uat"
+      when: manual
+
+form-service:deploy-prod:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: prod }
+  script: echo "Deploying form-service to PROD"
+  needs: [form-service:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+
+# ──────────────────────────────────────────────
+# Audit Log Service
+# ──────────────────────────────────────────────
+
+audit-log-service:build:
+  <<: *java-build
+  stage: build
+  script: mvn -f audit-log-service/pom.xml compile -q
+  rules:
+    - changes: [audit-log-service/**]
+
+audit-log-service:test:
+  <<: *java-build
+  stage: test
+  script: mvn -f audit-log-service/pom.xml verify -q
+  rules:
+    - changes: [audit-log-service/**]
+
+audit-log-service:docker:
+  <<: *docker-build
+  stage: docker
+  script:
+    - docker build -t $REGISTRY/audit-log-service:$CI_COMMIT_SHA -t $REGISTRY/audit-log-service:latest audit-log-service/
+    - docker push $REGISTRY/audit-log-service:$CI_COMMIT_SHA
+    - docker push $REGISTRY/audit-log-service:latest
+  needs: [audit-log-service:test]
+  rules:
+    - changes: [audit-log-service/**]
+
+audit-log-service:deploy-dev:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: dev }
+  script: echo "Deploying audit-log-service to DEV"
+  needs: [audit-log-service:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+      changes: [audit-log-service/**]
+
+audit-log-service:deploy-sit:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: sit }
+  script: echo "Deploying audit-log-service to SIT"
+  needs: [audit-log-service:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "sit"
+      changes: [audit-log-service/**]
+
+audit-log-service:deploy-uat:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: uat }
+  script: echo "Deploying audit-log-service to UAT"
+  needs: [audit-log-service:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "uat"
+      when: manual
+
+audit-log-service:deploy-prod:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: prod }
+  script: echo "Deploying audit-log-service to PROD"
+  needs: [audit-log-service:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+
+# ──────────────────────────────────────────────
+# BPM Frontend
+# ──────────────────────────────────────────────
+
+bpm-frontend:build:
+  image: node:20-alpine
+  stage: build
+  cache:
+    key: npm
+    paths: [bpm-frontend/node_modules]
+  script:
+    - cd bpm-frontend && npm ci && npm run build
+  artifacts:
+    paths: [bpm-frontend/dist]
+  rules:
+    - changes: [bpm-frontend/**]
+
+bpm-frontend:docker:
+  <<: *docker-build
+  stage: docker
+  script:
+    - docker build -t $REGISTRY/bpm-frontend:$CI_COMMIT_SHA -t $REGISTRY/bpm-frontend:latest bpm-frontend/
+    - docker push $REGISTRY/bpm-frontend:$CI_COMMIT_SHA
+    - docker push $REGISTRY/bpm-frontend:latest
+  needs: [bpm-frontend:build]
+  rules:
+    - changes: [bpm-frontend/**]
+
+bpm-frontend:deploy-dev:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: dev }
+  script: echo "Deploying bpm-frontend to DEV"
+  needs: [bpm-frontend:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "dev"
+      changes: [bpm-frontend/**]
+
+bpm-frontend:deploy-sit:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: sit }
+  script: echo "Deploying bpm-frontend to SIT"
+  needs: [bpm-frontend:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "sit"
+      changes: [bpm-frontend/**]
+
+bpm-frontend:deploy-uat:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: uat }
+  script: echo "Deploying bpm-frontend to UAT"
+  needs: [bpm-frontend:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "uat"
+      when: manual
+
+bpm-frontend:deploy-prod:
+  <<: *deploy-template
+  stage: deploy
+  environment: { name: prod }
+  script: echo "Deploying bpm-frontend to PROD"
+  needs: [bpm-frontend:docker]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+
+# ──────────────────────────────────────────────
+# BPMN Definitions Deploy
+# ──────────────────────────────────────────────
+
+bpmn:deploy:
+  <<: *deploy-template
+  stage: deploy
+  script:
+    - |
+      # Determine environment
+      case "$CI_COMMIT_BRANCH" in
+        dev)  ENV=dev ;;
+        sit)  ENV=sit ;;
+        uat)  ENV=uat ;;
+        main) ENV=prod ;;
+        *)    ENV=dev ;;
+      esac
+      CONFIG_FILE="cicd/envs/${ENV}.yml"
+
+      # Replace EL placeholders in BPMN files
+      for bpmn in bpmn-definitions/**/*.bpmn*; do
+        [ -f "$bpmn" ] || continue
+        while IFS=': ' read -r key value; do
+          [ -z "$key" ] || [ -z "$value" ] && continue
+          sed -i "s/\${${key}}/${value}/g" "$bpmn"
+        done < <(grep -v '^#' "$CONFIG_FILE" | grep -v '^bpmn\.' | grep ':')
+      done
+
+      # Deploy to Flowable
+      BPM_URL="${BPM_CORE_URL:-http://bpm-core:8080}"
+      for bpmn in bpmn-definitions/**/*.bpmn*; do
+        [ -f "$bpmn" ] || continue
+        echo "Deploying $bpmn to $ENV..."
+        curl -sf -X POST "${BPM_URL}/api/deployments" \
+          -F "file=@${bpmn}" -F "name=$(basename $bpmn)" || echo "WARN: Failed $bpmn"
+      done
+  rules:
+    - changes: [bpmn-definitions/**]

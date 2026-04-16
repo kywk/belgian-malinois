@@ -1,0 +1,11 @@
+# DEV environment config
+# BPMN EL placeholder values
+ENV_FINANCE_GROUP: finance_dept_dev
+ENV_HR_GROUP: hr_dept_dev
+ENV_LEGAL_GROUP: legal_dept_dev
+ENV_PURCHASE_GROUP: purchase_dept_dev
+
+# Service URLs
+bpm.core.url: http://localhost:8080
+form.service.url: http://localhost:8081
+audit.service.url: http://localhost:8082
