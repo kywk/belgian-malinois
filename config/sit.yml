@@ -1,0 +1,9 @@
+# SIT environment config
+ENV_FINANCE_GROUP: finance_dept_sit
+ENV_HR_GROUP: hr_dept_sit
+ENV_LEGAL_GROUP: legal_dept_sit
+ENV_PURCHASE_GROUP: purchase_dept_sit
+
+bpm.core.url: http://bpm-core-sit:8080
+form.service.url: http://form-service-sit:8081
+audit.service.url: http://audit-log-service-sit:8082

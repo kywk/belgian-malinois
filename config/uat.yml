@@ -1,0 +1,9 @@
+# UAT environment config
+ENV_FINANCE_GROUP: finance_dept_uat
+ENV_HR_GROUP: hr_dept_uat
+ENV_LEGAL_GROUP: legal_dept_uat
+ENV_PURCHASE_GROUP: purchase_dept_uat
+
+bpm.core.url: http://bpm-core-uat:8080
+form.service.url: http://form-service-uat:8081
+audit.service.url: http://audit-log-service-uat:8082

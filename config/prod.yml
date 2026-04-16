@@ -1,0 +1,9 @@
+# PROD environment config
+ENV_FINANCE_GROUP: finance_dept_approver
+ENV_HR_GROUP: hr_approver
+ENV_LEGAL_GROUP: legal_approver
+ENV_PURCHASE_GROUP: purchase_approver
+
+bpm.core.url: http://bpm-core:8080
+form.service.url: http://form-service:8081
+audit.service.url: http://audit-log-service:8082
