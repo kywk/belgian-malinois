@@ -37,6 +37,11 @@ flowable:
   database-schema-update: true
   async-executor-activate: true
 
+bpm:
+  external:
+    org-service-url: http://localhost:8080/mock/org
+    perm-service-url: http://localhost:8080/mock/perm
+
 management:
   endpoints:
     web:
