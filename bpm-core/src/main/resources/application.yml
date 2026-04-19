@@ -78,3 +78,6 @@ spring:
   data:
     redis:
       host: redis
+
+bpm:
+  form-service-url: http://form-service:8081

@@ -12,3 +12,4 @@ ON target.form_key = source.formKey AND target.version = source.version
 WHEN NOT MATCHED THEN
   INSERT (id, form_key, version, schema_json, status, name, created_by, created_at, updated_at)
   VALUES (NEWID(), source.formKey, source.version, source.schemaJson, source.status, source.name, 'system', GETUTCDATE(), GETUTCDATE());
+@@

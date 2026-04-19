@@ -1,8 +1,13 @@
+# syntax=docker/dockerfile:1
 FROM eclipse-temurin:21-jdk-alpine AS build
 WORKDIR /app
+RUN apk add --no-cache maven
+# Pre-fetch dependencies (cached layer, only re-runs when pom.xml changes)
 COPY pom.xml .
+RUN --mount=type=cache,target=/root/.m2 mvn dependency:go-offline -q
+# Build
 COPY src ./src
-RUN apk add --no-cache maven && mvn package -DskipTests
+RUN --mount=type=cache,target=/root/.m2 mvn package -DskipTests -q
 
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app

@@ -33,11 +33,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useAuthStore } from '../stores/auth'
 import { getProcessInstances, getHistoricProcessInstances } from '../services/flowableApi.js'
 
-const userId = 'current_user'
+const auth = useAuthStore()
+const userId = computed(() => auth.token)
 const activeTab = ref('running')
 const list = ref([])
 const fmt = (t) => t ? new Date(t).toLocaleString('zh-TW') : ''
@@ -47,9 +49,9 @@ const statusLabel = (s) => ({ running: '進行中', completed: '已完成', reje
 
 async function loadData() {
   if (activeTab.value === 'running') {
-    list.value = await getProcessInstances({ initiator: userId })
+    list.value = await getProcessInstances({ initiator: userId.value })
   } else {
-    const all = await getHistoricProcessInstances({ initiator: userId, finished: true })
+    const all = await getHistoricProcessInstances({ initiator: userId.value, finished: true })
     list.value = activeTab.value === 'completed'
       ? all.filter(p => p.status === 'completed')
       : all.filter(p => p.status !== 'completed')

@@ -21,16 +21,25 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '../stores/auth'
 import { getTasks } from '../services/flowableApi.js'
 
 const router = useRouter()
-const userId = 'current_user'
+const auth = useAuthStore()
+const userId = auth.token
 const tasks = ref([])
 const fmt = (t) => t ? new Date(t).toLocaleString('zh-TW') : ''
 
 const goDetail = (row) => router.push(`/tasks/${row.taskId}`)
 
 onMounted(async () => {
-  tasks.value = await getTasks({ assignee: userId, candidateUser: userId })
+  // Query both assignee and candidateUser, deduplicate by taskId
+  const [assigned, candidate] = await Promise.all([
+    getTasks({ assignee: userId }),
+    getTasks({ candidateUser: userId })
+  ])
+  const map = new Map()
+  ;[...assigned, ...candidate].forEach(t => map.set(t.taskId, t))
+  tasks.value = [...map.values()].sort((a, b) => new Date(b.createTime) - new Date(a.createTime))
 })
 </script>

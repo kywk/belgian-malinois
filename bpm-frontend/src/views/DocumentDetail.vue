@@ -57,6 +57,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import axios from 'axios'
+import { useAuthStore } from '../stores/auth'
 import { getTasks, getSubtasks } from '../services/flowableApi.js'
 import DynamicForm from '../components/DynamicForm.vue'
 import ExternalFormLink from '../components/ExternalFormLink.vue'
@@ -68,6 +70,7 @@ import ProcessDiagram from '../components/ProcessDiagram.vue'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 const taskId = route.params.taskId
 const task = ref(null)
 const variables = ref({})
@@ -93,8 +96,20 @@ async function loadSubtasks() {
 }
 
 onMounted(async () => {
-  const tasks = await getTasks({})
-  task.value = tasks.find(t => t.taskId === taskId) || null
+  const [assigned, candidate] = await Promise.all([
+    getTasks({ assignee: auth.token }),
+    getTasks({ candidateUser: auth.token })
+  ])
+  const map = new Map()
+  ;[...assigned, ...candidate].forEach(t => map.set(t.taskId, t))
+  task.value = map.get(taskId) || null
+
+  if (task.value?.processInstanceId) {
+    try {
+      const { data } = await axios.get(`/api/process-instances/${task.value.processInstanceId}/variables`)
+      variables.value = data
+    } catch { /* ignore */ }
+  }
   await loadSubtasks()
 })
 </script>

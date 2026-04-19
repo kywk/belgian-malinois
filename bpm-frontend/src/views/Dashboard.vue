@@ -39,10 +39,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { useAuthStore } from '../stores/auth'
 import { getTasks, getHistoricTasks } from '../services/flowableApi.js'
 
-const userId = 'current_user' // TODO: replace with auth store
+const auth = useAuthStore()
+const userId = computed(() => auth.token)
 const stats = reactive({ pending: 0, completedThisWeek: 0, urgent: 0 })
 const urgentTasks = ref([])
 
@@ -51,7 +53,7 @@ const THREE_DAYS = 3 * 24 * 60 * 60 * 1000
 function formatTime(t) { return t ? new Date(t).toLocaleString('zh-TW') : '' }
 
 onMounted(async () => {
-  const tasks = await getTasks({ assignee: userId })
+  const tasks = await getTasks({ assignee: userId.value })
   stats.pending = tasks.length
 
   const now = Date.now()
@@ -62,7 +64,7 @@ onMounted(async () => {
   const weekStart = new Date()
   weekStart.setDate(weekStart.getDate() - weekStart.getDay())
   weekStart.setHours(0, 0, 0, 0)
-  const history = await getHistoricTasks({ assignee: userId })
+  const history = await getHistoricTasks({ assignee: userId.value })
   stats.completedThisWeek = history.filter(t => new Date(t.endTime) >= weekStart).length
 })
 </script>

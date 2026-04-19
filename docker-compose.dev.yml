@@ -1,0 +1,20 @@
+version: '3.8'
+
+# 開發環境：在 docker-compose.yml 基礎上加入 MailHog
+# 使用方式：docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI: http://localhost:8025
+    restart: unless-stopped
+
+  bpm-core:
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_MAIL_HOST: mailhog
+      SPRING_MAIL_PORT: 1025
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: "false"
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: "false"

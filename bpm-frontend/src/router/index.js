@@ -9,8 +9,11 @@ import BpmnEditor from '../views/BpmnEditor.vue'
 import ExternalSystemAdmin from '../views/ExternalSystemAdmin.vue'
 import ProcessVariableSpecAdmin from '../views/ProcessVariableSpecAdmin.vue'
 
+import StartProcess from '../views/StartProcess.vue'
+
 const routes = [
   { path: '/', component: Dashboard },
+  { path: '/start', component: StartProcess },
   { path: '/tasks', component: TaskInbox },
   { path: '/tasks/:taskId', component: DocumentDetail },
   { path: '/my-applications', component: MyApplications },

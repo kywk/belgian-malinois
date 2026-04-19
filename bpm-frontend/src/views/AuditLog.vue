@@ -63,7 +63,7 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { searchAuditLogs, integrityCheck } from '../services/auditLogApi.js'
 
 const operationTypes = [
@@ -103,9 +103,13 @@ async function doSearch() {
     params.startDate = query.dateRange[0]
     params.endDate = query.dateRange[1]
   }
-  const data = await searchAuditLogs(params)
-  logs.value = data.content
-  total.value = data.totalElements
+  try {
+    const data = await searchAuditLogs(params)
+    logs.value = data.content || []
+    total.value = data.totalElements || 0
+  } catch (e) {
+    console.error('audit-logs error:', e.response?.status, e.message)
+  }
 }
 
 async function doIntegrityCheck() {
@@ -115,5 +119,5 @@ async function doIntegrityCheck() {
   integrityResult.value = await integrityCheck(query.dateRange[0], query.dateRange[1])
 }
 
-doSearch()
+onMounted(doSearch)
 </script>

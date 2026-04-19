@@ -26,7 +26,7 @@
       <conditionExpression>${approved == true}</conditionExpression>
     </sequenceFlow>
     <sequenceFlow id="flowRejected1" sourceRef="gw1" targetRef="endRejected">
-      <conditionExpression>${rejected == true}</conditionExpression>
+      <conditionExpression>${rejected != null &amp;&amp; rejected == true}</conditionExpression>
     </sequenceFlow>
     <sequenceFlow id="flowDefault1" sourceRef="gw1" targetRef="endReturned"/>
 
@@ -46,7 +46,7 @@
       <conditionExpression>${approved == true}</conditionExpression>
     </sequenceFlow>
     <sequenceFlow id="flowRejected2" sourceRef="gw2" targetRef="endRejected">
-      <conditionExpression>${rejected == true}</conditionExpression>
+      <conditionExpression>${rejected != null &amp;&amp; rejected == true}</conditionExpression>
     </sequenceFlow>
     <sequenceFlow id="flowDefault2" sourceRef="gw2" targetRef="endReturned"/>
 

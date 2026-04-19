@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/tasks")
+@RequestMapping("/api/countersign")
 public class CountersignController {
 
     private final TaskService taskService;
@@ -24,41 +24,29 @@ public class CountersignController {
         this.auditPublisher = auditPublisher;
     }
 
-    /**
-     * Create countersign subtask.
-     */
-    @PostMapping
-    public Map<String, Object> createSubtask(@RequestBody Map<String, String> req) {
-        String parentTaskId = req.get("parentTaskId");
-        String assignee = req.get("assignee");
-        String description = req.get("description");
+    @PostMapping("/{taskId}")
+    public Map<String, Object> createSubtask(@PathVariable String taskId,
+                                              @RequestBody Map<String, String> req) {
+        Task parent = taskService.createTaskQuery().taskId(taskId).singleResult();
+        if (parent == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found");
 
-        Task parent = taskService.createTaskQuery().taskId(parentTaskId).singleResult();
-        if (parent == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Parent task not found");
-
+        String assignee = req.get("countersignUserId");
         Task subtask = taskService.newTask();
-        subtask.setParentTaskId(parentTaskId);
+        subtask.setParentTaskId(taskId);
         subtask.setAssignee(assignee);
         subtask.setName("加簽審核 - " + parent.getName());
-        subtask.setDescription(description);
+        subtask.setDescription(req.getOrDefault("message", ""));
         taskService.saveTask(subtask);
 
         auditPublisher.publish(new AuditEvent("TASK_COUNTERSIGN", assignee,
                 parent.getProcessInstanceId(), subtask.getId(),
-                Map.of("parentTaskId", parentTaskId, "assignee", assignee)));
+                Map.of("parentTaskId", taskId, "assignee", assignee)));
 
-        Map<String, Object> result = new HashMap<>();
-        result.put("taskId", subtask.getId());
-        result.put("parentTaskId", parentTaskId);
-        result.put("assignee", assignee);
-        result.put("name", subtask.getName());
-        return result;
+        return Map.of("taskId", subtask.getId(), "parentTaskId", taskId,
+                      "assignee", assignee, "name", subtask.getName());
     }
 
-    /**
-     * Get subtasks for a parent task.
-     */
-    @GetMapping("/{taskId}/subtasks")
+    @GetMapping("/{taskId}")
     public List<Map<String, Object>> getSubtasks(@PathVariable String taskId) {
         return taskService.getSubTasks(taskId).stream().map(t -> {
             Map<String, Object> m = new HashMap<>();
@@ -71,30 +59,20 @@ public class CountersignController {
         }).toList();
     }
 
-    /**
-     * Complete a subtask — appends comment to parent, checks if all subtasks done.
-     */
-    @PutMapping("/{taskId}/subtasks/{subtaskId}/complete")
+    @PutMapping("/{taskId}/{subtaskId}/complete")
     public Map<String, Object> completeSubtask(@PathVariable String taskId,
                                                 @PathVariable String subtaskId,
                                                 @RequestBody(required = false) Map<String, String> req) {
         Task subtask = taskService.createTaskQuery().taskId(subtaskId).singleResult();
         if (subtask == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
 
-        // Append opinion to parent task as comment
         String opinion = req != null ? req.getOrDefault("opinion", "") : "";
         if (!opinion.isBlank()) {
             Task parent = taskService.createTaskQuery().taskId(taskId).singleResult();
             taskService.addComment(taskId, parent != null ? parent.getProcessInstanceId() : null,
                     "[加簽意見 - " + subtask.getAssignee() + "] " + opinion);
         }
-
         taskService.deleteTask(subtaskId, true);
-
-        // Check remaining subtasks
-        List<Task> remaining = taskService.getSubTasks(taskId);
-        boolean allDone = remaining.isEmpty();
-
-        return Map.of("subtaskId", subtaskId, "allSubtasksDone", allDone);
+        return Map.of("subtaskId", subtaskId, "allSubtasksDone", taskService.getSubTasks(taskId).isEmpty());
     }
 }

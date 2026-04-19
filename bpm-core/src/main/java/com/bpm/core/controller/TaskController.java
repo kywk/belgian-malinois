@@ -90,6 +90,8 @@ public class TaskController {
             if (req.variables() != null) {
                 req.variables().forEach(v -> vars.put(v.name(), v.value()));
             }
+            // Ensure 'rejected' is always set to avoid EL PropertyNotFoundException
+            vars.putIfAbsent("rejected", false);
             taskService.complete(id, vars);
             auditType = resolveCompleteAuditType(vars);
         } else if ("delegate".equals(action)) {

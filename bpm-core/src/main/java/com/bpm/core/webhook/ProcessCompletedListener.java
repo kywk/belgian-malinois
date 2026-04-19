@@ -13,13 +13,15 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.springframework.context.annotation.Lazy;
+
 @Component
 public class ProcessCompletedListener implements FlowableEventListener {
 
     private final RabbitTemplate rabbitTemplate;
     private final RuntimeService runtimeService;
 
-    public ProcessCompletedListener(RabbitTemplate rabbitTemplate, RuntimeService runtimeService) {
+    public ProcessCompletedListener(RabbitTemplate rabbitTemplate, @Lazy RuntimeService runtimeService) {
         this.rabbitTemplate = rabbitTemplate;
         this.runtimeService = runtimeService;
     }

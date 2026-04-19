@@ -5,7 +5,6 @@ import com.bpm.audit.model.OperationType;
 import com.bpm.audit.service.AuditLogService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -21,7 +20,7 @@ public class AuditLogController {
         this.auditLogService = auditLogService;
     }
 
-    @GetMapping
+    @GetMapping({"", "/"})
     public Page<AuditLog> search(
             @RequestParam(required = false) String processInstanceId,
             @RequestParam(required = false) String operatorId,
@@ -36,7 +35,7 @@ public class AuditLogController {
         Instant end = endDate != null ? Instant.parse(endDate) : null;
 
         return auditLogService.search(processInstanceId, operatorId, opType, start, end,
-                PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt")));
+                PageRequest.of(page, size));
     }
 
     @GetMapping("/integrity-check")

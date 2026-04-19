@@ -91,6 +91,7 @@ services:
       - "80:80"
     volumes:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./bpm-frontend/dist:/usr/share/nginx/html:ro
     depends_on:
       - bpm-core
       - form-service

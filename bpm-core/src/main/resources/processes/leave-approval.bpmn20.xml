@@ -27,7 +27,7 @@
     </sequenceFlow>
 
     <sequenceFlow id="flowRejected" sourceRef="gw1" targetRef="endRejected">
-      <conditionExpression>${rejected == true}</conditionExpression>
+      <conditionExpression>${rejected != null &amp;&amp; rejected == true}</conditionExpression>
     </sequenceFlow>
 
     <sequenceFlow id="flowDefault" sourceRef="gw1" targetRef="endReturned"/>

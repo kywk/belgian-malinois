@@ -3,15 +3,11 @@ package com.bpm.core.controller;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.dto.StartProcessRequest;
-import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.runtime.ProcessInstance;
-import org.flowable.image.ProcessDiagramGenerator;
-import org.flowable.image.impl.DefaultProcessDiagramGenerator;
 import org.flowable.task.api.Task;
-import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.InputStream;
@@ -88,18 +84,28 @@ public class ProcessController {
                 }).toList();
     }
 
-    @GetMapping(value = "/{id}/diagram", produces = MediaType.IMAGE_PNG_VALUE)
-    public byte[] getDiagram(@PathVariable String id) throws Exception {
+    @GetMapping("/{id}/variables")
+    public Map<String, Object> getVariables(@PathVariable String id) {
+        try { return runtimeService.getVariables(id); }
+        catch (Exception e) { return Map.of(); }
+    }
+
+    @GetMapping("/{id}/bpmn-xml")
+    public Map<String, Object> getBpmnXml(@PathVariable String id) throws Exception {
         ProcessInstance pi = runtimeService.createProcessInstanceQuery()
                 .processInstanceId(id).singleResult();
-        if (pi == null) return new byte[0];
+        if (pi == null) return Map.of("xml", "", "activeIds", List.of());
 
-        BpmnModel model = repositoryService.getBpmnModel(pi.getProcessDefinitionId());
-        List<String> activeIds = runtimeService.getActiveActivityIds(id);
-        ProcessDiagramGenerator gen = new DefaultProcessDiagramGenerator();
-        try (InputStream is = gen.generateDiagram(model, "png", activeIds,
-                Collections.emptyList(), "宋体", "宋体", "宋体", null, 1.0, true)) {
-            return is.readAllBytes();
+        var pd = repositoryService.getProcessDefinition(pi.getProcessDefinitionId());
+        org.flowable.bpmn.model.BpmnModel model = repositoryService.getBpmnModel(pi.getProcessDefinitionId());
+
+        // Auto-layout if no DI (hand-written BPMN without diagram section)
+        if (model.getLocationMap().isEmpty()) {
+            new org.flowable.bpmn.BpmnAutoLayout(model).execute();
         }
+
+        byte[] xmlBytes = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(model);
+        List<String> activeIds = runtimeService.getActiveActivityIds(id);
+        return Map.of("xml", new String(xmlBytes), "activeIds", activeIds);
     }
 }

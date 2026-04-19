@@ -2,6 +2,7 @@ package com.bpm.core.lint;
 
 import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
@@ -21,9 +22,8 @@ public class BpmnLintService {
 
     private final RestClient formClient;
 
-    public BpmnLintService() {
-        // Form Service URL; in production inject from config
-        this.formClient = RestClient.builder().baseUrl("http://localhost:8081").build();
+    public BpmnLintService(@Value("${bpm.form-service-url:http://localhost:8081}") String formServiceUrl) {
+        this.formClient = RestClient.builder().baseUrl(formServiceUrl).build();
     }
 
     public LintResult lint(String xml) {

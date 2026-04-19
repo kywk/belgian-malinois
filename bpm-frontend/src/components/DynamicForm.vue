@@ -82,8 +82,14 @@ async function loadSchema() {
     fields.value = schema.fields || []
     // Init formData with defaults
     fields.value.forEach(f => {
-      if (f.type === 'checkbox') formData[f.id] = props.variables[f.id] || []
-      else formData[f.id] = props.variables[f.id] ?? null
+      let val = props.variables[f.id]
+      if (f.type === 'checkbox') {
+        formData[f.id] = val || []
+      } else if (f.type === 'dateRange' && typeof val === 'string' && val.includes('~')) {
+        formData[f.id] = val.split('~')
+      } else {
+        formData[f.id] = val ?? null
+      }
     })
   } catch (e) {
     console.error('Failed to load form schema:', e)
@@ -93,7 +99,14 @@ async function loadSchema() {
 // Fill variables into form when they change
 watch(() => props.variables, (vars) => {
   fields.value.forEach(f => {
-    if (vars[f.id] !== undefined) formData[f.id] = vars[f.id]
+    let val = vars[f.id]
+    if (val !== undefined) {
+      // dateRange stored as "YYYY-MM-DD~YYYY-MM-DD", convert to array for el-date-picker
+      if (f.type === 'dateRange' && typeof val === 'string' && val.includes('~')) {
+        val = val.split('~')
+      }
+      formData[f.id] = val
+    }
   })
 }, { deep: true })
 
