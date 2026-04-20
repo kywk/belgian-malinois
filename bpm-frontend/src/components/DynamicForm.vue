@@ -1,6 +1,6 @@
 <template>
   <el-form ref="formRef" :model="formData" :disabled="mode === 'readonly'" label-position="top">
-    <el-form-item v-for="field in fields" :key="field.id" :label="field.label"
+    <el-form-item v-for="field in visibleFields" :key="field.id" :label="field.label"
       :required="field.required && !isReadonly(field)" :prop="field.id">
 
       <el-input v-if="field.type === 'text'" v-model="formData[field.id]"
@@ -53,7 +53,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { getFormSchema } from '../services/formApi.js'
 
 const props = defineProps({
@@ -69,9 +69,16 @@ const fields = ref([])
 const formData = reactive({})
 const formRef = ref()
 
+const visibleFields = computed(() => fields.value.filter(f => {
+  // Hide readonly fields that have no value (e.g. approverComment on first submit)
+  if (f.readonly === true && (formData[f.id] == null || formData[f.id] === '')) return false
+  return true
+}))
+
 function isReadonly(field) {
   if (props.mode === 'readonly') return true
-  if (props.mode === 'review') return field.readonly !== false
+  if (props.mode === 'revision') return !field.editableOnRevision
+  if (props.mode === 'review') return field.readonly === true
   return field.readonly === true
 }
 
@@ -82,7 +89,8 @@ async function loadSchema() {
     fields.value = schema.fields || []
     // Init formData with defaults
     fields.value.forEach(f => {
-      let val = props.variables[f.id]
+      // In review mode, don't pre-fill editable fields (reviewer should fill fresh)
+      let val = (props.mode === 'review' && f.readonly !== true) ? undefined : props.variables[f.id]
       if (f.type === 'checkbox') {
         formData[f.id] = val || []
       } else if (f.type === 'dateRange' && typeof val === 'string' && val.includes('~')) {
@@ -117,4 +125,6 @@ function handleSubmit() {
 }
 
 onMounted(loadSchema)
+
+defineExpose({ formData })
 </script>

@@ -20,7 +20,7 @@
 
     <sequenceFlow id="flow2" sourceRef="managerReview" targetRef="gw1"/>
 
-    <exclusiveGateway id="gw1" name="審核結果" default="flowDefault"/>
+    <exclusiveGateway id="gw1" name="審核結果" default="flowReturn"/>
 
     <sequenceFlow id="flowApproved" sourceRef="gw1" targetRef="endApproved">
       <conditionExpression>${approved == true}</conditionExpression>
@@ -30,11 +30,20 @@
       <conditionExpression>${rejected != null &amp;&amp; rejected == true}</conditionExpression>
     </sequenceFlow>
 
-    <sequenceFlow id="flowDefault" sourceRef="gw1" targetRef="endReturned"/>
+    <sequenceFlow id="flowReturn" sourceRef="gw1" targetRef="applicantRevision"/>
+
+    <userTask id="applicantRevision" name="申請者補件"
+              flowable:assignee="${initiator}"
+              flowable:formKey="leave-request">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
+      </extensionElements>
+    </userTask>
+
+    <sequenceFlow id="flowResubmit" sourceRef="applicantRevision" targetRef="managerReview"/>
 
     <endEvent id="endApproved" name="核准"/>
     <endEvent id="endRejected" name="拒絕"/>
-    <endEvent id="endReturned" name="退回"/>
 
   </process>
 </definitions>

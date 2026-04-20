@@ -9,9 +9,11 @@
           <!-- External form -->
           <ExternalFormLink v-if="isExternal" :form-key="task.formKey"
             :process-instance-id="task.processInstanceId" :task-id="taskId" />
-          <!-- Dynamic form -->
-          <DynamicForm v-else-if="task?.formKey" :form-key="task.formKey"
-            :process-instance-id="task.processInstanceId" mode="review" :variables="variables" />
+          <!-- Dynamic form: editable for revision tasks, readonly for review -->
+          <DynamicForm v-else-if="task?.formKey" ref="dynamicFormRef" :form-key="task.formKey"
+            :process-instance-id="task.processInstanceId"
+            :mode="isRevision ? 'revision' : 'review'" :variables="variables"
+            @submit="handleRevisionSubmit" />
         </el-card>
       </el-col>
       <el-col :span="8">
@@ -39,7 +41,12 @@
     </el-row>
 
     <el-card style="margin-top: 16px">
-      <el-space>
+      <!-- Revision task: show resubmit button -->
+      <el-space v-if="isRevision">
+        <el-button type="primary" @click="handleRevisionSubmit()">補件重送</el-button>
+      </el-space>
+      <!-- Review task: show approval actions -->
+      <el-space v-else>
         <el-button type="success" @click="openAction('approve')">同意</el-button>
         <el-button type="warning" @click="openAction('return')">退件</el-button>
         <el-button type="danger" @click="openAction('reject')">拒絕</el-button>
@@ -59,7 +66,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 import { useAuthStore } from '../stores/auth'
-import { getTasks, getSubtasks } from '../services/flowableApi.js'
+import { ElMessage } from 'element-plus'
+import { getTasks, getSubtasks, updateTask } from '../services/flowableApi.js'
 import DynamicForm from '../components/DynamicForm.vue'
 import ExternalFormLink from '../components/ExternalFormLink.vue'
 import ActionDialog from '../components/ActionDialog.vue'
@@ -78,8 +86,10 @@ const subtasks = ref([])
 const actionVisible = ref(false)
 const csVisible = ref(false)
 const currentAction = ref('')
+const dynamicFormRef = ref()
 
 const isExternal = computed(() => task.value?.formKey?.startsWith('external:'))
+const isRevision = computed(() => task.value?.taskName?.includes('補件'))
 
 function openAction(action) {
   currentAction.value = action
@@ -89,6 +99,24 @@ function openAction(action) {
 function onActionDone() {
   actionVisible.value = false
   router.push('/tasks')
+}
+
+async function handleRevisionSubmit() {
+  // Collect form data as task variables and complete the revision task
+  const formData = dynamicFormRef.value?.formData || {}
+  const vars = Object.entries(formData)
+    .filter(([, v]) => v != null)
+    .map(([name, value]) => {
+      if (Array.isArray(value)) return { name, value: value.join('~') }
+      return { name, value }
+    })
+  try {
+    await updateTask(taskId, { action: 'complete', assignee: auth.token, variables: vars })
+    ElMessage.success('補件重送成功')
+    router.push('/tasks')
+  } catch (e) {
+    ElMessage.error('重送失敗：' + (e.response?.data?.message || e.message))
+  }
 }
 
 async function loadSubtasks() {

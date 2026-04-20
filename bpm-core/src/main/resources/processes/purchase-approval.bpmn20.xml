@@ -20,7 +20,7 @@
 
     <sequenceFlow id="flow2" sourceRef="managerReview" targetRef="gw1"/>
 
-    <exclusiveGateway id="gw1" name="主管審核結果" default="flowDefault1"/>
+    <exclusiveGateway id="gw1" name="主管審核結果" default="flowReturn1"/>
 
     <sequenceFlow id="flowApproved1" sourceRef="gw1" targetRef="financeReview">
       <conditionExpression>${approved == true}</conditionExpression>
@@ -28,8 +28,20 @@
     <sequenceFlow id="flowRejected1" sourceRef="gw1" targetRef="endRejected">
       <conditionExpression>${rejected != null &amp;&amp; rejected == true}</conditionExpression>
     </sequenceFlow>
-    <sequenceFlow id="flowDefault1" sourceRef="gw1" targetRef="endReturned"/>
+    <sequenceFlow id="flowReturn1" sourceRef="gw1" targetRef="revisionFromManager"/>
 
+    <!-- 主管退回 → 補件 → 回主管 -->
+    <userTask id="revisionFromManager" name="申請者補件（主管退回）"
+              flowable:assignee="${initiator}"
+              flowable:formKey="purchase-request">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
+      </extensionElements>
+    </userTask>
+
+    <sequenceFlow id="flowResubmit1" sourceRef="revisionFromManager" targetRef="managerReview"/>
+
+    <!-- 財務審核 -->
     <userTask id="financeReview" name="財務審核"
               flowable:candidateUsers="${permService.getUsersByPermission('finance:payment:approve')}"
               flowable:formKey="purchase-review">
@@ -40,7 +52,7 @@
 
     <sequenceFlow id="flow3" sourceRef="financeReview" targetRef="gw2"/>
 
-    <exclusiveGateway id="gw2" name="財務審核結果" default="flowDefault2"/>
+    <exclusiveGateway id="gw2" name="財務審核結果" default="flowReturn2"/>
 
     <sequenceFlow id="flowApproved2" sourceRef="gw2" targetRef="endApproved">
       <conditionExpression>${approved == true}</conditionExpression>
@@ -48,11 +60,21 @@
     <sequenceFlow id="flowRejected2" sourceRef="gw2" targetRef="endRejected">
       <conditionExpression>${rejected != null &amp;&amp; rejected == true}</conditionExpression>
     </sequenceFlow>
-    <sequenceFlow id="flowDefault2" sourceRef="gw2" targetRef="endReturned"/>
+    <sequenceFlow id="flowReturn2" sourceRef="gw2" targetRef="revisionFromFinance"/>
+
+    <!-- 財務退回 → 補件 → 回財務 -->
+    <userTask id="revisionFromFinance" name="申請者補件（財務退回）"
+              flowable:assignee="${initiator}"
+              flowable:formKey="purchase-request">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
+      </extensionElements>
+    </userTask>
+
+    <sequenceFlow id="flowResubmit2" sourceRef="revisionFromFinance" targetRef="financeReview"/>
 
     <endEvent id="endApproved" name="核准"/>
     <endEvent id="endRejected" name="拒絕"/>
-    <endEvent id="endReturned" name="退回"/>
 
   </process>
 </definitions>

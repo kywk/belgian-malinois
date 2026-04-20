@@ -17,6 +17,8 @@
           @update:model-value="update('required', $event)">必填</el-checkbox>
         <el-checkbox :model-value="selectedField.readonly"
           @update:model-value="update('readonly', $event)" style="margin-left:12px">唯讀</el-checkbox>
+        <el-checkbox :model-value="selectedField.editableOnRevision"
+          @update:model-value="update('editableOnRevision', $event)" style="margin-left:12px">補件可編輯</el-checkbox>
       </el-form-item>
 
       <!-- text -->

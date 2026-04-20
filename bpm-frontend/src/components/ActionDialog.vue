@@ -56,6 +56,11 @@ const needsComment = computed(() => ['return', 'reject'].includes(props.action))
 
 async function submit() {
   try {
+    // Add comment before completing task (task may not exist after complete)
+    if (comment.value && props.action !== 'delegate') {
+      await addTaskComment(props.taskId, { message: comment.value, userId: 'current_user' })
+    }
+
     if (props.action === 'approve') {
       await updateTask(props.taskId, {
         action: 'complete',
@@ -71,16 +76,11 @@ async function submit() {
         action: 'complete',
         variables: [
           { name: 'approved', value: false },
-          { name: 'rejected', value: true },
-          { name: 'rejectReason', value: comment.value }
+          { name: 'rejected', value: true }
         ]
       })
     } else if (props.action === 'delegate') {
       await updateTask(props.taskId, { action: 'delegate', delegateUser: delegateUser.value })
-    }
-
-    if (comment.value && props.action !== 'delegate') {
-      await addTaskComment(props.taskId, { message: comment.value, userId: 'current_user' })
     }
 
     ElMessage.success('操作成功')

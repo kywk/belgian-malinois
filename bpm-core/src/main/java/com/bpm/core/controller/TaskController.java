@@ -66,6 +66,20 @@ public class TaskController {
                     .forEach(t -> taskMap.put(t.getId(), t));
         }
 
+        // Filter out candidate tasks where user already reviewed in the same process
+        String filterUser = assignee != null ? assignee : candidateUser;
+        if (filterUser != null) {
+            Set<String> reviewedProcessIds = historyService.createHistoricTaskInstanceQuery()
+                    .taskAssignee(filterUser).finished().list().stream()
+                    .map(ht -> ht.getProcessInstanceId())
+                    .collect(java.util.stream.Collectors.toSet());
+            taskMap.entrySet().removeIf(e -> {
+                Task t = e.getValue();
+                // Keep if directly assigned; remove only unassigned candidate tasks
+                return t.getAssignee() == null && reviewedProcessIds.contains(t.getProcessInstanceId());
+            });
+        }
+
         return taskMap.values().stream()
                 .sorted(Comparator.comparing(Task::getCreateTime).reversed())
                 .map(this::toMap).toList();
@@ -90,10 +104,12 @@ public class TaskController {
             if (req.variables() != null) {
                 req.variables().forEach(v -> vars.put(v.name(), v.value()));
             }
-            // Ensure 'rejected' is always set to avoid EL PropertyNotFoundException
+            // Ensure gateway variables are always set to avoid EL PropertyNotFoundException
             vars.putIfAbsent("rejected", false);
+            vars.putIfAbsent("approved", false);
             taskService.complete(id, vars);
-            auditType = resolveCompleteAuditType(vars);
+            auditType = task != null && task.getName() != null && task.getName().contains("補件")
+                    ? "TASK_RESUBMIT" : resolveCompleteAuditType(vars);
         } else if ("delegate".equals(action)) {
             taskService.delegateTask(id, req.delegateUser());
             auditType = "TASK_DELEGATE";
