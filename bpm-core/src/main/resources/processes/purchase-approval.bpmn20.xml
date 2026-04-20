@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
              xmlns:flowable="http://flowable.org/bpmn"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
              targetNamespace="http://bpm.com/purchase">
 
   <process id="purchase-approval" name="採購審核流程" isExecutable="true">
@@ -62,7 +65,7 @@
     </sequenceFlow>
     <sequenceFlow id="flowReturn2" sourceRef="gw2" targetRef="revisionFromFinance"/>
 
-    <!-- 財務退回 → 補件 → 回財務 -->
+    <!-- 財務退回 → 補件 → 回主管審核 -->
     <userTask id="revisionFromFinance" name="申請者補件（財務退回）"
               flowable:assignee="${initiator}"
               flowable:formKey="purchase-request">
@@ -71,10 +74,132 @@
       </extensionElements>
     </userTask>
 
-    <sequenceFlow id="flowResubmit2" sourceRef="revisionFromFinance" targetRef="financeReview"/>
+    <sequenceFlow id="flowResubmit2" sourceRef="revisionFromFinance" targetRef="managerReview"/>
 
     <endEvent id="endApproved" name="核准"/>
     <endEvent id="endRejected" name="拒絕"/>
 
   </process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane bpmnElement="purchase-approval">
+
+      <!-- 開始 -->
+      <bpmndi:BPMNShape bpmnElement="start">
+        <dc:Bounds x="160" y="252" width="36" height="36" />
+      </bpmndi:BPMNShape>
+
+      <!-- 主管審核 -->
+      <bpmndi:BPMNShape bpmnElement="managerReview">
+        <dc:Bounds x="270" y="230" width="100" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- 主管審核結果 Gateway -->
+      <bpmndi:BPMNShape bpmnElement="gw1" isMarkerVisible="true">
+        <dc:Bounds x="445" y="245" width="50" height="50" />
+      </bpmndi:BPMNShape>
+
+      <!-- 財務審核 -->
+      <bpmndi:BPMNShape bpmnElement="financeReview">
+        <dc:Bounds x="570" y="230" width="100" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- 財務審核結果 Gateway -->
+      <bpmndi:BPMNShape bpmnElement="gw2" isMarkerVisible="true">
+        <dc:Bounds x="745" y="245" width="50" height="50" />
+      </bpmndi:BPMNShape>
+
+      <!-- 核准 -->
+      <bpmndi:BPMNShape bpmnElement="endApproved">
+        <dc:Bounds x="872" y="252" width="36" height="36" />
+      </bpmndi:BPMNShape>
+
+      <!-- 申請者補件（主管退回）— 左下 -->
+      <bpmndi:BPMNShape bpmnElement="revisionFromManager">
+        <dc:Bounds x="350" y="400" width="120" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- 申請者補件（財務退回）— 右下 -->
+      <bpmndi:BPMNShape bpmnElement="revisionFromFinance">
+        <dc:Bounds x="650" y="400" width="120" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- 拒絕 — 最下方中間 -->
+      <bpmndi:BPMNShape bpmnElement="endRejected">
+        <dc:Bounds x="542" y="542" width="36" height="36" />
+      </bpmndi:BPMNShape>
+
+      <!-- flow1: 開始 → 主管審核 -->
+      <bpmndi:BPMNEdge bpmnElement="flow1">
+        <di:waypoint x="196" y="270" />
+        <di:waypoint x="270" y="270" />
+      </bpmndi:BPMNEdge>
+
+      <!-- flow2: 主管審核 → gw1 -->
+      <bpmndi:BPMNEdge bpmnElement="flow2">
+        <di:waypoint x="370" y="270" />
+        <di:waypoint x="445" y="270" />
+      </bpmndi:BPMNEdge>
+
+      <!-- flowApproved1: gw1 → 財務審核（通過，往右） -->
+      <bpmndi:BPMNEdge bpmnElement="flowApproved1">
+        <di:waypoint x="495" y="270" />
+        <di:waypoint x="570" y="270" />
+      </bpmndi:BPMNEdge>
+
+      <!-- flowReturn1: gw1 → 申請者補件（主管退回，往下） -->
+      <bpmndi:BPMNEdge bpmnElement="flowReturn1">
+        <di:waypoint x="470" y="295" />
+        <di:waypoint x="470" y="440" />
+        <di:waypoint x="470" y="440" />
+      </bpmndi:BPMNEdge>
+
+      <!-- flowRejected1: gw1 → 拒絕（往下到底） -->
+      <bpmndi:BPMNEdge bpmnElement="flowRejected1">
+        <di:waypoint x="470" y="295" />
+        <di:waypoint x="470" y="520" />
+        <di:waypoint x="542" y="560" />
+      </bpmndi:BPMNEdge>
+
+      <!-- flowResubmit1: 申請者補件（主管退回） → 主管審核（往左回去） -->
+      <bpmndi:BPMNEdge bpmnElement="flowResubmit1">
+        <di:waypoint x="350" y="440" />
+        <di:waypoint x="270" y="440" />
+        <di:waypoint x="270" y="310" />
+      </bpmndi:BPMNEdge>
+
+      <!-- flow3: 財務審核 → gw2 -->
+      <bpmndi:BPMNEdge bpmnElement="flow3">
+        <di:waypoint x="670" y="270" />
+        <di:waypoint x="745" y="270" />
+      </bpmndi:BPMNEdge>
+
+      <!-- flowApproved2: gw2 → 核准（往右） -->
+      <bpmndi:BPMNEdge bpmnElement="flowApproved2">
+        <di:waypoint x="795" y="270" />
+        <di:waypoint x="872" y="270" />
+      </bpmndi:BPMNEdge>
+
+      <!-- flowReturn2: gw2 → 申請者補件（財務退回，往下） -->
+      <bpmndi:BPMNEdge bpmnElement="flowReturn2">
+        <di:waypoint x="770" y="295" />
+        <di:waypoint x="770" y="400" />
+      </bpmndi:BPMNEdge>
+
+      <!-- flowRejected2: gw2 → 拒絕（往下到底） -->
+      <bpmndi:BPMNEdge bpmnElement="flowRejected2">
+        <di:waypoint x="770" y="295" />
+        <di:waypoint x="770" y="520" />
+        <di:waypoint x="578" y="560" />
+      </bpmndi:BPMNEdge>
+
+      <!-- flowResubmit2: 申請者補件（財務退回） → 主管審核（往左回去） -->
+      <bpmndi:BPMNEdge bpmnElement="flowResubmit2">
+        <di:waypoint x="650" y="440" />
+        <di:waypoint x="320" y="440" />
+        <di:waypoint x="320" y="310" />
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
 </definitions>

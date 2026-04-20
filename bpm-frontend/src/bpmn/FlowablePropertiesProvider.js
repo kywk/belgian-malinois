@@ -1,7 +1,3 @@
-/**
- * Custom PropertiesProvider for Flowable BPM.
- * Adds Assignee, Form, and Webhook tabs to UserTask properties panel.
- */
 import AssigneeProps from './AssigneeProps.js'
 import FormProps from './FormProps.js'
 import WebhookProps from './WebhookProps.js'
@@ -31,5 +27,8 @@ export default class FlowablePropertiesProvider {
 FlowablePropertiesProvider.$inject = ['propertiesPanel']
 
 function is(element, type) {
-  return element?.businessObject?.$instanceOf(type)
+  try {
+    const bo = element?.businessObject || element
+    return bo?.$instanceOf?.(type) ?? false
+  } catch { return false }
 }

@@ -24,6 +24,12 @@
         <el-menu-item index="/tasks">待辦清單</el-menu-item>
         <el-menu-item index="/my-applications">我的申請</el-menu-item>
         <el-menu-item index="/audit-log">稽核 Log</el-menu-item>
+        <el-sub-menu v-if="isAdmin" index="/admin">
+          <template #title>管理</template>
+          <el-menu-item index="/admin/bpmn-editor">BPMN 編輯器</el-menu-item>
+          <el-menu-item index="/admin/form-editor">表單編輯器</el-menu-item>
+          <el-menu-item index="/admin/external-systems">外部系統</el-menu-item>
+        </el-sub-menu>
         <el-menu-item style="margin-left:auto" @click="logout">
           {{ auth.token }} 登出
         </el-menu-item>
@@ -34,12 +40,13 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useAuthStore } from './stores/auth'
 import axios from 'axios'
 
 const auth = useAuthStore()
 const selectedUser = ref('')
+const isAdmin = computed(() => auth.token?.startsWith('admin'))
 
 // 初始化：若已有 token，設定 axios header
 if (auth.token) {

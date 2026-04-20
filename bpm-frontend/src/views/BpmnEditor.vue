@@ -33,9 +33,9 @@ const fileInput = ref(null)
 
 const { createModeler, importXml, exportXml, newDiagram, destroy } = useBpmnModeler()
 
-onMounted(() => {
+onMounted(async () => {
   createModeler(canvasRef.value, panelRef.value, [flowableModule])
-  newDiagram()
+  await newDiagram()
 })
 
 onUnmounted(destroy)

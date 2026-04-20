@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+             id="Definitions_1"
+             targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <process id="Process_1" isExecutable="false">
+    <startEvent id="start" name="開始" />
+
+    <userTask id="supervisor_review" name="主管審核" />
+
+    <exclusiveGateway id="gw_supervisor" name="主管審核結果" />
+
+    <userTask id="finance_review" name="財務審核" />
+
+    <exclusiveGateway id="gw_finance" name="財務審核結果" />
+
+    <userTask id="resubmit_supervisor" name="申請者補件&#10;（主管退回）" />
+
+    <userTask id="resubmit_finance" name="申請者補件&#10;（財務退回）" />
+
+    <endEvent id="end_approved" name="核准" />
+
+    <endEvent id="end_rejected" name="拒絕" />
+
+    <sequenceFlow id="f1" sourceRef="start" targetRef="supervisor_review" />
+    <sequenceFlow id="f2" sourceRef="supervisor_review" targetRef="gw_supervisor" />
+    <sequenceFlow id="f3" name="通過" sourceRef="gw_supervisor" targetRef="finance_review" />
+    <sequenceFlow id="f4" name="退回" sourceRef="gw_supervisor" targetRef="resubmit_supervisor" />
+    <sequenceFlow id="f5" name="拒絕" sourceRef="gw_supervisor" targetRef="end_rejected" />
+    <sequenceFlow id="f6" sourceRef="resubmit_supervisor" targetRef="supervisor_review" />
+    <sequenceFlow id="f7" sourceRef="finance_review" targetRef="gw_finance" />
+    <sequenceFlow id="f8" name="核准" sourceRef="gw_finance" targetRef="end_approved" />
+    <sequenceFlow id="f9" name="退回" sourceRef="gw_finance" targetRef="resubmit_finance" />
+    <sequenceFlow id="f10" sourceRef="resubmit_finance" targetRef="supervisor_review" />
+  </process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_1">
+
+      <!-- 開始 -->
+      <bpmndi:BPMNShape id="start_di" bpmnElement="start">
+        <dc:Bounds x="160" y="252" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="163" y="295" width="30" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- 主管審核 -->
+      <bpmndi:BPMNShape id="supervisor_review_di" bpmnElement="supervisor_review">
+        <dc:Bounds x="270" y="230" width="100" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- 主管審核結果 Gateway -->
+      <bpmndi:BPMNShape id="gw_supervisor_di" bpmnElement="gw_supervisor" isMarkerVisible="true">
+        <dc:Bounds x="445" y="245" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="429" y="223" width="82" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- 財務審核 -->
+      <bpmndi:BPMNShape id="finance_review_di" bpmnElement="finance_review">
+        <dc:Bounds x="570" y="230" width="100" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- 財務審核結果 Gateway -->
+      <bpmndi:BPMNShape id="gw_finance_di" bpmnElement="gw_finance" isMarkerVisible="true">
+        <dc:Bounds x="745" y="245" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="729" y="223" width="82" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- 核准 -->
+      <bpmndi:BPMNShape id="end_approved_di" bpmnElement="end_approved">
+        <dc:Bounds x="872" y="252" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="875" y="295" width="30" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- 申請者補件（主管退回） - 下方 -->
+      <bpmndi:BPMNShape id="resubmit_supervisor_di" bpmnElement="resubmit_supervisor">
+        <dc:Bounds x="420" y="400" width="100" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- 申請者補件（財務退回） - 下方 -->
+      <bpmndi:BPMNShape id="resubmit_finance_di" bpmnElement="resubmit_finance">
+        <dc:Bounds x="720" y="400" width="100" height="80" />
+      </bpmndi:BPMNShape>
+
+      <!-- 拒絕 - 最下方 -->
+      <bpmndi:BPMNShape id="end_rejected_di" bpmnElement="end_rejected">
+        <dc:Bounds x="452" y="542" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="455" y="585" width="30" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <!-- f1: 開始 → 主管審核 -->
+      <bpmndi:BPMNEdge id="f1_di" bpmnElement="f1">
+        <di:waypoint x="196" y="270" />
+        <di:waypoint x="270" y="270" />
+      </bpmndi:BPMNEdge>
+
+      <!-- f2: 主管審核 → Gateway -->
+      <bpmndi:BPMNEdge id="f2_di" bpmnElement="f2">
+        <di:waypoint x="370" y="270" />
+        <di:waypoint x="445" y="270" />
+      </bpmndi:BPMNEdge>
+
+      <!-- f3: Gateway → 財務審核（通過） -->
+      <bpmndi:BPMNEdge id="f3_di" bpmnElement="f3">
+        <di:waypoint x="495" y="270" />
+        <di:waypoint x="570" y="270" />
+        <bpmndi:BPMNLabel><dc:Bounds x="520" y="252" width="30" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+
+      <!-- f4: Gateway → 申請者補件（主管退回） -->
+      <bpmndi:BPMNEdge id="f4_di" bpmnElement="f4">
+        <di:waypoint x="470" y="295" />
+        <di:waypoint x="470" y="400" />
+        <bpmndi:BPMNLabel><dc:Bounds x="476" y="340" width="30" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+
+      <!-- f5: Gateway → 拒絕 -->
+      <bpmndi:BPMNEdge id="f5_di" bpmnElement="f5">
+        <di:waypoint x="470" y="295" />
+        <di:waypoint x="470" y="542" />
+        <bpmndi:BPMNLabel><dc:Bounds x="476" y="510" width="30" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+
+      <!-- f6: 申請者補件（主管退回） → 主管審核 -->
+      <bpmndi:BPMNEdge id="f6_di" bpmnElement="f6">
+        <di:waypoint x="420" y="440" />
+        <di:waypoint x="320" y="440" />
+        <di:waypoint x="320" y="310" />
+      </bpmndi:BPMNEdge>
+
+      <!-- f7: 財務審核 → Gateway -->
+      <bpmndi:BPMNEdge id="f7_di" bpmnElement="f7">
+        <di:waypoint x="670" y="270" />
+        <di:waypoint x="745" y="270" />
+      </bpmndi:BPMNEdge>
+
+      <!-- f8: Gateway → 核准 -->
+      <bpmndi:BPMNEdge id="f8_di" bpmnElement="f8">
+        <di:waypoint x="795" y="270" />
+        <di:waypoint x="872" y="270" />
+        <bpmndi:BPMNLabel><dc:Bounds x="820" y="252" width="30" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+
+      <!-- f9: Gateway → 申請者補件（財務退回） -->
+      <bpmndi:BPMNEdge id="f9_di" bpmnElement="f9">
+        <di:waypoint x="770" y="295" />
+        <di:waypoint x="770" y="400" />
+        <bpmndi:BPMNLabel><dc:Bounds x="776" y="340" width="30" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+
+      <!-- f10: 申請者補件（財務退回） → 主管審核 -->
+      <bpmndi:BPMNEdge id="f10_di" bpmnElement="f10">
+        <di:waypoint x="720" y="440" />
+        <di:waypoint x="320" y="440" />
+        <di:waypoint x="320" y="310" />
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>
