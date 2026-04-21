@@ -26,7 +26,9 @@
         <el-menu-item index="/audit-log">稽核 Log</el-menu-item>
         <el-sub-menu v-if="isAdmin" index="/admin">
           <template #title>管理</template>
+          <el-menu-item index="/admin/processes">流程管理</el-menu-item>
           <el-menu-item index="/admin/bpmn-editor">BPMN 編輯器</el-menu-item>
+          <el-menu-item index="/admin/forms">表單管理</el-menu-item>
           <el-menu-item index="/admin/form-editor">表單編輯器</el-menu-item>
           <el-menu-item index="/admin/external-systems">外部系統</el-menu-item>
         </el-sub-menu>

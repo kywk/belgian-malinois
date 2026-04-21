@@ -8,6 +8,8 @@ import FormEditor from '../views/FormEditor.vue'
 import BpmnEditor from '../views/BpmnEditor.vue'
 import ExternalSystemAdmin from '../views/ExternalSystemAdmin.vue'
 import ProcessVariableSpecAdmin from '../views/ProcessVariableSpecAdmin.vue'
+import ProcessList from '../views/ProcessList.vue'
+import FormList from '../views/FormList.vue'
 
 import StartProcess from '../views/StartProcess.vue'
 
@@ -21,6 +23,8 @@ const routes = [
   { path: '/admin/form-editor/:id?', component: FormEditor, meta: { requiresRole: 'admin' } },
   { path: '/admin/bpmn-editor/:processKey?', component: BpmnEditor, meta: { requiresRole: 'admin' } },
   { path: '/admin/external-systems', component: ExternalSystemAdmin, meta: { requiresRole: 'admin' } },
+  { path: '/admin/processes', component: ProcessList, meta: { requiresRole: 'admin' } },
+  { path: '/admin/forms', component: FormList, meta: { requiresRole: 'admin' } },
   { path: '/admin/process-definitions/:key/variables', component: ProcessVariableSpecAdmin, meta: { requiresRole: 'admin' } }
 ]
 

@@ -33,6 +33,13 @@ export const getProcessInstances = (params) =>
 export const getProcessDiagram = (id) =>
   axios.get(`/api/process-instances/${id}/diagram`, { responseType: 'blob' }).then(r => r.data)
 
+// Process Definitions (Admin)
+export const getProcessDefinitions = (params) =>
+  axios.get('/api/process-definitions', { params }).then(r => r.data)
+
+export const getProcessDefinitionXml = (id) =>
+  axios.get(`/api/process-definitions/${id}/resourcedata`, { responseType: 'text' }).then(r => r.data)
+
 // History
 export const getHistoricTasks = (params) =>
   axios.get('/api/history/tasks', { params }).then(r => r.data)

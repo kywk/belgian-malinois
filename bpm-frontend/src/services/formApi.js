@@ -1,5 +1,8 @@
 import axios from 'axios'
 
+export const listForms = () =>
+  axios.get('/api/forms').then(r => r.data)
+
 export const getFormSchema = (formKey, version) => {
   const params = version ? { version } : {}
   return axios.get(`/api/forms/${formKey}`, { params }).then(r => r.data)

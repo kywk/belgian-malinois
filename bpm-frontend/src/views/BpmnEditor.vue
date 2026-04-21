@@ -17,9 +17,11 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useBpmnModeler } from '../composables/useBpmnModeler.js'
 import flowableModule from '../bpmn/index.js'
+import { getProcessDefinitionXml } from '../services/flowableApi.js'
 import axios from 'axios'
 
 import 'bpmn-js/dist/assets/diagram-js.css'
@@ -27,6 +29,7 @@ import 'bpmn-js/dist/assets/bpmn-js.css'
 import 'bpmn-js/dist/assets/bpmn-font/css/bpmn-embedded.css'
 import '@bpmn-io/properties-panel/dist/assets/properties-panel.css'
 
+const route = useRoute()
 const canvasRef = ref(null)
 const panelRef = ref(null)
 const fileInput = ref(null)
@@ -35,7 +38,20 @@ const { createModeler, importXml, exportXml, newDiagram, destroy } = useBpmnMode
 
 onMounted(async () => {
   createModeler(canvasRef.value, panelRef.value, [flowableModule])
-  await newDiagram()
+  const definitionId = route.query.id
+  if (definitionId) {
+    try {
+      const xml = await getProcessDefinitionXml(definitionId)
+      await importXml(xml)
+      ElMessage.success('已載入既有流程')
+    } catch (e) {
+      console.error('載入流程失敗', { definitionId, error: e, response: e.response?.data, status: e.response?.status })
+      ElMessage.error('載入流程失敗：' + (e.response?.data || e.message))
+      await newDiagram()
+    }
+  } else {
+    await newDiagram()
+  }
 })
 
 onUnmounted(destroy)
