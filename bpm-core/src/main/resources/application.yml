@@ -9,6 +9,11 @@ spring:
     username: sa
     password: BpmDev@2026!
     driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    audit:
+      url: jdbc:sqlserver://localhost:1433;databaseName=bpm_audit_db;encrypt=false;trustServerCertificate=true
+      username: sa
+      password: BpmDev@2026!
+      driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
   jpa:
     hibernate:
       ddl-auto: update
@@ -73,6 +78,8 @@ spring:
       on-profile: docker
   datasource:
     url: jdbc:sqlserver://mssql:1433;databaseName=bpm_core_db;encrypt=false;trustServerCertificate=true
+    audit:
+      url: jdbc:sqlserver://mssql:1433;databaseName=bpm_audit_db;encrypt=false;trustServerCertificate=true
   rabbitmq:
     host: rabbitmq
   data:

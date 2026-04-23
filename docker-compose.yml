@@ -73,18 +73,6 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: docker
 
-  audit-log-service:
-    build: ./audit-log-service
-    ports:
-      - "8082:8082"
-    depends_on:
-      mssql:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    environment:
-      SPRING_PROFILES_ACTIVE: docker
-
   nginx:
     image: nginx:alpine
     ports:
@@ -95,7 +83,6 @@ services:
     depends_on:
       - bpm-core
       - form-service
-      - audit-log-service
 
 volumes:
   mssql-data:

@@ -72,18 +72,6 @@ services:
       SPRING_RABBITMQ_PASSWORD: "${RABBITMQ_PASS}"
     restart: unless-stopped
 
-  audit-log-service:
-    image: ghcr.io/${GITHUB_REPO}/audit-log-service:${IMAGE_TAG:-latest}
-    depends_on:
-      mssql: { condition: service_healthy }
-      rabbitmq: { condition: service_healthy }
-    environment:
-      SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATASOURCE_PASSWORD: "${MSSQL_SA_PASSWORD}"
-      SPRING_RABBITMQ_USERNAME: "${RABBITMQ_USER}"
-      SPRING_RABBITMQ_PASSWORD: "${RABBITMQ_PASS}"
-    restart: unless-stopped
-
   nginx:
     image: nginx:alpine
     ports:
@@ -94,7 +82,6 @@ services:
     depends_on:
       - bpm-core
       - form-service
-      - audit-log-service
     restart: unless-stopped
 
 volumes:
