@@ -11,6 +11,7 @@
             :process-instance-id="task.processInstanceId" :task-id="taskId" />
           <!-- Dynamic form: editable for revision tasks, readonly for review -->
           <DynamicForm v-else-if="task?.formKey" ref="dynamicFormRef" :form-key="task.formKey"
+            :form-version="task.formVersion"
             :process-instance-id="task.processInstanceId"
             :mode="isRevision ? 'revision' : 'review'" :variables="variables"
             @submit="handleRevisionSubmit" />

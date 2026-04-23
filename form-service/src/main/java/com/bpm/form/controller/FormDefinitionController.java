@@ -47,4 +47,15 @@ public class FormDefinitionController {
     public FormDefinition publish(@PathVariable String id) {
         return formService.publish(id);
     }
+
+    @PostMapping("/{id}/archive")
+    public FormDefinition archive(@PathVariable String id) {
+        return formService.archive(id);
+    }
+
+    @DeleteMapping("/{id}")
+    public Map<String, String> delete(@PathVariable String id) {
+        formService.delete(id);
+        return Map.of("status", "deleted");
+    }
 }

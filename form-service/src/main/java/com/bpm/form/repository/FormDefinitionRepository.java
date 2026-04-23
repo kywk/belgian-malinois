@@ -15,6 +15,8 @@ public interface FormDefinitionRepository extends JpaRepository<FormDefinition, 
 
     Optional<FormDefinition> findByFormKeyAndVersion(String formKey, Integer version);
 
+    Page<FormDefinition> findByStatusNotOrderByUpdatedAtDesc(String status, Pageable pageable);
+
     Page<FormDefinition> findAllByOrderByUpdatedAtDesc(Pageable pageable);
 
     @Query("SELECT COALESCE(MAX(f.version), 0) FROM FormDefinition f WHERE f.formKey = :formKey")

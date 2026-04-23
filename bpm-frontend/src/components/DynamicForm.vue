@@ -58,6 +58,7 @@ import { getFormSchema } from '../services/formApi.js'
 
 const props = defineProps({
   formKey: { type: String, required: true },
+  formVersion: { type: Number, default: null },
   processInstanceId: { type: String, default: null },
   mode: { type: String, default: 'edit' }, // edit | review | readonly
   variables: { type: Object, default: () => ({}) }
@@ -84,7 +85,7 @@ function isReadonly(field) {
 
 async function loadSchema() {
   try {
-    const def = await getFormSchema(props.formKey)
+    const def = await getFormSchema(props.formKey, props.formVersion)
     const schema = typeof def.schemaJson === 'string' ? JSON.parse(def.schemaJson) : def.schemaJson
     fields.value = schema.fields || []
     // Init formData with defaults

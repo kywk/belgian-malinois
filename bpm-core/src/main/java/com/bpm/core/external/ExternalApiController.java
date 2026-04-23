@@ -4,6 +4,7 @@ import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.model.ProcessVariableSpec;
 import com.bpm.core.repository.ProcessVariableSpecRepository;
+import com.bpm.core.service.FormVersionLocker;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
@@ -25,15 +26,17 @@ public class ExternalApiController {
     private final HistoryService historyService;
     private final ProcessVariableSpecRepository specRepo;
     private final AuditEventPublisher auditPublisher;
+    private final FormVersionLocker formVersionLocker;
 
     public ExternalApiController(RuntimeService runtimeService, TaskService taskService,
                                   HistoryService historyService, ProcessVariableSpecRepository specRepo,
-                                  AuditEventPublisher auditPublisher) {
+                                  AuditEventPublisher auditPublisher, FormVersionLocker formVersionLocker) {
         this.runtimeService = runtimeService;
         this.taskService = taskService;
         this.historyService = historyService;
         this.specRepo = specRepo;
         this.auditPublisher = auditPublisher;
+        this.formVersionLocker = formVersionLocker;
     }
 
     // ── 1. Start Process ──
@@ -70,6 +73,8 @@ public class ExternalApiController {
 
         // Start process
         ProcessInstance pi = runtimeService.startProcessInstanceByKey(processDefKey, businessKey, variables);
+
+        formVersionLocker.lockVersions(pi.getProcessInstanceId(), pi.getProcessDefinitionId());
 
         // Set first task assignee/candidates
         Task firstTask = taskService.createTaskQuery()

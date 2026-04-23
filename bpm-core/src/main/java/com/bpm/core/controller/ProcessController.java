@@ -3,6 +3,7 @@ package com.bpm.core.controller;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.dto.StartProcessRequest;
+import com.bpm.core.service.FormVersionLocker;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
@@ -10,7 +11,6 @@ import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.springframework.web.bind.annotation.*;
 
-import java.io.InputStream;
 import java.util.*;
 
 @RestController
@@ -21,13 +21,16 @@ public class ProcessController {
     private final RepositoryService repositoryService;
     private final TaskService taskService;
     private final AuditEventPublisher auditPublisher;
+    private final FormVersionLocker formVersionLocker;
 
     public ProcessController(RuntimeService runtimeService, RepositoryService repositoryService,
-                             TaskService taskService, AuditEventPublisher auditPublisher) {
+                             TaskService taskService, AuditEventPublisher auditPublisher,
+                             FormVersionLocker formVersionLocker) {
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
         this.taskService = taskService;
         this.auditPublisher = auditPublisher;
+        this.formVersionLocker = formVersionLocker;
     }
 
     @PostMapping
@@ -37,6 +40,8 @@ public class ProcessController {
 
         ProcessInstance pi = runtimeService.startProcessInstanceByKey(
                 req.processDefinitionKey(), req.businessKey(), vars);
+
+        formVersionLocker.lockVersions(pi.getProcessInstanceId(), pi.getProcessDefinitionId());
 
         auditPublisher.publish(new AuditEvent("PROCESS_START", req.initiator(),
                 pi.getProcessInstanceId(), null,

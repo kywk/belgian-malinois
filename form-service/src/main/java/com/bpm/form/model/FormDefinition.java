@@ -25,7 +25,7 @@ public class FormDefinition {
     private String schemaJson;
 
     @Column(nullable = false, length = 20)
-    private String status = "draft"; // draft | published
+    private String status = "draft"; // draft | published | archived
 
     private String createdBy;
 

@@ -30,7 +30,7 @@ public class FormService {
     }
 
     public Page<FormDefinition> list(Pageable pageable) {
-        return defRepo.findAllByOrderByUpdatedAtDesc(pageable);
+        return defRepo.findByStatusNotOrderByUpdatedAtDesc("archived", pageable);
     }
 
     public FormDefinition getSchema(String formKey, Integer version) {
@@ -68,6 +68,27 @@ public class FormService {
 
         existing.setStatus("published");
         return defRepo.save(existing);
+    }
+
+    public FormDefinition archive(String id) {
+        FormDefinition existing = defRepo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if (!"published".equals(existing.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Only published forms can be archived");
+        }
+        existing.setStatus("archived");
+        return defRepo.save(existing);
+    }
+
+    public void delete(String id) {
+        FormDefinition existing = defRepo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        if ("published".equals(existing.getStatus()) || "archived".equals(existing.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Published/archived forms cannot be deleted. Archive instead.");
+        }
+        defRepo.delete(existing);
     }
 
     // FormData operations

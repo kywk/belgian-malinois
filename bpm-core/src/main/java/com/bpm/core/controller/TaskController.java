@@ -155,6 +155,7 @@ public class TaskController {
         return "TASK_APPROVE";
     }
 
+    @SuppressWarnings("unchecked")
     private Map<String, Object> toMap(Task t) {
         Map<String, Object> m = new HashMap<>();
         m.put("taskId", t.getId());
@@ -164,6 +165,14 @@ public class TaskController {
         m.put("createTime", t.getCreateTime());
         m.put("dueDate", t.getDueDate());
         m.put("formKey", t.getFormKey());
+        // Resolve locked formVersion from process variable
+        try {
+            Map<String, Integer> versions = (Map<String, Integer>)
+                    runtimeService.getVariable(t.getProcessInstanceId(), "_formVersions");
+            if (versions != null && t.getFormKey() != null) {
+                m.put("formVersion", versions.get(t.getFormKey()));
+            }
+        } catch (Exception ignored) {}
         // Enrich with processDefinitionKey and businessKey
         try {
             ProcessInstance pi = runtimeService.createProcessInstanceQuery()
