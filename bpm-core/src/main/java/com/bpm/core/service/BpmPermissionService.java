@@ -24,26 +24,68 @@ public class BpmPermissionService {
         this.orgService = orgService;
     }
 
+    /**
+     * 全域範圍的權限持有者 key。
+     *
+     * <h2>⚠️ 為什麼部門範圍的 key 要換成另一個 namespace（security-audit P2-8）</h2>
+     *
+     * <p>本專案的權限碼是階層式命名，<b>含冒號</b>（{@code hr:leave:approve}）。
+     * 改動前兩種查詢共用同一個前綴：
+     * <pre>
+     *   getUsersByPermission("hr:leave:approve")            → perm:users:hr:leave:approve
+     *   getUsersByPermissionAndDept("hr:leave", "approve")  → perm:users:hr:leave:approve
+     * </pre>
+     * 同一個 key，兩種不同語意的資料 —— 互相覆蓋。
+     *
+     * <p>但真正會踩到的是失效那一側。{@code invalidateCache} 用
+     * {@code keys("perm:users:" + code + ":*")} 清部門層級的 key，而 Redis 的
+     * glob 是<b>整個 key 比對</b>，所以失效 {@code hr:leave} 會連帶命中
+     * {@code perm:users:hr:leave:approve} —— 清掉一個<b>不相關權限</b>的全域快取。
+     * 反方向則相反：{@code hr:leave:approve} 的部門 key 也可能被別的碼清掉。
+     * 兩者都不會報錯，只會讓命中率莫名下降或讀到別人的資料。
+     *
+     * <p>解法是讓兩個家族不再有前綴關係：部門範圍改用
+     * {@code perm:users-by-dept:{deptId}:{code}}，deptId 放<b>前面</b>。
+     * 這樣失效模式 {@code perm:users-by-dept:*:hr:leave} 因為兩端錨定，
+     * 不會命中 {@code ...:hr:leave:approve}。
+     */
+    private static String globalKey(String permCode) {
+        return "perm:users:" + permCode;
+    }
+
+    /** deptId 必須放在 code 之前，理由見 {@link #globalKey}。 */
+    private static String deptKey(String permCode, String deptId) {
+        return "perm:users-by-dept:" + deptId + ":" + permCode;
+    }
+
+    /**
+     * 持有指定權限的使用者。
+     *
+     * <p>空清單也快取：一個還沒指派任何人的權限碼，不快取就等於每次挑簽核人
+     * 都打外部系統。同時改用 {@link #splitCsv} —— 原本的
+     * {@code cached.split(",")} 對空字串會回傳 {@code [""]}，
+     * 也就是「有一個名字為空字串的簽核人」。
+     */
     public List<String> getUsersByPermission(String permCode) {
-        String key = "perm:users:" + permCode;
-        String cached = cacheGet(key);
-        if (cached != null) return List.of(cached.split(","));
-        List<String> users = permRestClient.getUsersByPermission(permCode);
-        if (users != null && !users.isEmpty()) {
-            cachePut(key, String.join(",", users), Duration.ofMinutes(5));
-        }
-        return users;
+        return cachedUsers(globalKey(permCode),
+                () -> permRestClient.getUsersByPermission(permCode),
+                Duration.ofMinutes(5));
     }
 
     public List<String> getUsersByPermissionAndDept(String permCode, String deptId) {
-        String key = "perm:users:" + permCode + ":" + deptId;
+        return cachedUsers(deptKey(permCode, deptId),
+                () -> permRestClient.getUsersByPermissionAndDept(permCode, deptId),
+                Duration.ofMinutes(10));
+    }
+
+    private List<String> cachedUsers(String key, java.util.function.Supplier<List<String>> loader,
+                                      Duration ttl) {
         String cached = cacheGet(key);
-        if (cached != null) return List.of(cached.split(","));
-        List<String> users = permRestClient.getUsersByPermissionAndDept(permCode, deptId);
-        if (users != null && !users.isEmpty()) {
-            cachePut(key, String.join(",", users), Duration.ofMinutes(10));
-        }
-        return users;
+        if (cached != null) return splitCsv(cached);
+        List<String> users = loader.get();
+        List<String> result = users != null ? List.copyOf(users) : List.of();
+        cachePut(key, String.join(",", result), ttl);
+        return result;
     }
 
     /**
@@ -119,12 +161,30 @@ public class BpmPermissionService {
                         + permCode + ")，或先實作條件過濾再使用此方法。");
     }
 
+    /**
+     * 挑第一個有空的權限持有者。
+     *
+     * <p><b>沒有人有空時仍會回傳第一個人</b>，而不是 null。這是刻意的：
+     * 回 null 會讓任務沒有受理人，停在沒有人看得到的地方 ——
+     * 派給一個休假中的人至少還在他的收件匣裡，回來就看到。
+     *
+     * <p>但這也表示可用性過濾是<b>盡力而為</b>，不是保證。改動前這件事沒有
+     * 任何痕跡，所以退化發生時無從察覺；現在會記一筆 warn。
+     * 若某個權限碼經常出現這行日誌，代表該權限的持有人太少，那是組織設定問題。
+     */
     public String getFirstAvailableUser(String permCode) {
         List<String> users = getUsersByPermission(permCode);
-        if (users == null) return null;
+        if (users.isEmpty()) return null;
+
         return users.stream()
                 .filter(orgService::isUserAvailable)
-                .findFirst().orElse(users.isEmpty() ? null : users.getFirst());
+                .findFirst()
+                .orElseGet(() -> {
+                    log.warn("權限 {} 的持有者 {} 全部不在（皆有代理人），退化為指派第一位 {}"
+                            + " —— 可用性過濾是盡力而為，不保證",
+                            permCode, users, users.getFirst());
+                    return users.getFirst();
+                });
     }
 
     public void invalidateCache(List<String> userIds, List<String> permCodes) {
@@ -133,20 +193,50 @@ public class BpmPermissionService {
         }
         if (permCodes != null) {
             permCodes.forEach(code -> {
-                cacheEvict("perm:users:" + code);
-                // Also delete dept-scoped keys via pattern.
-                //
-                // ⚠️ KEYS 會掃整個 keyspace 並阻塞 Redis，production 隱憂
-                // （CLAUDE.md 已知技術債 #7 / backlog）。此處先包上容錯 ——
-                // 失效失敗只會讓舊值活到 TTL 到期（5/10 分鐘），
-                // 不應該讓呼叫端的請求失敗。改用 SCAN 是另一個題目。
-                try {
-                    var keys = redis.keys("perm:users:" + code + ":*");
-                    if (keys != null && !keys.isEmpty()) redis.delete(keys);
-                } catch (Exception e) {
-                    log.warn("清除部門層級權限快取失敗（code={}）: {}", code, e.toString());
-                }
+                cacheEvict(globalKey(code));
+                evictDeptScoped(code);
             });
+        }
+    }
+
+    /**
+     * 清掉某個權限碼在所有部門範圍下的快取。
+     *
+     * <h2>改用 SCAN 而非 KEYS（CLAUDE.md 已知技術債 #7）</h2>
+     *
+     * <p>{@code KEYS} 會一次掃完整個 keyspace 並<b>阻塞 Redis</b> ——
+     * 期間所有指令排隊，而 Redis 是單執行緒。這個專案把 Redis 當作
+     * 組織／權限的快取層，阻塞它等於讓所有簽核路徑的解析一起停下來。
+     * 而且觸發點是「組織系統推送權限異動」，那正是流量不可預期的時候。
+     *
+     * <p>{@code SCAN} 以游標分批返回，每批之間讓其他指令有機會執行。
+     * 代價是可能重複或漏掉在掃描期間新增的 key —— 對快取失效而言可接受：
+     * 漏掉的那個 key 最多活到 TTL 到期（5～10 分鐘）。
+     *
+     * <p>失效失敗只記錄、不拋出：讓舊值活到 TTL 到期，遠好過讓呼叫端的
+     * 請求失敗。
+     */
+    private void evictDeptScoped(String permCode) {
+        // ⚠️ 模式必須以 permCode 結尾且不加 *。Redis 的 glob 是整個 key 比對，
+        // 所以這樣才不會命中 permCode 是前綴的其他權限碼
+        // （例如 hr:leave 不會誤中 hr:leave:approve）。見 deptKey 的註解。
+        var options = org.springframework.data.redis.core.ScanOptions.scanOptions()
+                .match("perm:users-by-dept:*:" + permCode)
+                .count(200)
+                .build();
+        try (var cursor = redis.scan(options)) {
+            var batch = new java.util.ArrayList<String>(200);
+            while (cursor.hasNext()) {
+                batch.add(cursor.next());
+                if (batch.size() >= 200) {
+                    redis.delete(batch);
+                    batch.clear();
+                }
+            }
+            if (!batch.isEmpty()) redis.delete(batch);
+        } catch (Exception e) {
+            log.warn("清除部門層級權限快取失敗（code={}），舊值將活到 TTL 到期: {}",
+                    permCode, e.toString());
         }
     }
 

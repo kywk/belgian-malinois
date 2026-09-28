@@ -23,12 +23,27 @@ public class OrgService {
         this.redis = redis;
     }
 
+    /** 一般事實（主管、部門、部門成員）的 TTL。組織架構不常變。 */
+    private static final Duration ORG_TTL = Duration.ofMinutes(60);
+
+    /**
+     * 直屬主管，{@code null} 表示位於組織鏈頂。
+     *
+     * <p>⚠️ {@code null} 也必須快取（security-audit P2-8）。改動前是
+     * {@code if (manager != null) cachePut(...)} —— 鏈頂人員（dir001、admin001）
+     * 的查詢<b>命中率永遠是 0%</b>，每次都打外部系統。而鏈頂正是最常出現在
+     * 簽核路徑上的人，所以這是熱路徑。
+     *
+     * <p>用空字串當「沒有主管」的哨兵值，與 {@link #cachedSubstitute} 一致。
+     * 現在 mock 已改為 fail-closed（P2-7），查不到的人會拋例外而不是回 null，
+     * 所以 {@code null} 只代表「確實沒有主管」—— 快取這個事實是安全的。
+     */
     public String getDirectManager(String userId) {
         String key = "org:manager:" + userId;
         String cached = cacheGet(key);
-        if (cached != null) return cached;
+        if (cached != null) return cached.isEmpty() ? null : cached;
         String manager = orgRestClient.getManager(userId);
-        if (manager != null) cachePut(key, manager, Duration.ofMinutes(60));
+        cachePut(key, manager != null ? manager : "", ORG_TTL);
         return manager;
     }
 
@@ -52,12 +67,51 @@ public class OrgService {
                         + "請改用 getDirectManager(userId)，或先定義金額級距規則。");
     }
 
-    public String resolveEffective(String userId) {
+    /**
+     * 代理人快取的 TTL。
+     *
+     * <p>取兩者中較短的那個（原本 resolveEffective 是 1 分鐘、
+     * isUserAvailable 是 5 分鐘）。委派生效要快 —— 有人請假時工作必須立刻改道，
+     * 而「快取久一點」省下的外部呼叫遠不值得那段時間的錯誤派工。
+     */
+    private static final Duration SUBSTITUTE_TTL = Duration.ofMinutes(1);
+
+    /**
+     * 「這個人有沒有代理人」——{@link #resolveEffective} 與
+     * {@link #isUserAvailable} 的<b>唯一</b>事實來源（security-audit P2-8）。
+     *
+     * <h2>改動前為什麼會自我矛盾</h2>
+     *
+     * <p>兩個方法都從 {@code orgRestClient.getSubstitute(userId)} 推導，
+     * 卻各自用不同的 key 與 TTL 快取：{@code org:substitute:*} 1 分鐘、
+     * {@code org:available:*} 5 分鐘。
+     *
+     * <p>於是有人請假之後會出現一段<b>最長 4 分鐘</b>的窗口，系統同時相信
+     * 「這個人有空」與「這個人已委派給別人」。
+     * {@code BpmPermissionService.getFirstAvailableUser} 用 isUserAvailable
+     * 挑簽核人 → 任務派給一個正在休假的人。休假結束後方向相反：
+     * available=false 還留著，那個人會被跳過。
+     *
+     * <p>同一個事實不可以有兩份快取。現在只有一個 key，
+     * 兩個方法都由它推導，矛盾在結構上不可能發生。
+     *
+     * @return 代理人 id，或 {@code null} 表示沒有代理人
+     */
+    private String cachedSubstitute(String userId) {
         String key = "org:substitute:" + userId;
         String cached = cacheGet(key);
-        if (cached != null) return cached.isEmpty() ? userId : cached;
+        if (cached != null) return cached.isEmpty() ? null : cached;
+
         String substitute = orgRestClient.getSubstitute(userId);
-        cachePut(key, substitute != null ? substitute : "", Duration.ofMinutes(1));
+        // 空字串是「沒有代理人」的哨兵值。一定要快取 ——
+        // 絕大多數人沒有代理人，不快取等於每次挑簽核人都打外部系統。
+        cachePut(key, substitute != null ? substitute : "", SUBSTITUTE_TTL);
+        return substitute;
+    }
+
+    /** 有代理人時回代理人，否則回本人。 */
+    public String resolveEffective(String userId) {
+        String substitute = cachedSubstitute(userId);
         return substitute != null ? substitute : userId;
     }
 
@@ -88,18 +142,45 @@ public class OrgService {
      * <p>現在在此處統一清理（去重、排除本人、保留由近而遠的順序），
      * 讓所有消費者與 BPMN EL 都拿到乾淨的鏈。
      */
-    public List<String> getManagerChain(String userId, int levels) {
-        String key = "org:manager-chain:" + userId + ":" + levels;
-        String cached = cacheGet(key);
-        if (cached != null) return clean(splitCsv(cached), userId);
+    /**
+     * 快取主管鏈的標準深度。
+     *
+     * <p>改動前快取 key 帶著 {@code levels}（{@code org:manager-chain:u:3}），
+     * 而 {@code invalidateCache} 只迴圈 1..5 —— 有人呼叫
+     * {@code getManagerChain(u, 10)} 時，那個 key <b>永遠不會被失效</b>，
+     * 組織調整後會有最長 60 分鐘的錯誤簽核路徑（security-audit P2-8）。
+     *
+     * <p>現在只快取一份標準深度的鏈，較短的需求直接切片 ——
+     * 主管鏈對 levels 是前綴關係，所以切片與重新查詢的結果相同。
+     * 一個 userId 對應一個 key，失效就不可能漏。
+     */
+    private static final int CACHED_CHAIN_LEVELS = 5;
 
-        List<String> chain = orgRestClient.getManagerChain(userId, levels);
-        if (chain == null) return List.of();
-        List<String> cleaned = clean(chain, userId);
-        if (!cleaned.isEmpty()) {
-            cachePut(key, String.join(",", cleaned), Duration.ofMinutes(60));
+    public List<String> getManagerChain(String userId, int levels) {
+        if (levels <= 0) return List.of();
+
+        // 超過標準深度就不快取，直接問來源。
+        // 寧可少一次快取命中，也不要為了省一次呼叫而留下失效不到的 key。
+        if (levels > CACHED_CHAIN_LEVELS) {
+            log.debug("主管鏈深度 {} 超過快取的標準深度 {}，本次直接查詢來源（不快取）",
+                    levels, CACHED_CHAIN_LEVELS);
+            List<String> chain = orgRestClient.getManagerChain(userId, levels);
+            return chain == null ? List.of() : clean(chain, userId);
         }
-        return cleaned;
+
+        String key = "org:manager-chain:" + userId;
+        String cached = cacheGet(key);
+        if (cached != null) return truncate(clean(splitCsv(cached), userId), levels);
+
+        List<String> chain = orgRestClient.getManagerChain(userId, CACHED_CHAIN_LEVELS);
+        List<String> cleaned = chain == null ? List.<String>of() : clean(chain, userId);
+        // 空鏈（鏈頂人員）也要快取，理由見 getDirectManager。
+        cachePut(key, String.join(",", cleaned), ORG_TTL);
+        return truncate(cleaned, levels);
+    }
+
+    private static List<String> truncate(List<String> chain, int levels) {
+        return chain.size() <= levels ? chain : List.copyOf(chain.subList(0, levels));
     }
 
     /** 去重、排除本人與空值，保留原順序（由近而遠）。 */
@@ -121,47 +202,129 @@ public class OrgService {
                 .map(String::trim).filter(v -> !v.isEmpty()).toList();
     }
 
+    /** {@code null} 同樣要快取，理由見 {@link #getDirectManager}。 */
     public String getDeptId(String userId) {
         String key = "org:dept:" + userId;
         String cached = cacheGet(key);
-        if (cached != null) return cached;
+        if (cached != null) return cached.isEmpty() ? null : cached;
         String deptId = orgRestClient.getDepartment(userId);
-        if (deptId != null) cachePut(key, deptId, Duration.ofMinutes(60));
+        cachePut(key, deptId != null ? deptId : "", ORG_TTL);
         return deptId;
     }
 
+    /**
+     * 是否可受理工作 —— 由 {@link #cachedSubstitute} 推導，<b>不另外快取</b>。
+     *
+     * <p>「有代理人」等於「這個人不在」。這是同一個事實的另一種說法，
+     * 所以不該有自己的 key 與 TTL（security-audit P2-8，詳見
+     * {@link #cachedSubstitute} 的註解）。
+     */
     public boolean isUserAvailable(String userId) {
-        String key = "org:available:" + userId;
-        String cached = cacheGet(key);
-        if (cached != null) return "true".equals(cached);
-        // Default: available if substitute is null (user is not on leave)
-        String substitute = orgRestClient.getSubstitute(userId);
-        boolean available = substitute == null;
-        cachePut(key, String.valueOf(available), Duration.ofMinutes(5));
-        return available;
+        return cachedSubstitute(userId) == null;
     }
 
+    /**
+     * 部門成員。空清單也快取，且一律不回 {@code null}。
+     *
+     * <p>改動前空清單不快取（每次都打外部系統），而且直接回傳 client 的
+     * {@code null} —— 呼叫端拿到 null 會 NPE，而空部門是合法狀態。
+     */
     public List<String> getDeptMembers(String deptId) {
         String key = "org:dept-members:" + deptId;
         String cached = cacheGet(key);
         if (cached != null) return splitCsv(cached);
         List<String> members = orgRestClient.getDeptMembers(deptId);
-        if (members != null && !members.isEmpty()) {
-            cachePut(key, String.join(",", members), Duration.ofMinutes(30));
-        }
-        return members;
+        List<String> result = members != null ? List.copyOf(members) : List.of();
+        cachePut(key, String.join(",", result), Duration.ofMinutes(30));
+        return result;
     }
 
+    /** {@link #invalidateCache} 接受的 type。 */
+    public enum CacheType {
+        /** 主管與主管鏈。 */
+        MANAGER,
+        /** 代理人（同時影響 isUserAvailable，因為它們是同一個事實）。 */
+        SUBSTITUTE,
+        /** 所屬部門，以及該部門的成員清單。 */
+        DEPARTMENT,
+        /** 以上全部。 */
+        ALL;
+
+        /**
+         * 未知的 type 一律拒絕，<b>不要猜</b>。
+         *
+         * <p>改動前 {@code type} 這個參數完全沒有被讀取 —— 呼叫端送
+         * {@code "manager"} 以為只清主管快取，實際上全部被清掉。
+         * 那次剛好是「清太多」（安全的方向），但它建立了一個錯誤的認知：
+         * 呼叫端會相信這個參數有作用，於是把它用在會出問題的方向上。
+         *
+         * <p>現在打錯字會拿到 400，而不是靜默地做別的事。
+         */
+        static CacheType parse(String raw) {
+            if (raw == null || raw.isBlank()) return ALL;
+            try {
+                return CacheType.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException(
+                        "未知的快取類型: " + raw + "（可用: manager, substitute, department, all）", e);
+            }
+        }
+    }
+
+    /**
+     * 失效指定使用者的組織快取。
+     *
+     * <p>{@code type} 為 null 或空白時代表全部。未知的 type 會拋
+     * {@link IllegalArgumentException} —— 見 {@link CacheType#parse}。
+     *
+     * <h2>部門成員清單的失效（security-audit P2-8）</h2>
+     *
+     * <p>改動前完全沒有任何路徑會清掉 {@code org:dept-members:*}：
+     * 有人異動部門後，舊部門的成員清單會繼續把他算在內，最長 30 分鐘。
+     * 那段時間內以部門為範圍挑簽核人，會挑到已經不在該部門的人。
+     *
+     * <p>這裡在清掉 {@code org:dept:{userId}} <b>之前</b>先讀出它的值，
+     * 才能知道要清哪個部門的成員清單。順序反了就拿不到了。
+     *
+     * <p>⚠️ 這只涵蓋「離開舊部門」那一半。<b>加入新部門</b>那一半這裡無從得知
+     * —— 呼叫端必須另外呼叫 {@link #invalidateDeptMembers}。
+     * 組織系統推送異動時應同時送出新舊兩個部門。
+     */
     public void invalidateCache(List<String> userIds, String type) {
+        CacheType scope = CacheType.parse(type);
         if (userIds == null) return;
+
         for (String userId : userIds) {
-            cacheEvict("org:manager:" + userId);
-            cacheEvict("org:substitute:" + userId);
-            cacheEvict("org:available:" + userId);
-            cacheEvict("org:dept:" + userId);
-            // Delete manager-chain with common levels
-            for (int i = 1; i <= 5; i++) {
-                cacheEvict("org:manager-chain:" + userId + ":" + i);
+            if (scope == CacheType.ALL || scope == CacheType.MANAGER) {
+                cacheEvict("org:manager:" + userId);
+                cacheEvict("org:manager-chain:" + userId);
+            }
+            if (scope == CacheType.ALL || scope == CacheType.SUBSTITUTE) {
+                // isUserAvailable 由同一個 key 推導，所以清這一個就夠了。
+                cacheEvict("org:substitute:" + userId);
+            }
+            if (scope == CacheType.ALL || scope == CacheType.DEPARTMENT) {
+                // 必須先讀後刪：清掉之後就不知道他原本在哪個部門了。
+                String oldDept = cacheGet("org:dept:" + userId);
+                cacheEvict("org:dept:" + userId);
+                if (oldDept != null && !oldDept.isEmpty()) {
+                    cacheEvict("org:dept-members:" + oldDept);
+                }
+            }
+        }
+    }
+
+    /**
+     * 失效部門成員清單。
+     *
+     * <p>{@link #invalidateCache} 只能推導出使用者<b>離開</b>的那個部門。
+     * 加入新部門時，呼叫端必須明確指定 —— 這個方法就是給那個用途。
+     */
+    public void invalidateDeptMembers(List<String> deptIds) {
+        if (deptIds == null) return;
+        for (String deptId : deptIds) {
+            if (deptId != null && !deptId.isBlank()) {
+                cacheEvict("org:dept-members:" + deptId.trim());
             }
         }
     }

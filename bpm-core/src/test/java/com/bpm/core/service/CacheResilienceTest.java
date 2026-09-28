@@ -103,10 +103,26 @@ class CacheResilienceTest {
     @DisplayName("Redis 掛掉時，快取失效呼叫不得拋例外")
     void invalidationDoesNotThrow() {
         // 失效失敗只會讓舊值活到 TTL 到期，不應該讓呼叫端的請求失敗。
-        assertThatCode(() -> orgService.invalidateCache(List.of("user001"), "org"))
+        //
+        // ⚠️ type 原本傳的是 "org"。那個值不在任何範圍定義裡 ——
+        // 當時 type 參數完全沒有被讀取，所以送什麼都沒差（security-audit P2-8）。
+        // 這一行本身就是那個缺陷的證據：測試作者以為它有意義。
+        // "org" 與端點路徑 /cache-invalidate/org 重複，語意上不是範圍值。
+        assertThatCode(() -> orgService.invalidateCache(List.of("user001"), "all"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> orgService.invalidateDeptMembers(List.of("dept001")))
                 .doesNotThrowAnyException();
         assertThatCode(() -> permService.invalidateCache(
                 List.of("user001"), List.of("finance:payment:approve")))
                 .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("Redis 掛掉時，未知的 type 仍必須被拒絕（驗證發生在碰 Redis 之前）")
+    void unknownTypeIsRejectedEvenWhenRedisIsDown() {
+        // 參數驗證不該依賴 Redis 是否健康 —— 設定錯誤要在同一個地方以同一種
+        // 方式回報，不論基礎設施狀態如何。
+        assertThatCode(() -> orgService.invalidateCache(List.of("user001"), "org"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }
