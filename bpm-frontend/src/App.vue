@@ -33,7 +33,7 @@
           <el-menu-item index="/admin/external-systems">外部系統</el-menu-item>
         </el-sub-menu>
         <el-menu-item style="margin-left:auto" @click="logout">
-          {{ auth.userId }} 登出
+          {{ auth.token }} 登出
         </el-menu-item>
       </el-menu>
       <router-view />
@@ -43,23 +43,26 @@
 
 <script setup>
 import { ref, computed } from 'vue'
-import { useRouter } from 'vue-router'
 import { useAuthStore } from './stores/auth'
+import axios from 'axios'
 
-// 身分 header 由 services/http.js 的 request interceptor 統一附上，
-// 這裡不再操作 axios.defaults（改動前 store 與 App.vue 兩處都在塞 header）。
 const auth = useAuthStore()
-const router = useRouter()
 const selectedUser = ref('')
-const isAdmin = computed(() => auth.isAdmin)
+const isAdmin = computed(() => auth.token?.startsWith('admin'))
+
+// 初始化：若已有 token，設定 axios header
+if (auth.token) {
+  axios.defaults.headers.common['X-User-Id'] = auth.token
+  axios.defaults.headers.common['Authorization'] = `Bearer ${auth.token}`
+}
 
 function login() {
   auth.setToken(selectedUser.value)
+  axios.defaults.headers.common['X-User-Id'] = selectedUser.value
 }
 
 function logout() {
   auth.logout()
-  // 登出後可能停在需要角色的頁面上，退回首頁避免畫面殘留
-  router.replace('/')
+  delete axios.defaults.headers.common['X-User-Id']
 }
 </script>

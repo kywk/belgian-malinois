@@ -2,6 +2,7 @@ package com.bpm.core.external;
 
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
+import com.bpm.core.model.ExternalSystem;
 import com.bpm.core.model.ProcessVariableSpec;
 import com.bpm.core.repository.ProcessVariableSpecRepository;
 import com.bpm.core.service.FormVersionLocker;
@@ -27,23 +28,35 @@ public class ExternalApiController {
     private final ProcessVariableSpecRepository specRepo;
     private final AuditEventPublisher auditPublisher;
     private final FormVersionLocker formVersionLocker;
+    private final ExternalSystemPolicy policy;
+
+    /**
+     * 流程實例的擁有者。啟動時由 server 寫入，外部系統無法透過 request body 影響。
+     *
+     * <p>改動前擁有權是比對 {@code initiator}，但 {@code initiator} 可由呼叫端在
+     * body 中任意指定（見 startProcess），因此不是可信的擁有權來源。
+     */
+    private static final String OWNER_VAR = "_externalSystemId";
 
     public ExternalApiController(RuntimeService runtimeService, TaskService taskService,
                                   HistoryService historyService, ProcessVariableSpecRepository specRepo,
-                                  AuditEventPublisher auditPublisher, FormVersionLocker formVersionLocker) {
+                                  AuditEventPublisher auditPublisher, FormVersionLocker formVersionLocker,
+                                  ExternalSystemPolicy policy) {
         this.runtimeService = runtimeService;
         this.taskService = taskService;
         this.historyService = historyService;
         this.specRepo = specRepo;
         this.auditPublisher = auditPublisher;
         this.formVersionLocker = formVersionLocker;
+        this.policy = policy;
     }
 
     // ── 1. Start Process ──
 
     @PostMapping("/process-instances")
     public Map<String, Object> startProcess(@RequestBody Map<String, Object> body,
-                                             @RequestAttribute("externalSystemId") String systemId) {
+                                             @RequestAttribute("externalSystemId") String systemId,
+                                             @RequestAttribute("externalSystem") ExternalSystem sys) {
         String processDefKey = (String) body.get("processDefinitionKey");
         String businessKey = (String) body.get("businessKey");
         String initiator = (String) body.getOrDefault("initiator", "system:" + systemId);
@@ -54,6 +67,17 @@ public class ExternalApiController {
         @SuppressWarnings("unchecked")
         Map<String, Object> variables = body.get("variables") instanceof Map
                 ? new HashMap<>((Map<String, Object>) body.get("variables")) : new HashMap<>();
+
+        // 授權：processDefinitionKey 是否在該系統的 allowedProcessKeys 內。
+        // ⚠️ 改動前 allowedProcessKeys 欄位完全沒有任何程式碼在檢查 ——
+        // 外部系統即使只被授權 leave-approval，也能啟動任何流程。
+        if (processDefKey == null || processDefKey.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "缺少 processDefinitionKey");
+        }
+        if (!policy.isProcessKeyAllowed(sys, processDefKey)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "此系統未被授權啟動流程: " + processDefKey);
+        }
 
         // Validate: system initiator needs firstTaskAssignee or groups
         if (initiator.startsWith("system:") && firstAssignee == null && firstGroups == null) {
@@ -66,6 +90,9 @@ public class ExternalApiController {
 
         // Prepare variables
         variables.put("initiator", initiator);
+        // 擁有者由 server 決定，覆寫呼叫端可能夾帶的同名變數（body 的 variables
+        // 是自由 map，必須在這裡最後寫入才不會被蓋掉）。
+        variables.put(OWNER_VAR, systemId);
         if (initiator.startsWith("system:") && firstAssignee != null) {
             variables.put("effectiveInitiator", firstAssignee);
         }
@@ -135,6 +162,10 @@ public class ExternalApiController {
         Task task = taskService.createTaskQuery().taskId(taskId).singleResult();
         if (task == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found");
 
+        // ⚠️ 改動前這個端點完全沒有擁有權檢查 —— 任何通過 API Key 驗證的外部系統
+        // 都能以 taskId 完成「任何」任務，包含其他系統的案件與人工簽核任務。
+        verifyRunningOwnership(task.getProcessInstanceId(), systemId);
+
         @SuppressWarnings("unchecked")
         Map<String, Object> vars = body.get("variables") instanceof Map
                 ? new HashMap<>((Map<String, Object>) body.get("variables")) : new HashMap<>();
@@ -156,9 +187,7 @@ public class ExternalApiController {
         ProcessInstance pi = runtimeService.createProcessInstanceQuery()
                 .processInstanceId(processInstanceId).singleResult();
         if (pi != null) {
-            // Verify ownership
-            Object initiator = runtimeService.getVariable(processInstanceId, "initiator");
-            verifyOwnership(initiator, systemId);
+            verifyRunningOwnership(processInstanceId, systemId);
 
             Map<String, Object> result = new HashMap<>();
             result.put("processInstanceId", processInstanceId);
@@ -182,6 +211,10 @@ public class ExternalApiController {
         HistoricProcessInstance hp = historyService.createHistoricProcessInstanceQuery()
                 .processInstanceId(processInstanceId).singleResult();
         if (hp == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+
+        // ⚠️ 改動前只有「執行中」的實例做擁有權檢查，已完成的實例直接回傳 ——
+        // 任何外部系統都能讀取其他系統已結案的案件。
+        verifyHistoricOwnership(processInstanceId, systemId);
 
         return buildStatusFromHistory(hp);
     }
@@ -211,10 +244,83 @@ public class ExternalApiController {
         return result;
     }
 
-    private void verifyOwnership(Object initiator, String systemId) {
-        if (initiator == null || !initiator.toString().contains(systemId)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "無權查詢此流程");
+    // ── 擁有權檢查 ──
+
+    /** 往上追溯父流程的層數上限，防止資料異常造成無限迴圈。 */
+    private static final int MAX_PARENT_DEPTH = 10;
+
+    /** 執行中實例的擁有權檢查。 */
+    private void verifyRunningOwnership(String processInstanceId, String systemId) {
+        verifyOwnership(processInstanceId, systemId);
+    }
+
+    /** 已結案（歷史）實例的擁有權檢查。 */
+    private void verifyHistoricOwnership(String processInstanceId, String systemId) {
+        verifyOwnership(processInstanceId, systemId);
+    }
+
+    /**
+     * 擁有權檢查。
+     *
+     * <p>同時處理執行中與已結案的實例，並沿 Call Activity 的父子關係往上追溯：
+     *
+     * <ul>
+     *   <li><b>processInstanceId 為 null</b> —— 附屬簽的 subtask 是以
+     *       {@code taskService.newTask()} 建立的 standalone task，沒有
+     *       processInstanceId。直接拒絕，而不是讓 Flowable 拋例外變成 500。</li>
+     *   <li><b>Call Activity 子流程</b> —— 子流程是獨立的 process instance，
+     *       變數不會自動繼承，因此子流程內的 task 取不到 {@code _externalSystemId}。
+     *       若不往上追溯，附屬簽（spec §4.4.2 以 Call Activity 實作）一上線
+     *       這個檢查就會擋掉自己的子流程。</li>
+     * </ul>
+     */
+    private void verifyOwnership(String processInstanceId, String systemId) {
+        if (processInstanceId == null || processInstanceId.isBlank()) {
+            throw forbidden();
         }
+
+        String pid = processInstanceId;
+        for (int depth = 0; depth < MAX_PARENT_DEPTH && pid != null; depth++) {
+            Object owner = variableOf(pid, OWNER_VAR);
+            if (owner != null) {
+                if (systemId.equals(owner.toString())) return;
+                throw forbidden();
+            }
+            // 向後相容：本次改動前啟動的實例沒有 _externalSystemId
+            Object initiator = variableOf(pid, "initiator");
+            if (initiator != null && initiator.toString().equals("system:" + systemId)) return;
+
+            pid = superProcessInstanceIdOf(pid);
+        }
+        throw forbidden();
+    }
+
+    /** 取變數值，先查執行中再查歷史；實例不存在時回 null 而非拋例外。 */
+    private Object variableOf(String processInstanceId, String name) {
+        try {
+            Object v = runtimeService.getVariable(processInstanceId, name);
+            if (v != null) return v;
+        } catch (RuntimeException ignored) {
+            // 實例已結束時 runtimeService 會拋例外，改查歷史
+        }
+        return historicVariable(processInstanceId, name);
+    }
+
+    private Object historicVariable(String processInstanceId, String name) {
+        var v = historyService.createHistoricVariableInstanceQuery()
+                .processInstanceId(processInstanceId).variableName(name).singleResult();
+        return v == null ? null : v.getValue();
+    }
+
+    /** 父流程實例 id（非 Call Activity 子流程時為 null）。 */
+    private String superProcessInstanceIdOf(String processInstanceId) {
+        HistoricProcessInstance hp = historyService.createHistoricProcessInstanceQuery()
+                .processInstanceId(processInstanceId).singleResult();
+        return hp == null ? null : hp.getSuperProcessInstanceId();
+    }
+
+    private ResponseStatusException forbidden() {
+        return new ResponseStatusException(HttpStatus.FORBIDDEN, "無權存取此流程");
     }
 
     private void validateVariables(String processDefKey, Map<String, Object> variables) {

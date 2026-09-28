@@ -1,48 +1,51 @@
-import http from './http'
+import axios from 'axios'
 
 // Tasks
 export const getTasks = (params) =>
-  http.get('/api/tasks', { params }).then(r => r.data)
+  axios.get('/api/tasks', { params }).then(r => r.data)
 
 export const updateTask = (id, data) =>
-  http.put(`/api/tasks/${id}`, data).then(r => r.data)
+  axios.put(`/api/tasks/${id}`, data).then(r => r.data)
 
 export const getTaskComments = (taskId) =>
-  http.get(`/api/tasks/${taskId}/comments`).then(r => r.data)
+  axios.get(`/api/tasks/${taskId}/comments`).then(r => r.data)
 
 export const addTaskComment = (taskId, data) =>
-  http.post(`/api/tasks/${taskId}/comments`, data).then(r => r.data)
+  axios.post(`/api/tasks/${taskId}/comments`, data).then(r => r.data)
 
 // Subtasks (countersign)
 export const createSubtask = (taskId, data) =>
-  http.post(`/api/countersign/${taskId}`, data).then(r => r.data)
+  axios.post(`/api/countersign/${taskId}`, data).then(r => r.data)
 
 export const getSubtasks = (taskId) =>
-  http.get(`/api/countersign/${taskId}`).then(r => r.data)
+  axios.get(`/api/countersign/${taskId}`).then(r => r.data)
 
 export const completeSubtask = (taskId, subtaskId, data) =>
-  http.put(`/api/countersign/${taskId}/${subtaskId}/complete`, data).then(r => r.data)
+  axios.put(`/api/countersign/${taskId}/${subtaskId}/complete`, data).then(r => r.data)
 
 // Process Instances
 export const startProcess = (data) =>
-  http.post('/api/process-instances', data).then(r => r.data)
+  axios.post('/api/process-instances', data).then(r => r.data)
 
 export const getProcessInstances = (params) =>
-  http.get('/api/process-instances', { params }).then(r => r.data)
+  axios.get('/api/process-instances', { params }).then(r => r.data)
+
+export const getProcessDiagram = (id) =>
+  axios.get(`/api/process-instances/${id}/diagram`, { responseType: 'blob' }).then(r => r.data)
 
 // Process Definitions (Admin)
 export const getProcessDefinitions = (params) =>
-  http.get('/api/process-definitions', { params }).then(r => r.data)
+  axios.get('/api/process-definitions', { params }).then(r => r.data)
 
 export const getProcessDefinitionXml = (id) =>
-  http.get(`/api/process-definitions/${id}/resourcedata`, { responseType: 'text' }).then(r => r.data)
+  axios.get(`/api/process-definitions/${id}/resourcedata`, { responseType: 'text' }).then(r => r.data)
 
 // History
 export const getHistoricTasks = (params) =>
-  http.get('/api/history/tasks', { params }).then(r => r.data)
+  axios.get('/api/history/tasks', { params }).then(r => r.data)
 
 export const getHistoricTaskComments = (taskId) =>
-  http.get(`/api/history/tasks/${taskId}/comments`).then(r => r.data)
+  axios.get(`/api/history/tasks/${taskId}/comments`).then(r => r.data)
 
 export const getHistoricProcessInstances = (params) =>
-  http.get('/api/history/process-instances', { params }).then(r => r.data)
+  axios.get('/api/history/process-instances', { params }).then(r => r.data)

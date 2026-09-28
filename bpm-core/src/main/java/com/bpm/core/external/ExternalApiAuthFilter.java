@@ -14,27 +14,33 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.Map;
-import java.util.Set;
+import java.util.Objects;
 
 @Component
 public class ExternalApiAuthFilter extends OncePerRequestFilter {
 
+    static final String PREFIX = "/api/external/";
+
     private final ExternalSystemRepository repo;
     private final AuditEventPublisher auditPublisher;
     private final ObjectMapper objectMapper;
+    private final ExternalSystemPolicy policy;
 
     public ExternalApiAuthFilter(ExternalSystemRepository repo, AuditEventPublisher auditPublisher,
-                                  ObjectMapper objectMapper) {
+                                  ObjectMapper objectMapper, ExternalSystemPolicy policy) {
         this.repo = repo;
         this.auditPublisher = auditPublisher;
         this.objectMapper = objectMapper;
+        this.policy = policy;
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !request.getRequestURI().startsWith("/api/external/");
+        String uri = request.getRequestURI();
+        // 同時涵蓋不帶尾斜線的 "/api/external"，避免 prefix 檢查的常見破口
+        // （目前該 URI 沒有對應 handler，但不應依賴這點）。
+        return !uri.startsWith(PREFIX) && !uri.equals("/api/external");
     }
 
     @Override
@@ -62,51 +68,95 @@ public class ExternalApiAuthFilter extends OncePerRequestFilter {
             return;
         }
 
-        // IP whitelist check
-        if (sys.getIpWhitelist() != null && !sys.getIpWhitelist().isBlank()) {
-            Set<String> allowed = Set.of(sys.getIpWhitelist().split(","));
-            String clientIp = request.getRemoteAddr();
-            if (!allowed.contains(clientIp.trim())) {
-                reject(response, 403, "IP not in whitelist: " + clientIp, systemId, request);
-                return;
-            }
+        // IP 白名單。改動前用 Set.of(split(",")) —— 白名單若有重複 IP 會拋
+        // IllegalArgumentException 變成 500，且集合元素未 trim（trim 的是
+        // clientIp），因此 "10.0.0.1, 10.0.0.2" 的第二個項目永遠比不中。
+        String clientIp = request.getRemoteAddr();
+        if (!policy.isIpAllowed(sys, clientIp)) {
+            reject(response, 403, "IP not in whitelist: " + clientIp, systemId, request);
+            return;
         }
 
-        // Action check based on URI pattern
+        // 由路徑與方法推導 action。未知路徑一律拒絕（fail-closed）——
+        // 改動前未匹配的路徑會 fall through 成 "query_status"，等於未知端點
+        // 自動取得查詢權限。
         String action = resolveAction(request);
-        if (sys.getAllowedActions() != null && !sys.getAllowedActions().contains(action)) {
+        if (action == null) {
+            reject(response, 403, "Unrecognised external API endpoint", systemId, request);
+            return;
+        }
+        if (!policy.isActionAllowed(sys, action)) {
             reject(response, 403, "Action not allowed: " + action, systemId, request);
             return;
         }
 
-        // Update lastUsedAt
+        // TODO(R-09): lastUsedAt 目前每個請求寫一次 DB。應改為非同步或以分鐘
+        // 為粒度節流，見 docs/plan/2026-09-28-remediation-backlog.md。
         sys.setLastUsedAt(Instant.now());
         repo.save(sys);
 
-        // Store system info in request for downstream use
         request.setAttribute("externalSystem", sys);
         request.setAttribute("externalSystemId", systemId);
 
         chain.doFilter(request, response);
     }
 
-    private String resolveAction(HttpServletRequest request) {
+    /**
+     * 以「精確路徑 + 方法」推導 action。
+     *
+     * <p>改動前是對整個 URI 做 {@code contains()} 子串比對，且未匹配時預設
+     * 回傳 {@code "query_status"}。這裡改為列舉實際存在的 5 個端點，
+     * 未知組合回傳 {@code null} 由呼叫端拒絕。
+     *
+     * @return action 名稱，無法辨識時回傳 {@code null}
+     */
+    String resolveAction(HttpServletRequest request) {
         String uri = request.getRequestURI();
+        if (!uri.startsWith(PREFIX)) return null;
+
         String method = request.getMethod();
-        if (uri.contains("/process-instances") && "POST".equals(method)) return "start_process";
-        if (uri.contains("/tasks/") && "PUT".equals(method)) return "complete_task";
-        if (uri.contains("/process-instances") && "GET".equals(method)) return "query_status";
-        if (uri.contains("/callback")) return "callback";
-        return "query_status";
+        String path = uri.substring(PREFIX.length());
+        while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
+
+        // POST /api/external/process-instances
+        // GET  /api/external/process-instances?businessKey=...
+        if (path.equals("process-instances")) {
+            if ("POST".equals(method)) return "start_process";
+            if ("GET".equals(method)) return "query_status";
+            return null;
+        }
+
+        // GET /api/external/process-instances/{id}/status
+        if ("GET".equals(method)
+                && path.startsWith("process-instances/") && path.endsWith("/status")) {
+            return "query_status";
+        }
+
+        // PUT /api/external/tasks/{taskId}   （不含更深層路徑）
+        if ("PUT".equals(method) && path.startsWith("tasks/")
+                && path.indexOf('/', "tasks/".length()) < 0) {
+            return "complete_task";
+        }
+
+        // GET /api/external/process-definitions/{key}/variable-spec
+        if ("GET".equals(method)
+                && path.startsWith("process-definitions/") && path.endsWith("/variable-spec")) {
+            return "query_status";
+        }
+
+        return null;
     }
 
     private void reject(HttpServletResponse response, int status, String reason,
                          String systemId, HttpServletRequest request) throws IOException {
+        // Map.of 不接受 null value：getRemoteAddr() 依 Servlet 規範可為 null，
+        // 若不處理會讓 reject() 自己拋 NPE，把原本要回的 401/403 蓋成 500。
+        String ip = Objects.requireNonNullElse(request.getRemoteAddr(), "unknown");
         auditPublisher.publish(new AuditEvent("EXTERNAL_API_CALL",
                 systemId != null ? "system:" + systemId : "unknown",
                 null, null,
                 Map.of("status", "rejected", "reason", reason,
-                        "ip", request.getRemoteAddr(), "uri", request.getRequestURI())));
+                        "ip", ip, "uri", request.getRequestURI())));
 
         response.setStatus(status);
         response.setContentType("application/json");

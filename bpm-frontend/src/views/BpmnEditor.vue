@@ -22,7 +22,7 @@ import { ElMessage } from 'element-plus'
 import { useBpmnModeler } from '../composables/useBpmnModeler.js'
 import flowableModule from '../bpmn/index.js'
 import { getProcessDefinitionXml } from '../services/flowableApi.js'
-import http from '../services/http'
+import axios from 'axios'
 
 import 'bpmn-js/dist/assets/diagram-js.css'
 import 'bpmn-js/dist/assets/bpmn-js.css'
@@ -89,7 +89,7 @@ async function handleDeploy() {
     const xml = await exportXml()
     const form = new FormData()
     form.append('file', new Blob([xml], { type: 'application/xml' }), 'process.bpmn20.xml')
-    await http.post('/api/deployments', form)
+    await axios.post('/api/deployments', form)
     ElMessage.success('部署成功')
   } catch (e) {
     ElMessage.error('部署失敗：' + (e.response?.data?.message || e.message))

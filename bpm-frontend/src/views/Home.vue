@@ -8,13 +8,13 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import http from '../services/http'
+import axios from 'axios'
 
 const health = ref(null)
 
 onMounted(async () => {
   try {
-    const { data } = await http.get('/api/health')
+    const { data } = await axios.get('/api/health')
     health.value = data
   } catch {
     health.value = { status: 'UNREACHABLE' }
