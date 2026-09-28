@@ -88,6 +88,12 @@ public class AuditLogService {
         return repository.save(log);
     }
 
+    /** 幂等檢查（security-audit P1-14）。交易與 append() 同一個管理器。 */
+    @Transactional(value = "auditTransactionManager", readOnly = true)
+    public boolean existsByEventId(String eventId) {
+        return eventId != null && !eventId.isBlank() && repository.existsByEventId(eventId);
+    }
+
     public Page<AuditLog> search(String processInstanceId, String operatorId,
                                   OperationType operationType, Instant startDate,
                                   Instant endDate, Pageable pageable) {

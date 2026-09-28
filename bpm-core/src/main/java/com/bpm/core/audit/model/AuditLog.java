@@ -17,6 +17,19 @@ public class AuditLog {
 
     private String traceId;
 
+    /**
+     * 投遞層的幂等鍵（僅經 MQ 進來的事件會有值）。
+     *
+     * <p>RabbitMQ 是 at-least-once，broker 重投會讓同一筆稽核被 append 兩次，
+     * 而重複 append 產生的 hash chain 在數學上完全合法 → integrityCheck
+     * 察覺不到（security-audit P1-14）。
+     *
+     * <p>⚠️ 刻意不納入 hash：它是去重用的中介資料而非稽核內容，
+     * 納入會讓所有既有 v2 記錄的 hash 失效。
+     */
+    @Column(length = 64)
+    private String eventId;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private OperationType operationType;
@@ -105,6 +118,9 @@ public class AuditLog {
     public void setHashValue(String hashValue) { this.hashValue = hashValue; }
     public String getPreviousHash() { return previousHash; }
     public void setPreviousHash(String previousHash) { this.previousHash = previousHash; }
+    public String getEventId() { return eventId; }
+    public void setEventId(String eventId) { this.eventId = eventId; }
+
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 }

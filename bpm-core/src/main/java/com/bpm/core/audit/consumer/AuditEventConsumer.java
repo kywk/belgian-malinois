@@ -27,10 +27,37 @@ public class AuditEventConsumer {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * 消費外部（form-service 等）發來的稽核事件。
+     *
+     * <p>⚠️ 幂等是必要的（security-audit P1-14）。RabbitMQ 的投遞保證是
+     * at-least-once：consumer ack 之前連線中斷、或 retry 之後又成功，
+     * 都會讓同一筆稽核被 append 兩次。
+     *
+     * <p>後果比「多一列」嚴重：hash chain 會多出一個重複節點，而
+     * {@code integrityCheck} <b>完全察覺不到</b> —— 它驗的是鏈是否連續，
+     * 而重複 append 產生的鏈在數學上完全合法。稽核紀錄被污染，
+     * 完整性檢查卻回報 intact。
+     *
+     * <p>幂等鍵取自訊息的 {@code eventId}，沒有則退回 {@code traceId}。
+     * 兩者皆無時無法去重 —— 此時記錄警告，因為那代表發送端沒有帶鍵。
+     */
     @RabbitListener(queues = "audit.log.queue")
     public void handle(Map<String, Object> event) {
         try {
+            String eventId = (String) event.getOrDefault("eventId", event.get("traceId"));
+            if (eventId != null && !eventId.isBlank()) {
+                if (auditLogService.existsByEventId(eventId)) {
+                    log.debug("稽核事件 {} 已處理過，略過（broker 重投）", eventId);
+                    return;
+                }
+            } else {
+                log.warn("稽核事件缺少 eventId／traceId，無法去重 —— "
+                        + "broker 重投時會產生重複的 hash chain 節點");
+            }
+
             AuditLog auditLog = new AuditLog();
+            auditLog.setEventId(eventId);
             auditLog.setOperationType(OperationType.valueOf((String) event.get("operationType")));
             auditLog.setOperatorId((String) event.get("operatorId"));
             auditLog.setOperatorSource((String) event.getOrDefault("operatorSource", "user"));
