@@ -40,6 +40,9 @@ class AttachmentPathTraversalTest extends IntegrationTestBase {
     @Autowired
     private RuntimeService runtimeService;
 
+    @Autowired
+    private com.bpm.core.repository.FileAttachmentRepository attachmentRepo;
+
     @Value("${bpm.upload.dir:./uploads}")
     private String uploadDirProp;
 
@@ -106,7 +109,10 @@ class AttachmentPathTraversalTest extends IntegrationTestBase {
         mockMvc.perform(multipart("/api/attachments")
                         .file(file)
                         .param("processInstanceId", pid)
-                        .param("uploadedBy", "user001"))
+                        .param("uploadedBy", "user001")
+                        // 附件現在有物件層授權（P1-6）：必須是案件關係人。
+                        // user001 是 startInstance() 的發起人。
+                        .header("X-User-Id", "user001"))
                 .andExpect(status().isOk());
 
         assertThat(escaped(uploadDir, "escape-marker"))
@@ -124,20 +130,26 @@ class AttachmentPathTraversalTest extends IntegrationTestBase {
         var res = mockMvc.perform(multipart("/api/attachments")
                         .file(file)
                         .param("processInstanceId", pid)
-                        .param("uploadedBy", "user001"))
+                        .param("uploadedBy", "user001")
+                        // 附件現在有物件層授權（P1-6）：必須是案件關係人。
+                        // user001 是 startInstance() 的發起人。
+                        .header("X-User-Id", "user001"))
                 .andExpect(status().isOk())
                 .andReturn();
 
         String body = res.getResponse().getContentAsString();
         // fileName（顯示用）必須保留原始檔名
         assertThat(body).as("原始檔名必須保留在 DB 供顯示").contains("機密報告.txt");
+        // 回應刻意不再包含 filePath（P1-6：不外洩容器內實體路徑）
+        assertThat(body).as("回應不得外洩實體路徑").doesNotContain("filePath");
 
-        // 但 filePath（實際落地路徑）不得包含 client 的檔名 ——
-        // 檔名是 client 完全控制的輸入，不應出現在檔案系統路徑上。
-        String filePath = body.replaceAll(".*\"filePath\":\"([^\"]*)\".*", "$1");
-        assertThat(filePath)
-                .as("實際儲存路徑不得使用 client 提供的檔名")
-                .doesNotContain("機密報告");
+        // 實際落地路徑改由 DB 驗證：檔名是 client 完全控制的輸入，
+        // 不應出現在檔案系統路徑上。
+        assertThat(attachmentRepo.findByProcessInstanceIdOrderByUploadedAtDesc(pid))
+                .isNotEmpty()
+                .allSatisfy(att -> assertThat(att.getFilePath())
+                        .as("實際儲存路徑不得使用 client 提供的檔名")
+                        .doesNotContain("機密報告"));
     }
 
     @Test
@@ -149,11 +161,15 @@ class AttachmentPathTraversalTest extends IntegrationTestBase {
                         .file(new MockMultipartFile("file", "spec.pdf",
                                 "application/pdf", "PDF-CONTENT".getBytes()))
                         .param("processInstanceId", pid)
-                        .param("uploadedBy", "user001"))
+                        .param("uploadedBy", "user001")
+                        // 附件現在有物件層授權（P1-6）：必須是案件關係人。
+                        // user001 是 startInstance() 的發起人。
+                        .header("X-User-Id", "user001"))
                 .andExpect(status().isOk());
 
         mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-                        .get("/api/attachments").param("processInstanceId", pid))
+                        .get("/api/attachments").param("processInstanceId", pid)
+                        .header("X-User-Id", "user001"))
                 .andExpect(status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .jsonPath("$[0].fileName").value("spec.pdf"));

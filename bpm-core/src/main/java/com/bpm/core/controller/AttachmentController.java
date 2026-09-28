@@ -1,9 +1,13 @@
 package com.bpm.core.controller;
 
+import com.bpm.core.audit.AuditEventPublisher;
+import com.bpm.core.audit.model.OperationType;
+import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.model.FileAttachment;
 import com.bpm.core.repository.FileAttachmentRepository;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.RuntimeService;
+import org.flowable.engine.TaskService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
@@ -19,6 +23,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -38,25 +43,33 @@ public class AttachmentController {
     private final FileAttachmentRepository repo;
     private final RuntimeService runtimeService;
     private final HistoryService historyService;
+    private final TaskService taskService;
+    private final AuditEventPublisher auditPublisher;
     private final Path uploadDir;
 
     public AttachmentController(FileAttachmentRepository repo,
                                 RuntimeService runtimeService,
                                 HistoryService historyService,
+                                TaskService taskService,
+                                AuditEventPublisher auditPublisher,
                                 @Value("${bpm.upload.dir:./uploads}") String uploadDir) {
         this.repo = repo;
         this.runtimeService = runtimeService;
         this.historyService = historyService;
+        this.taskService = taskService;
+        this.auditPublisher = auditPublisher;
         // normalize + toAbsolutePath 一次做掉，後續的 startsWith 圍堵檢查
         // 才有意義（相對路徑之間比 prefix 會有誤判）。
         this.uploadDir = Path.of(uploadDir).toAbsolutePath().normalize();
     }
 
     @PostMapping
-    public FileAttachment upload(@RequestParam("file") MultipartFile file,
-                                  @RequestParam String processInstanceId,
-                                  @RequestParam(required = false) String taskId,
-                                  @RequestParam(required = false) String uploadedBy) throws IOException {
+    public Map<String, Object> upload(@RequestParam("file") MultipartFile file,
+                                      @RequestParam String processInstanceId,
+                                      @RequestParam(required = false) String taskId,
+                                      @RequestParam(required = false) String uploadedBy,
+                                      @RequestHeader(value = "X-User-Id", required = false)
+                                      String headerUserId) throws IOException {
         // ── 1. processInstanceId 白名單驗證 ──────────────────────────
         // 改動前這個值零驗證就進 resolve()，processInstanceId=../../../../etc/cron.d
         // 即可在容器內任意位置建立目錄並寫檔。
@@ -72,6 +85,10 @@ public class AttachmentController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "流程實例不存在: " + processInstanceId);
         }
+
+        // ── 物件層授權（security-audit P1-6）─────────────────────────
+        String operator = firstNonBlank(headerUserId, uploadedBy);
+        requireParticipant(processInstanceId, operator);
 
         Path dir = uploadDir.resolve(processInstanceId).normalize();
 
@@ -100,8 +117,102 @@ public class AttachmentController {
         att.setFilePath(target.toString());
         att.setFileSize(file.getSize());
         att.setContentType(file.getContentType());
-        att.setUploadedBy(uploadedBy);
-        return repo.save(att);
+        att.setUploadedBy(firstNonBlank(uploadedBy, operator));
+        FileAttachment saved = repo.save(att);
+
+        auditPublisher.publish(new AuditEvent(OperationType.FORM_SUBMIT.name(), operator,
+                processInstanceId, taskId,
+                Map.of("attachmentId", saved.getId(),
+                       "fileName", saved.getFileName(),
+                       "fileSize", saved.getFileSize() == null ? 0L : saved.getFileSize())));
+
+        return toResponse(saved);
+    }
+
+    /**
+     * 要求呼叫者是該案件的關係人，否則 404。
+     *
+     * <p>審查指出「即使補上認證，程式碼裡也<b>沒有可掛授權判斷的位置</b>」
+     * （security-audit P1-6）—— 這個方法就是那個位置。
+     *
+     * <p>關係人的定義：案件發起人、或在此案件中持有／曾持有任務的人
+     * （含候選人）。這涵蓋申請人、各關卡簽核人與加簽人。
+     *
+     * <p>回 404 而非 403：403 會確認「這個附件／案件存在」，
+     * 對可枚舉的 id 來說等於把枚舉管道留著。
+     *
+     * <p>⚠️ <b>限制</b>：呼叫者身分取自 {@code X-User-Id} 標頭，也就是仍可
+     * 自報（R-01 尚未完成）。因此這不是完整的安全邊界 —— 它關掉的是
+     * 「不需要任何知識就能枚舉全公司附件」這條路，並把授權判斷點建立起來，
+     * 讓 R-01 完成後只需要換掉身分的來源。
+     * ⚠️ 目前也沒有 admin／auditor 的旁路：那需要伺服器端的角色模型，
+     * 同樣要等 R-01。屆時在此方法加一個角色判斷即可。
+     */
+    private void requireParticipant(String processInstanceId, String userId) {
+        if (userId == null || userId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        }
+        if (!isParticipant(processInstanceId, userId)) {
+            // 稽核拒絕：有人嘗試存取無關案件的附件，這件事本身值得留痕。
+            auditPublisher.publish(new AuditEvent(OperationType.DATA_ACCESS.name(), userId,
+                    processInstanceId, null,
+                    Map.of("denied", true, "reason", "not a participant")));
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        }
+    }
+
+    private boolean isParticipant(String processInstanceId, String userId) {
+        // 1. 發起人（執行中看 runtime 變數，已結案看歷史變數）
+        if (userId.equals(initiatorOf(processInstanceId))) return true;
+
+        // 2. 目前持有任務或為候選人
+        boolean hasRuntimeTask = taskService.createTaskQuery()
+                .processInstanceId(processInstanceId)
+                .taskInvolvedUser(userId).count() > 0;
+        if (hasRuntimeTask) return true;
+
+        // 3. 曾經處理過此案件的任務（含已完成的關卡、加簽）
+        return historyService.createHistoricTaskInstanceQuery()
+                .processInstanceId(processInstanceId)
+                .taskInvolvedUser(userId).count() > 0;
+    }
+
+    private String initiatorOf(String processInstanceId) {
+        try {
+            Object v = runtimeService.getVariable(processInstanceId, "initiator");
+            if (v != null) return v.toString();
+        } catch (Exception ignored) {
+            // 已結案的實例在 runtimeService 查不到，改看歷史變數
+        }
+        var hv = historyService.createHistoricVariableInstanceQuery()
+                .processInstanceId(processInstanceId).variableName("initiator").list();
+        return hv.isEmpty() || hv.get(0).getValue() == null
+                ? null : hv.get(0).getValue().toString();
+    }
+
+    /**
+     * 對外的附件表示法。
+     *
+     * <p>刻意<b>不含 filePath</b>：那是容器內的實體路徑，對呼叫端沒有任何用途，
+     * 只會洩漏部署結構（security-audit P1-6）。
+     */
+    private static Map<String, Object> toResponse(FileAttachment att) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("id", att.getId());
+        m.put("processInstanceId", att.getProcessInstanceId());
+        m.put("taskId", att.getTaskId());
+        m.put("fileName", att.getFileName());
+        m.put("fileSize", att.getFileSize());
+        m.put("contentType", att.getContentType());
+        m.put("uploadedBy", att.getUploadedBy());
+        m.put("uploadedAt", att.getUploadedAt());
+        return m;
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        if (a != null && !a.isBlank()) return a;
+        if (b != null && !b.isBlank()) return b;
+        return null;
     }
 
     private boolean processInstanceExists(String processInstanceId) {
@@ -127,14 +238,24 @@ public class AttachmentController {
     }
 
     @GetMapping
-    public List<FileAttachment> list(@RequestParam String processInstanceId) {
-        return repo.findByProcessInstanceIdOrderByUploadedAtDesc(processInstanceId);
+    public List<Map<String, Object>> list(@RequestParam String processInstanceId,
+                                          @RequestHeader(value = "X-User-Id", required = false)
+                                          String headerUserId) {
+        requireParticipant(processInstanceId, headerUserId);
+        return repo.findByProcessInstanceIdOrderByUploadedAtDesc(processInstanceId)
+                .stream().map(AttachmentController::toResponse).toList();
     }
 
     @GetMapping("/{id}/download")
-    public ResponseEntity<Resource> download(@PathVariable String id) {
+    public ResponseEntity<Resource> download(@PathVariable String id,
+                                             @RequestHeader(value = "X-User-Id", required = false)
+                                             String headerUserId) {
         FileAttachment att = repo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+
+        // Flowable 的 processInstanceId 可被枚舉，而改動前這個端點只做
+        // findById → 任何人都能列舉並下載全公司案件的附件。
+        requireParticipant(att.getProcessInstanceId(), headerUserId);
 
         // 同樣圍堵下載路徑。filePath 來自 DB，而在此修復之前寫入的資料列
         // 可能指向 uploadDir 之外的任意路徑 —— 若不檢查，一筆被污染的
@@ -143,6 +264,11 @@ public class AttachmentController {
         if (!stored.startsWith(uploadDir)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
+
+        // 誰下載了薪資單必須留下紀錄（改動前三個端點全無稽核）。
+        auditPublisher.publish(new AuditEvent(OperationType.DATA_ACCESS.name(), headerUserId,
+                att.getProcessInstanceId(), att.getTaskId(),
+                Map.of("attachmentId", att.getId(), "fileName", att.getFileName())));
 
         Resource resource = new FileSystemResource(stored);
         return ResponseEntity.ok()

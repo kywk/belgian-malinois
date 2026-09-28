@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mssql:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -58,6 +56,10 @@ services:
       SPRING_RABBITMQ_PASSWORD: "${RABBITMQ_PASS}"
       SPRING_DATA_REDIS_PASSWORD: "${REDIS_PASSWORD}"
       BPM_WEBHOOK_HMAC_SECRET: "${WEBHOOK_HMAC_SECRET}"
+    volumes:
+      # 見 docker-compose.yml 同段註解（security-audit P1-6）。
+      # prod 尤其不能少：附件是簽核案件的證據，容器重建就遺失等於紀錄消失。
+      - bpm-uploads:/app/uploads
     restart: unless-stopped
 
   form-service:
@@ -88,3 +90,4 @@ volumes:
   mssql-data:
   rabbitmq-data:
   redis-data:
+  bpm-uploads:
