@@ -1,0 +1,200 @@
+# Spring Boot 4 升級計畫
+
+**建立日期**：2026-09-28
+**狀態**：Stage 0 ✅ / Stage 1 ✅ 已完成（2026-09-28）；Stage 2 起待開工
+**優先級**：P0（安全性阻斷項）
+**預估**：22 人日（含前置安全網，含 form-service 整併）
+
+---
+
+## 1. 動機
+
+Spring Boot 3.5 已於 **2026-06-30 結束 OSS 支援**。最後一個 OSS 版本是 **3.5.16**（2026-06-25 發布）；此後 3.5 線的任何 CVE **只會修給付費商業支援**（商業支援延續至 2032-06-30），Maven Central 不會再有修補版本。
+
+本專案目前停在 **3.5.13**，等於：
+
+1. 落後最後一個可取得的 OSS 安全修補版本 3 個 patch。
+2. 之後所有新發現的 CVE 都無法透過升級 minor 修掉。
+
+企業簽核系統長期停留在無安全修補的框架版本上不可接受，因此升級從「技術債」升格為 **P0 阻斷項**。
+
+## 2. 關鍵發現：這不只是 Boot 版本升級
+
+> **升級到 Spring Boot 4 會強制 Flowable 從 6.8.1 跳到 8.x —— 跨兩個主版本。**
+
+| 事實 | 來源 |
+|---|---|
+| Flowable 8 基於 Spring Framework 7 + Spring Boot 4，**不再支援 Spring Boot 3** | Flowable 8.0.0 Release Notes |
+| Flowable **7.2.0 無法在 Spring Boot 4 上運作**（官方論壇已確認） | Flowable Forum #12478 |
+| Flowable 8.0.0 於 **2026-02-27** 發布 | Flowable 8.0.0 Release |
+| Flowable 7 的定位是 Spring Boot 3 / Spring 6 / Java 17 升級 | Flowable 7.0.0 Release |
+
+也就是說可行的組合只有兩組：
+
+```
+現況    Spring Boot 3.5.13  +  Flowable 6.8.1     ← 已 EOL
+中繼    Spring Boot 3.5.16  +  Flowable 7.2.x     ← 合法且可運作的中繼點
+目標    Spring Boot 4.1.1   +  Flowable 8.0.x
+```
+
+**中繼點的存在是本計畫最重要的槓桿** —— 它讓我們可以一次只換一個主版本，而不是同時換 Boot 和 Flowable 兩個。
+
+## 3. 好消息：本專案的升級面比想像小
+
+Flowable 6→7 的移除項目，**本專案一項都沒用到**：
+
+| Flowable 7 移除的東西 | 本專案是否使用 |
+|---|---|
+| Async history | ❌ 未使用（已確認 `bpm-core/src/main/resources/` 無 `async-history` 設定） |
+| Form Engine | ❌ 自建 form-service，未用 Flowable 表單引擎 |
+| Content Engine | ❌ 附件走自建 `bpm_file_attachment` 表 |
+
+且 Flowable 官方說明 6→7 **在 package、engine、database 層級沒有重大變更**，BPMN 執行模型不變、引擎層不需要 DB schema 遷移。
+
+Jackson 的風險也有退路：Flowable 8 雖預設 Jackson 3，但可用 **`flowable.variable-json-mapper=jackson2`** 繼續走 Jackson 2。Flowable 官方建議的做法正是「先設成 jackson2，之後再另行升級到 Jackson 3」。
+
+## 4. 相容性矩陣
+
+| 元件 | 現況 | 目標 | 備註 |
+|---|---|---|---|
+| Spring Boot | 3.5.13 | **4.1.1** | 2026-08-20 發布，目前最新 |
+| Spring Framework | 6.2.x（由 Boot 管理） | **7.0.9+** | Boot 4.1 要求 |
+| Flowable | 6.8.1 | **8.0.x**（施工時 pin 最新 patch） | 經 7.2.x 中繼 |
+| Java | 21 | **21 維持不變** | Boot 4 baseline 為 17，最高支援至 26；沒有理由在此次一併動 Java |
+| Jakarta EE | 10 | **11** | Servlet 6.1、Persistence 3.2、Validation 3.1 |
+| Tomcat（內嵌） | 10.1 | **11+** | 由 Boot 自動帶入 |
+| Jackson | 2.x | **先維持 2.x**，第二階段再上 3.x | `com.fasterxml.jackson` → `tools.jackson` |
+| MSSQL JDBC | Boot 管理 | Boot 管理 | 無需手動 pin |
+
+## 5. 分階段施工路徑
+
+原則：**每個 Stage 結束都是一個可部署、可回退的穩定狀態**。任一 Stage 不得同時變更兩個主版本。
+
+### ✅ Stage 0 — 立即止血（已完成 2026-09-28）
+
+`bpm-core/pom.xml` 與 `form-service/pom.xml` 的 parent 由 `3.5.13` → **`3.5.16`**，取得 OSS 線上最後一批安全修補。兩個 pom 都加了註解指回本計畫，避免有人直接 bump 到 4.x 而跳過中繼點。
+
+⚠️ **這是止血，不是解決** —— 3.5.16 之後的 CVE 仍不會有 OSS 修補。
+
+### ✅ Stage 1 — 縮小升級面（已完成 2026-09-28）
+
+刪除 `audit-log-service/`（418 行死碼，2026-04 已併入 bpm-core，CI 不建置）。需要升級的 Java 模組從 3 個降到 2 個。
+
+連帶清理：
+
+| 檔案 | 處理 |
+|---|---|
+| `audit-log-service/` | 目錄整個刪除（含 `target/`） |
+| `cicd/envs/{dev,sit,uat,prod}.yml` | 移除 `audit.service.url` |
+| `cicd/templates/merge_request.md`、`.github/pull_request_template.md`、`.gitlab/merge_request_templates/Default.md` | 移除影響範圍勾選項 |
+| `docs/README-testing.md` | 服務端點表移除 :8082；稽核 curl 改指 :8080 |
+| `external/ExternalSystemAdminController.java:85-87` | usage-logs stub 的提示訊息不再指向已不存在的服務 |
+
+**刻意未改**：`docs/history/**` 與 `docs/backend-completed-items.md` 中提及 audit-log-service 與 :8082 的內容 —— 那些是歷史紀錄，改掉等於偽造當時的事實。
+
+### Stage 2 — 建立安全網（7 人日）⚠️ 不可跳過
+
+**在沒有測試的情況下升級流程引擎，等於閉著眼睛換飛機引擎。**
+
+1. **Flyway 接手 schema**（2 人日）
+   關掉 `ddl-auto: update`，把現有三個 DB 的 schema 固化成 baseline migration。順帶把 `infra/mssql/audit-log-triggers.sql` 變成 migration（現在是「手動執行」，沒人會記得）。
+   > Flowable 自己的 `ACT_*` 表仍由 `flowable.database-schema-update` 管理，**不要**納入 Flyway。
+2. **Testcontainers 整合測試骨架**（2 人日）
+   三個 pom 都已宣告 `spring-boot-starter-test` 但沒有 `src/test` 目錄 —— 距離可用只差一個目錄。
+3. **覆蓋 4 個未過的驗收案例**（3 人日）
+   TC-A01 附屬簽、TC-A02 多方意見、TC-A04 外部 API。這些同時是驗收缺口與升級迴歸網，一次投資兩個回報。
+
+### Stage 3 — 整併 form-service（3 人日）
+
+見 `2026-09-28-adr-001-form-service-consolidation.md`。
+
+排在升級**之前**的理由：升級面從 2 個模組降到 1 個。沒有理由先花力氣把 form-service 升到 Boot 4，再把它刪掉。
+
+### Stage 4 — Flowable 6.8.1 → 7.2.x（留在 Spring Boot 3.5.16）（3 人日）
+
+**單獨變更 Flowable 主版本，Boot 版本不動。** 這一步若出問題，可以確定問題來自 Flowable，而不是 Boot。
+
+必辦事項：
+
+1. **刪除 `BpmCoreApplication` 的 `@ImportAutoConfiguration` workaround。**
+   Flowable 7+ 已改用 Spring Boot 3 的 `AutoConfiguration.imports` 格式，那三行顯式 import 不再需要，留著反而可能造成重複註冊。同時確認 `@Lazy RuntimeService` 的循環依賴 workaround 是否仍必要。
+2. 確認 `flowable-bpmn-layout` artifact 在 7.x 仍存在（`DeploymentController` 的 `BpmnAutoLayout` 依賴它）。
+3. **檢查唯一的 internal API 使用**：`org.flowable.engine.impl.persistence.entity.ExecutionEntity`
+   —— 全專案僅 `webhook/ProcessCompletedListener.java:8`（import）與 `:34`（`instanceof ExecutionEntity exec`）兩處。`.impl.` 套件不保證跨主版本穩定，**這是整個升級最高風險的單點**，優先驗證。
+4. ✅ 已確認未啟用 async history（`bpm-core/src/main/resources/` 無相關設定）。
+
+### Stage 5 — Spring Boot 3.5.16 → 4.1.1 + Flowable 7.2.x → 8.0.x（5 人日）
+
+此時 Boot 與 Flowable 必須同步跳（Flowable 8 不支援 Boot 3，Flowable 7 不支援 Boot 4 —— 沒有中繼點）。
+
+1. **先設 `flowable.variable-json-mapper=jackson2`**，把 Jackson 議題完全隔離到 Stage 6。
+2. `org.springframework.boot.autoconfigure.*` 套件重組 → 修 import。建議用 OpenRewrite 的 Spring Boot 4 recipe 自動處理大部分機械式改動。
+3. **Spring AMQP retry 機制從 Spring Retry 移到 Spring Framework**。本專案用的是 `spring.rabbitmq.listener.simple.retry.*` 屬性而非 `RabbitRetryTemplateCustomizer`，預期影響小，但需實測 DLQ 路由仍正常。
+4. **⚠️ 前端連動：Flowable 8 的日期屬性（如 process instance start time）改回傳 ISO 8601 UTC。**
+   影響 `ApprovalTimeline.vue`、`TaskInbox.vue`、`MyApplications.vue`、`AuditLog.vue` 的時間顯示與時區。**這是唯一會外溢到前端的破壞性變更**，不要漏。
+5. 確認 Liquibase 移除不影響本專案 —— Flowable 8 把 Liquibase 從 App / CMMN / DMN / event registry 引擎移除改成手動 SQL。本專案只用 process 引擎，預期無影響，但需實測空 DB 啟動。
+
+### Stage 6 — Jackson 2 → 3（3 人日，可延後）
+
+**這一步可以獨立排程，不阻斷上線。**
+
+- `com.fasterxml.jackson` → `tools.jackson`（annotation 仍留在 `com.fasterxml.jackson.annotation`）
+- 影響範圍實測只有 6 處：
+  - `ObjectMapper` 4 處 — `webhook/WebhookConsumer`、`audit/AuditEventPublisher`、`audit/consumer/AuditEventConsumer`、`external/ExternalApiAuthFilter`
+  - `Jackson2JsonMessageConverter` 2 處 — `bpm-core/config/JacksonAmqpConfig`、`form-service/config/JacksonAmqpConfig`（Stage 3 後合併為 1 處）
+- ⚠️ **`JacksonException` 在 Jackson 3 改為繼承 `RuntimeException`**。原本 `catch (IOException e)` 會靜默不再捕捉 Jackson 解析錯誤 —— 逐一檢查上述 4 個檔案的 catch 區塊。
+- ⚠️ 日期/時間格式、null 處理的預設值有差異，**會編譯成功但執行期出錯**。這是要靠 Stage 2 的測試網擋下來的東西。
+- 最後才移除 `flowable.variable-json-mapper=jackson2`。若 BPMN 的 EL 運算式中有呼叫 `JsonNode` 方法，需逐一檢查（Flowable 官方明確警告 method signature 大量變動）—— 本專案目前 BPMN 僅使用 `orgService`/`permService`/`bpmQueryService` 三個 bean，預期無 `JsonNode` 操作。
+
+## 6. 時程總表
+
+| Stage | 內容 | 人日 | 可否獨立部署 |
+|---|---|---|---|
+| ~~0~~ | ~~3.5.13 → 3.5.16 止血~~ **✅ 已完成** | 0.5 | ✅ |
+| ~~1~~ | ~~刪 audit-log-service~~ **✅ 已完成** | 0.5 | ✅ |
+| 2 | Flyway + Testcontainers + 4 個驗收案例 | 7 | ✅ |
+| 3 | 整併 form-service | 3 | ✅ |
+| 4 | Flowable 6.8.1 → 7.2.x | 3 | ✅ |
+| 5 | Boot 4.1.1 + Flowable 8.0.x | 5 | ✅ |
+| 6 | Jackson 2 → 3 | 3 | ✅（可延後） |
+| | **合計** | **22** | |
+
+Stage 0 與 1 已於 2026-09-28 完成，**剩餘 21 人日**。下一個開工點是 Stage 2（測試安全網）—— 在此之前不要動 Flowable 或 Boot 版本。
+
+## 7. 驗收條件
+
+每個 Stage 完成後必須全部通過：
+
+- [ ] `mvn verify` 通過，且**確實執行了測試**（現況為零測試，`verify` 是空門）
+- [ ] `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d` 全服務 healthy
+- [ ] `./scripts/seed-data.sh` 成功部署兩支 BPMN 並驗證 4 個 form key
+- [ ] `./scripts/acceptance-test.sh` 全數 PASS（TC-L01–L04、TC-P01–P03 + 稽核）
+- [ ] 空 DB 冷啟動成功（驗證 schema 建立路徑）
+- [ ] 既有 DB 熱啟動成功（驗證向後相容，**Stage 4/5 必驗**）
+- [ ] `/api/audit-logs/integrity-check` 回報 hash chain 完整
+- [ ] 前端手動走完一次請假 + 採購流程（Stage 5 必驗，因日期格式變更）
+
+## 8. 施工時必須自行確認的事項
+
+以下是撰寫本計畫時**未能查證**的項目，開工前請先確認，不要直接當成事實：
+
+1. Flowable 8 的**最新 patch 版本號**（本文僅確認 8.0.0 於 2026-02-27 發布）。
+2. `flowable-bpmn-layout` 在 7.x / 8.x 是否仍為獨立 artifact、artifactId 是否更名。
+3. `ExecutionEntity`（internal API）在 7.x / 8.x 的簽章是否變動 —— **最高風險單點**。
+4. Spring AMQP 4.x 中 `Jackson2JsonMessageConverter` 的 Jackson 3 對應類別名稱。
+5. `spring-boot-starter-mail`、`spring-boot-starter-data-redis` 在 Boot 4 模組重組後的 artifactId 是否變動。
+6. OpenRewrite Spring Boot 4 recipe 的實際覆蓋率（作為加速器，不可全信）。
+
+## 參考來源
+
+- [Spring Boot 4.1.1 available now](https://spring.io/blog/2026/08/20/spring-boot-4-1-1-available-now/)
+- [Spring Boot 4.0 Migration Guide](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-4.0-Migration-Guide)
+- [Spring Boot System Requirements](https://docs.spring.io/spring-boot/system-requirements.html)
+- [Spring Boot End of Life: Every 3.x Branch Is Now Unsupported](https://www.danvega.dev/blog/spring-boot-end-of-life)
+- [Spring Boot 3.5 EOL — The CVE Blind Spot Nobody Talks About](https://foojay.io/today/crossing-the-river-styx-spring-boot-3-5-and-the-zombie-dependency-problem/)
+- [Spring Framework 7.0 General Availability](https://spring.io/blog/2025/11/13/spring-framework-7-0-general-availability/)
+- [Introducing Jackson 3 support in Spring](https://spring.io/blog/2025/10/07/introducing-jackson-3-support-in-spring/)
+- [Flowable 8.0.0 Release](https://github.com/flowable/flowable-engine/releases/tag/flowable-8.0.0)
+- [Flowable Forum: Spring Boot 4 compatible Flowable 8 release date](https://forum.flowable.org/t/spring-boot-4-compatible-flowable-8-release-date-existing-flowable-7-2-0-not-working-with-spring-boot-4/12478)
+- [Flowable Open Source 7.0.0 Release](https://www.flowable.com/blog/releases/flowable-open-source-7-0-0-release)
+- [Spring Boot 4 Migration Guide — Moderne（OpenRewrite）](https://moderne.ai/blog/spring-boot-4x-migration-guide)

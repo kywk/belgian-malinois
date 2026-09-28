@@ -1,0 +1,90 @@
+# CLAUDE.md
+
+本檔提供 Claude Code 在此 repo 工作時所需的專案背景與慣例。
+文件語言以**繁體中文**為主（spec、backlog、history 皆為繁中），程式碼註解與 commit 可中英混用。
+
+## 專案定位
+
+企業內部**低程式碼 BPM 流程平台**。核心目標：讓業務人員自行設計、部署、維運 BPMN 流程。
+
+單一事實來源：`docs/bpm-platform-spec.md`（約 1487 行）。任何架構或行為爭議以此為準；§19 決策紀錄是最接近「慣例文件」的部分。
+
+## 架構
+
+```
+Vue 3 SPA ──> Nginx (:80) ──┬─> bpm-core     :8080   (Flowable 6.8.1 + 稽核)
+                            └─> form-service :8081
+              RabbitMQ (5672/15672) · Redis (6379) · MSSQL 2022 (1433)
+```
+
+| 模組 | 說明 | DB |
+|---|---|---|
+| `bpm-core/` | Spring Boot 3.5.16 ⚠️（3.5 線已 EOL，見下）/ Java 21，內嵌 Flowable。流程、任務、附屬簽、附件、公文編號、Webhook、通知、BPMN Lint、外部系統 API、稽核 | `bpm_core_db` + `bpm_audit_db`（雙 DataSource） |
+| `form-service/` | Spring Boot 3.5.16 / 表單 schema 註冊表與表單資料。**預計併入 bpm-core**（ADR-001） | `bpm_form_db` |
+| `bpm-frontend/` | Vue 3.4 + Vite 5 + Element Plus + Pinia，bpmn-js 17 編輯器、拖拉式表單設計器 | — |
+
+Nginx 路由（`infra/nginx/nginx.conf`）：`^~ /api/forms` 與 `^~ /api/form-data` → form-service，其餘 `/api/` → bpm-core，`/` → SPA。
+
+## 待開工計畫
+
+計畫與決策文件集中在 `docs/plan/`（索引見 `docs/plan/README.md`）。**動到框架版本、服務邊界或安全性之前先看該目錄**，不要重新規劃已經決定的事。
+
+- `docs/plan/2026-09-28-springboot4-upgrade.md` —— Boot 4 + Flowable 8 分階段升級（22 人日）
+- `docs/plan/2026-09-28-adr-001-form-service-consolidation.md` —— form-service 併入 bpm-core（3 人日，提議中）
+- `docs/plan/2026-09-28-remediation-backlog.md` —— 工程品質與安全性改進 R-01 ~ R-17（26 人日）
+
+## 必讀的既有事實（容易踩雷）
+
+0. ⚠️ **Spring Boot 3.5 已於 2026-06-30 結束 OSS 支援**。已升到該線最後一個 OSS 版本 **3.5.16**（2026-09-28），此後新 CVE 不會再有 OSS 修補 —— 這是止血，不是解決。升級到 Boot 4 **會強制 Flowable 6.8.1 → 8.0.x 跨兩個主版本**（Flowable 7.2.0 在 Boot 4 上無法運作）。**不要擅自 bump 到 4.x** —— 路徑有中繼點設計（先在 Boot 3.5.16 上完成 Flowable 6→7），見升級計畫。
+1. **稽核已併入 bpm-core**（2026-04-24，`docs/history/2026-04-24-architecture-refactor/summary.md`，commit `a955a06`）。稽核 API 在 bpm-core 的 `/api/audit-logs`，資料仍在獨立的 `bpm_audit_db`。原 `audit-log-service/` 模組目錄已於 2026-09-28 刪除。`docs/history/**` 中仍提及 :8082 的內容屬歷史紀錄，**不要修改**。
+2. **表單欄位 `id` == Flowable 流程變數名**（spec §8.5）。這是貫穿前後端的關鍵約定，改表單 schema 前務必確認。
+3. **退回 vs 駁回**靠流程變數區分：`approved=false` 為退回；必須再加 `rejected=true` 才是終止。
+4. **表單版本鎖定**：`FormVersionLocker` 在流程啟動時把 `_formVersions`（formKey→version）寫入流程變數，進行中案件不受表單改版影響。`TaskController.toMap()` 會回傳 `formVersion`。
+5. **組織／權限仍是 Mock**：`MockOrgController` / `MockPermController` 提供 `orgService`、`permService`、`bpmQueryService` 的資料來源。真正的權限中心是另一個尚未開工的專案（`docs/rbac-enterprise-backlog.md`）。
+6. **BPMN EL bean 白名單**只允許 `orgService`、`permService`、`bpmQueryService`（`lint/BpmnLintService.java`，severity=error）。這是目前程式碼中唯一真正落實的授權邊界。
+7. **稽核為 append-only**：SHA-256 hash chain（`previousHash` 串接，`AuditLogService.append()` 為 `synchronized`）。`infra/mssql/audit-log-triggers.sql` 提供 `INSTEAD OF UPDATE/DELETE` 觸發器，需在 Hibernate 建表後**手動執行**（尚未接進 init 流程）。
+8. **Flowable 6.8.1 + Spring Boot 3 相容 workaround**：`BpmCoreApplication` 的 `@ImportAutoConfiguration({...})` 與 `@Lazy RuntimeService` 不可移除（Flowable 仍用 Boot 2 風格 `spring.factories`）。詳見 `docs/history/2026-04-19-test-and-verify/walkthrough.md`（16 項踩雷紀錄，動到底層前先看）。
+9. **MSSQL 資料初始化**：`spring.sql.init.separator: "@@"`（MERGE 語法需要），不可改回預設 `;`。
+
+## 開發與測試流程
+
+```bash
+# 啟動（必須帶 dev overlay，純 docker-compose up 會讓 bpm-core mail health 失敗）
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+./scripts/seed-data.sh        # 部署兩支 BPMN + 驗證 4 個 form key
+./scripts/acceptance-test.sh  # 唯一的自動化測試（curl 黑箱，需要 python3）
+```
+
+前端開發：`cd bpm-frontend && npm run dev`（:3000，proxy `/api` → :80）。
+
+測試帳號：`user001`–`user005`、`mgr001`/`mgr002`、`dir001`、`admin001`。詳見 `docs/README-testing.md`。
+
+## 慣例
+
+- API 一律以 `/api/` 為前綴，**絕不對外暴露 Flowable 原生 REST**。
+- 前端 `src/services/*.js` 為薄 axios 封裝；目前無共用 instance／interceptor。
+- Pinia 僅有 `stores/auth.js` 一個 store，其餘為元件本地狀態。
+- CI/CD 環境變數替換用 `cicd/envs/{dev,sit,uat,prod}.yml`（BPMN EL 群組佔位符）。
+- 分支流程：`feature/* → dev → sit → uat → main`（`cicd/BRANCH_PROTECTION.md`）。
+- MR/PR 模板單一來源為 `cicd/templates/merge_request.md`。
+
+## 進度與 backlog
+
+- 已完成：`docs/backend-completed-items.md`（Phase 1–5，87 項 / ~107.5 人日）。
+- 待辦：`docs/backend-development-backlog.md`（65 項 / ~125.5 人日）。
+  - P0：退回／駁回機制、Org/Perm 去 mock（真實 RestClient + Redis 快取 + 失效 webhook）、表單版控、端到端啟流程、認證授權整合。
+- 獨立專案 backlog：`docs/rbac-enterprise-backlog.md`（企業權限中心，100 項 / ~146 人日，未開工）。
+- 驗收案例 11 項中 4 項未通過：**TC-A01 附屬簽、TC-A02 多方意見、TC-A04 外部系統 API**（`docs/history/2026-04-19-test-and-verify/tasks.md`）。
+
+## 已知技術債（勿當作 bug 重複回報，修改前先確認範圍）
+
+1. **無應用層認證授權**。所有 `/api/**` 全開放，含 `/api/admin/**`、`/api/internal/cache-invalidate`、`/api/audit-logs/integrity-check`；身分靠請求參數自報（`assignee`、`operatorId`、`createdBy`…）。前端 `Bearer {userId}` 為假 token；router 的 `meta.requiresRole` 沒有 `beforeEach` 守衛。對應 backlog #62。
+2. **零單元測試**。兩個 Java 模組皆無 `src/test`（但 pom 已宣告 `spring-boot-starter-test`），前端無測試框架 → CI 的 `mvn verify` 與分支保護的 status check 實質為空門。對應 backlog #63/#64 與 R-06 —— **升級與整併的前置條件**。
+3. **CI/CD 雙軌並行**：GitHub Actions 與 GitLab CI 同時維護，registry 不一致（GHCR vs `$CI_REGISTRY`），而 `docker-compose.prod.yml` 只認 GHCR 命名。所有 deploy job 仍是 `echo` 佔位。
+4. **`bpmn-definitions/` 目錄不存在**，兩邊的 BPMN deploy job 實質 no-op；env 替換用 shell 假 YAML parser，遇到 `http://` 的冒號會解析錯誤。
+5. **密碼治理（部分已修）**：`infra/mssql/entrypoint.sh` 的密碼不一致已於 2026-09-28 修復（改讀 `MSSQL_SA_PASSWORD`，未設即啟動失敗）。**尚未處理**：開發密碼仍散落於兩個 `application.yml` 與 `docker-compose.yml`；`bpm.webhook.hmac-secret` 預設字面值 `bpm-webhook-secret`。見 backlog R-04。
+6. **外部 API 授權用字串比對**：`allowedActions` 對 JSON 字串做 `contains()`、`verifyOwnership()` 用 `initiator.contains(systemId)` —— 皆可能誤判放行。另每次請求都寫一次 `lastUsedAt`。
+7. **Redis 快取失效用 `KEYS` 掃描**（`perm:users:{code}:*`），production 隱憂。
+8. 文件／版控雜項（見 backlog R-11 ~ R-17）：根目錄 `backend-development-backlog.md` 與 `docs/` 那份位元完全相同（重複，易漂移）；`bpm-frontend/dist/` 被 commit 進版控；無根 README、無 ESLint/Prettier/Checkstyle/Spotless 設定；`docker-compose.prod.yml` 仍有已淘汰的 `version: '3.8'` 且未設 JVM heap 上限（backlog #50）。
+9. **潛在 bug**：`form-service/src/main/resources/data.sql` 用 snake_case 欄位名，但 `FormDefinition` 的 `@UniqueConstraint(columnNames = {"formKey","version"})` 用 camelCase —— 乾淨 DB 上需驗證實際產生的 constraint。
