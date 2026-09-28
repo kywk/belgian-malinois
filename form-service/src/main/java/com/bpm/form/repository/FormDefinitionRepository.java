@@ -21,4 +21,10 @@ public interface FormDefinitionRepository extends JpaRepository<FormDefinition, 
 
     @Query("SELECT COALESCE(MAX(f.version), 0) FROM FormDefinition f WHERE f.formKey = :formKey")
     int findMaxVersion(String formKey);
+
+    /** 該 formKey 是否已存在（任何狀態）。用於擋下對既有 key 的重複 create。 */
+    boolean existsByFormKey(String formKey);
+
+    /** 該 formKey 目前未發布的 draft（同時只允許一份）。 */
+    Optional<FormDefinition> findByFormKeyAndStatus(String formKey, String status);
 }
