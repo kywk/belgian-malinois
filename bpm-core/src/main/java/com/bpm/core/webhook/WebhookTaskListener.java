@@ -48,9 +48,15 @@ public class WebhookTaskListener implements TaskListener {
                 } else {
                     payload.put("action", "approved");
                 }
-                // Include variables modified in this task
-                Map<String, Object> vars = new HashMap<>(task.getVariablesLocal());
-                payload.put("variables", vars);
+                // ⚠️ 刻意不外送流程變數（security-audit P2-1）。
+                //
+                // 表單欄位 id 就是流程變數名（spec §8.5），因此
+                // getVariablesLocal() 等於把該關卡表單的全部內容
+                // （可能含薪資、身分證號）原封不動送到外部 URL，
+                // 而且沒有任何白名單。
+                //
+                // 簽核結果已由上面的 action／rejectReason 表達；
+                // 需要明細的接收端應回頭呼叫 API（那條路徑有授權）。
             }
             case "delete" -> {
                 payload.put("assignee", task.getAssignee());
