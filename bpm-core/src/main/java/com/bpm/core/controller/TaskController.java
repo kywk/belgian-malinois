@@ -3,6 +3,8 @@ package com.bpm.core.controller;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.dto.CommentRequest;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.flowable.common.engine.impl.identity.Authentication;
 import com.bpm.core.dto.TaskActionRequest;
 import org.flowable.engine.HistoryService;
@@ -19,6 +21,35 @@ import java.util.stream.Stream;
 @RestController
 @RequestMapping("/api/tasks")
 public class TaskController {
+
+    /**
+     * 不可由呼叫端以任務變數改寫的變數名。
+     *
+     * <p>{@code initiator} 是關鍵：兩支已部署的 BPMN 都用
+     * {@code ${orgService.getDirectManager(initiator)}} 解析主管、
+     * 用 {@code ${initiator}} 指派補件任務。申請人在完成自己的補件任務時
+     * 附帶一個偽造的 initiator，下一輪主管審核就會派給他指定的人的主管
+     * —— 等於簽核人自選審核者（security-audit P0-5）。
+     *
+     * <p>{@code effectiveInitiator} 是伺服器由外部系統請求推導出來的身分，
+     * 同理不可由呼叫端指定。
+     *
+     * <p>{@code _} 前綴的一律拒絕（R-23）：那是伺服器的內部狀態，
+     * 包含 {@code _formVersions}（表單版本鎖定）與
+     * {@code _externalSystemId}（外部系統擁有權判定的依據）。
+     *
+     * <p>⚠️ 這是保護名單（deny-list）而非完整的白名單。真正的白名單應該來自
+     * formKey 的 schema（spec §8.5：欄位 id == 變數名），但那需要在此查詢
+     * form-service 並處理它不可用時的行為，範圍更大。目前的做法擋住了所有
+     * 「改寫引擎與身分語意」的變數，而一般業務欄位照常放行。
+     */
+    private static final java.util.Set<String> PROTECTED_VARIABLES =
+            java.util.Set.of("initiator", "effectiveInitiator");
+
+    private static boolean isProtectedVariable(String name) {
+        if (name == null || name.isBlank()) return true;
+        return name.startsWith("_") || PROTECTED_VARIABLES.contains(name);
+    }
 
     private final TaskService taskService;
     private final RuntimeService runtimeService;
@@ -103,6 +134,15 @@ public class TaskController {
             }
             Map<String, Object> vars = new HashMap<>();
             if (req.variables() != null) {
+                // 拒絕而非靜默丟棄：靜默丟棄會讓攻擊嘗試無跡可循，
+                // 也會讓正常使用者以為自己送出的值生效了。
+                req.variables().stream()
+                        .filter(v -> isProtectedVariable(v.name()))
+                        .findFirst()
+                        .ifPresent(v -> {
+                            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                    "不允許以任務變數改寫受保護的變數: " + v.name());
+                        });
                 req.variables().forEach(v -> vars.put(v.name(), v.value()));
             }
             // Ensure gateway variables are always set to avoid EL PropertyNotFoundException
