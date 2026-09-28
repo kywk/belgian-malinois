@@ -9,7 +9,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import org.flowable.common.engine.impl.identity.Authentication;
 import com.bpm.core.dto.TaskActionRequest;
-import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
@@ -56,16 +55,14 @@ public class TaskController {
     private final TaskService taskService;
     private final RuntimeService runtimeService;
     private final RepositoryService repositoryService;
-    private final HistoryService historyService;
     private final AuditEventPublisher auditPublisher;
 
     public TaskController(TaskService taskService, RuntimeService runtimeService,
-                          RepositoryService repositoryService, HistoryService historyService,
+                          RepositoryService repositoryService,
                           AuditEventPublisher auditPublisher) {
         this.taskService = taskService;
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
-        this.historyService = historyService;
         this.auditPublisher = auditPublisher;
     }
 
@@ -100,53 +97,27 @@ public class TaskController {
                     .forEach(t -> taskMap.put(t.getId(), t));
         }
 
-        // Filter out candidate tasks where user already reviewed in the same process
+        // ── 「同一人不得重複簽核」的過濾已移除（2026-09-28 決策）───────
         //
-        // ⚠️ 這個「同一人不得重複簽核」的規則有兩個已知問題尚未處理，
-        //    因為兩者都需要業務政策決策（security-audit P1-5，該項是審查中
-        //    唯一沒有給出「修法」的）：
+        // 移除的原因（security-audit P1-5，該項是審查中唯一沒有給出修法的）：
         //
-        //  1. **範圍是整個流程實例而非節點**。只要該使用者在此 instance 完成過
-        //     任何任務，所有未指派的候選任務都被移除。實際情境：財務退回 →
-        //     主管再審通過 → 案子回到 financeReview（candidateUsers），
-        //     但當初退件的財務人員已有 finished 歷史 → 該任務對他永久隱藏。
-        //     若該權限只有一人，案件靜默卡死。
-        //     （改用 taskDefinitionKey 也解不掉 —— 退回後回到的是同一個節點。
-        //       真正要區分的是「同一輪」，而目前沒有輪次的概念。）
+        //  1. **它從未真正強制任何規則**。過濾只發生在待辦查詢，
+        //     PUT /api/tasks/{id} 沒有對應檢查 —— 知道 taskId 就能簽第二次。
+        //     一個被當成業務規則展示、實際上只是隱藏的機制，
+        //     比沒有這個機制更糟：它讓人以為規則已經生效。
         //
-        //  2. **只隱藏不阻擋**。PUT /api/tasks/{id} 沒有對應檢查 →
-        //     知道 taskId 就能簽第二次。這個被當成業務規則展示的東西
-        //     實際上從未被強制。
+        //  2. **它會讓案件靜默卡死**。過濾範圍是整個流程實例而非節點：
+        //     只要該使用者在此 instance 完成過任何任務，所有未指派的候選任務
+        //     都被移除。實際情境 —— 財務退回 → 主管再審通過 → 案子回到
+        //     financeReview（candidateUsers），但當初退件的財務人員已有
+        //     finished 歷史 → 該任務對他永久隱藏。若該權限只有一人，
+        //     案件就此卡住且沒有任何錯誤訊息。
+        //     （改用 taskDefinitionKey 也解不掉：退回後回到的就是同一個節點。
+        //       真正要區分的是「同一輪」，而系統目前沒有輪次的概念。）
         //
-        // 本次只修下面那個沒有語意爭議的效能問題。
-        String filterUser = assignee != null ? assignee : candidateUser;
-        if (filterUser != null && !taskMap.isEmpty()) {
-            // 只查「手上這批任務所屬的流程實例」的歷史。
-            //
-            // 改動前是 .taskAssignee(user).finished().list() —— 撈該使用者
-            // 全部歷史已完成任務，無時間範圍、無分頁。待辦查詢是最高頻的
-            // 端點之一，而這個結果集只會隨使用年資單向成長。
-            // 語意完全不變：原本也只用它來比對手上這批任務的 instance id。
-            Set<String> relevantProcessIds = taskMap.values().stream()
-                    .map(Task::getProcessInstanceId)
-                    .filter(Objects::nonNull)
-                    .collect(java.util.stream.Collectors.toSet());
-
-            Set<String> reviewedProcessIds = relevantProcessIds.isEmpty()
-                    ? Set.of()
-                    : historyService.createHistoricTaskInstanceQuery()
-                            .taskAssignee(filterUser).finished()
-                            .processInstanceIdIn(relevantProcessIds)
-                            .list().stream()
-                            .map(ht -> ht.getProcessInstanceId())
-                            .collect(java.util.stream.Collectors.toSet());
-
-            taskMap.entrySet().removeIf(e -> {
-                Task t = e.getValue();
-                // Keep if directly assigned; remove only unassigned candidate tasks
-                return t.getAssignee() == null && reviewedProcessIds.contains(t.getProcessInstanceId());
-            });
-        }
+        // 若日後確實需要「不得重複簽核」，正確做法是：先定義「一輪」的界線，
+        // 然後在 complete() 加上真正的檢查（拒絕而非隱藏），
+        // 而不是在查詢端過濾。
 
         return taskMap.values().stream()
                 .sorted(Comparator.comparing(Task::getCreateTime).reversed())
