@@ -104,14 +104,8 @@ public class ExternalApiController {
         formVersionLocker.lockVersions(pi.getProcessInstanceId(), pi.getProcessDefinitionId());
 
         // Set first task assignee/candidates
-        //
-        // ⚠️ 同 P1-2：singleResult() 在併發任務時拋例外，而此處在流程已啟動
-        // 之後執行 → 外部系統收到 500 並重送 → 重複案件。
-        // 取最早建立的那一個，行為與單任務時完全相同。
-        var firstTasks = taskService.createTaskQuery()
-                .processInstanceId(pi.getProcessInstanceId())
-                .orderByTaskCreateTime().asc().list();
-        Task firstTask = firstTasks.isEmpty() ? null : firstTasks.get(0);
+        Task firstTask = taskService.createTaskQuery()
+                .processInstanceId(pi.getProcessInstanceId()).singleResult();
         if (firstTask != null) {
             if (firstAssignee != null) taskService.setAssignee(firstTask.getId(), firstAssignee);
             if (firstGroups != null) {
@@ -242,11 +236,8 @@ public class ExternalApiController {
         } else {
             result.put("status", "completed");
             // Try to determine result from historic variables
-            // 同樣避開 singleResult：子流程／multi-instance 的區域變數
-            // 可能出現同名多筆，屆時這裡會拋例外而非回傳狀態。
-            var varList = historyService.createHistoricVariableInstanceQuery()
-                    .processInstanceId(hp.getId()).variableName("rejected").list();
-            var vars = varList.isEmpty() ? null : varList.get(0);
+            var vars = historyService.createHistoricVariableInstanceQuery()
+                    .processInstanceId(hp.getId()).variableName("rejected").singleResult();
             boolean rejected = vars != null && Boolean.TRUE.equals(vars.getValue());
             result.put("result", rejected ? "rejected" : "approved");
         }

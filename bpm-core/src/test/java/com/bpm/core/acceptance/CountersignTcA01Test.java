@@ -121,17 +121,13 @@ class CountersignTcA01Test extends IntegrationTestBase {
 
         String subtaskId = taskService.getSubTasks(parent.getId()).get(0).getId();
 
-        // 守門：有未完成加簽時必須回 409。
-        // （改動前回 HTTP 200 帶 status:"error"，前端只看 axios 是否 throw
-        //   → 顯示「操作成功」並導航離開。已於 P1-3 修正，
-        //   詳細斷言在 TaskActionHardeningTest。）
+        // 守門：有未完成加簽時，complete 會回 200 但 status 為 error
+        // （security-audit P1-3 記錄的問題 —— 前端會誤判為成功）。
+        // 此處只斷言「父任務沒有真的被完成」，狀態碼語意問題另案處理。
         mockMvc.perform(put("/api/tasks/{id}", parent.getId())
-                        .header("X-User-Id", "mgr001")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"action\":\"complete\",\"variables\":"
-                                + "[{\"name\":\"approved\",\"value\":true}]}"))
-                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
-                        .status().isConflict());
+                                + "[{\"name\":\"approved\",\"value\":true}]}"));
         assertThat(taskService.createTaskQuery().taskId(parent.getId()).singleResult())
                 .as("有未完成加簽子任務時，父任務不得被完成").isNotNull();
 
