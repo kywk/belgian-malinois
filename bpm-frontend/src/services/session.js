@@ -18,16 +18,24 @@ const TOKEN_KEY = 'token'
  *
  * - admin：維持與改動前相同的行為（原本是 token.startsWith('admin')），
  *   因此只有 admin001 具備，不會讓任何人多拿到管理權限。
- * - auditor：**暫時授予所有登入者**。原因是改動前 /audit-log 對所有人開放
- *   （App.vue 的導覽列對所有人顯示「稽核 Log」），若在此處直接收緊，
- *   會在沒有任何政策決策的情況下把功能從現有使用者手上拿走。
- *   稽核檢視權限該給誰，屬於待決定的業務政策 —— 等真實權限中心接上後，
- *   roles 會直接來自 JWT claim，這張表即可刪除。
+ * - auditor：**已於 2026-09-28 依政策決策收斂為明確清單**（先前是暫時授予
+ *   所有登入者）。稽核 log 記錄「誰在什麼時候核准了什麼」，屬敏感資料，
+ *   企業慣例是稽核人員與管理者才可檢視 —— 全體可見等於讓 router 的
+ *   auditor 守衛形同虛設。
+ *
+ *   目前授予：admin001（管理者）、dir001（總監，代表稽核職能）。
+ *   ⚠️ 這份名單是 mock 階段的**佔位政策**，不是最終的權責設計。真正的稽核
+ *   權責應由權限中心定義（docs/rbac-enterprise-backlog.md）；屆時 roles
+ *   直接來自 JWT claim，這整張表即可刪除。
+ *   若要增減可檢視稽核的人，改這張表就好，不要在元件裡加判斷。
  */
 const MOCK_ROLE_MAP = {
   admin001: ['admin', 'auditor'],
+  dir001: ['auditor'],
 }
-const MOCK_DEFAULT_ROLES = ['auditor']
+// 預設不帶任何角色。收斂 auditor 之後這裡必須是空陣列 ——
+// 留著 ['auditor'] 會讓上面那份名單完全沒有作用。
+const MOCK_DEFAULT_ROLES = []
 
 /**
  * 把 token 解析成身分資訊。
