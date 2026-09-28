@@ -83,20 +83,61 @@ public class CountersignController {
         }).toList();
     }
 
+    /**
+     * 完成加簽子任務。
+     *
+     * <p>改動前有三個獨立問題，合起來讓「加簽」可以被第三方跳過且無痕
+     * （security-audit P0-6）：
+     *
+     * <ol>
+     *   <li><b>兩個路徑參數從未驗證屬於同一組</b> —— {@code getParentTaskId()}
+     *       根本沒被讀取。帶任意 {@code taskId} 加上他人的 {@code subtaskId}
+     *       即可刪掉尚未審的加簽子任務；子任務一消失，父任務的守門立刻放行
+     *       → 加簽人從未表態，案子照樣過關。</li>
+     *   <li><b>{@code deleteTask(subtaskId, true)} 的 cascade=true 連歷史一併
+     *       刪除</b> —— 「誰加簽、何時完成」完全無跡可查。</li>
+     *   <li><b>不發任何稽核事件</b>。</li>
+     * </ol>
+     */
     @PutMapping("/{taskId}/{subtaskId}/complete")
     public Map<String, Object> completeSubtask(@PathVariable String taskId,
                                                 @PathVariable String subtaskId,
-                                                @RequestBody(required = false) Map<String, String> req) {
+                                                @RequestBody(required = false) Map<String, String> req,
+                                                @RequestHeader(value = "X-User-Id", required = false)
+                                                String operatorId) {
         Task subtask = taskService.createTaskQuery().taskId(subtaskId).singleResult();
         if (subtask == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
 
+        // ── 父子關係驗證（P0-6 的核心）──────────────────────────────
+        // 不相符時回 404 而非 403：不洩漏「這個 subtaskId 存在」這件事，
+        // 否則就成了列舉他人加簽任務的管道。
+        if (!subtaskId.equals(taskId) && !taskId.equals(subtask.getParentTaskId())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "子任務不屬於指定的父任務");
+        }
+
+        Task parent = taskService.createTaskQuery().taskId(taskId).singleResult();
+        String processInstanceId = parent != null ? parent.getProcessInstanceId() : null;
+
         String opinion = req != null ? req.getOrDefault("opinion", "") : "";
         if (!opinion.isBlank()) {
-            Task parent = taskService.createTaskQuery().taskId(taskId).singleResult();
-            taskService.addComment(taskId, parent != null ? parent.getProcessInstanceId() : null,
+            taskService.addComment(taskId, processInstanceId,
                     "[加簽意見 - " + subtask.getAssignee() + "] " + opinion);
         }
-        taskService.deleteTask(subtaskId, true);
+
+        // ── 用 complete 而非 deleteTask ─────────────────────────────
+        // complete() 讓 standalone 任務正常進入歷史；deleteTask(.., true)
+        // 的 cascade 會把歷史一起刪掉，等於抹除加簽曾經發生的證據。
+        // 兩者都會讓它離開待辦，因此父任務的守門一樣會放行。
+        taskService.complete(subtaskId);
+
+        auditPublisher.publish(new AuditEvent("TASK_COUNTERSIGN",
+                operatorId != null && !operatorId.isBlank() ? operatorId : subtask.getAssignee(),
+                processInstanceId, subtaskId,
+                Map.of("parentTaskId", taskId,
+                       "action", "complete",
+                       "opinion", opinion)));
+
         return Map.of("subtaskId", subtaskId, "allSubtasksDone", taskService.getSubTasks(taskId).isEmpty());
     }
 }
