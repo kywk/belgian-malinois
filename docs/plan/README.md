@@ -4,13 +4,18 @@
 
 ## 文件索引
 
-> 📌 **先讀這個**：[`2026-09-28-handover.md`](2026-09-28-handover.md) —— 2026-09-28 那次重構的交接文件。
-> 分支 `feature/tech-debt-remediation` 有 8 個 commit **未經編譯驗證**（當時環境無 javac/maven/docker），
-> 回來後第一件事是跑 `mvn verify`。文件中另有三件需要決策的事。
+> 📌 **先讀這兩份**
+>
+> 1. [`2026-09-28-handover.md`](2026-09-28-handover.md) —— 重構交接。分支 `feature/tech-debt-remediation`
+>    有 11 個 commit **未經編譯驗證**（當時環境無 javac/maven/docker），回來後第一件事是跑 `mvn verify`。
+> 2. [`2026-09-28-security-audit.md`](2026-09-28-security-audit.md) —— 全系統安全審查，**40+ 項發現**。
+>    其中一項有明確 RCE 路徑（附件上傳 path traversal + 容器以 root 執行），另有兩項推翻了
+>    CLAUDE.md 原本的結論（EL 白名單、稽核不可篡改性實際上都不成立）。
 
 | 文件 | 內容 | 狀態 | 剩餘人日 |
 |---|---|---|---|
 | [`2026-09-28-handover.md`](2026-09-28-handover.md) | 重構交接：commit 清單、待決策事項、審查發現 | 待驗證 | — |
+| [`2026-09-28-security-audit.md`](2026-09-28-security-audit.md) | 全系統安全與正確性審查（4 個 reviewer，40+ 項） | 待處理 | 待估 |
 | [`2026-09-28-springboot4-upgrade.md`](2026-09-28-springboot4-upgrade.md) | Spring Boot 3.5 → 4.1.1 + Flowable 6.8.1 → 8.0.x 分階段升級 | Stage 0–1 ✅／Stage 2 起待開工 | 21 |
 | [`2026-09-28-adr-001-form-service-consolidation.md`](2026-09-28-adr-001-form-service-consolidation.md) | form-service 併入 bpm-core 的決策紀錄 | 提議中（＝升級 Stage 3） | 3 |
 | [`2026-09-28-remediation-backlog.md`](2026-09-28-remediation-backlog.md) | 工程品質與安全性改進項（R-01 ~ R-17） | R-04 步驟 1 ✅／其餘待開工 | 25.5 |
