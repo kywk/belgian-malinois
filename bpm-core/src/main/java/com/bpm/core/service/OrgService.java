@@ -179,6 +179,58 @@ public class OrgService {
         return truncate(cleaned, levels);
     }
 
+    /**
+     * 第 {@code level} 階主管（1 = 直屬主管）。<b>永遠不回 null。</b>
+     *
+     * <h2>為什麼需要這個方法（security-audit P2-6）</h2>
+     *
+     * <p>設計器對「直屬主管（N階）」產生的是
+     * {@code ${orgService.getManagerChain(initiator, 2)[1]}}，也就是對
+     * {@code List} 直接做索引。而主管鏈可能<b>比要求的短</b> ——
+     * 離組織頂端只差一階的人就會如此，而 {@code clean()} 的去重與排除本人
+     * 還會讓它更短。
+     *
+     * <p>關鍵是 JUEL 對越界索引的行為：<b>它不拋例外，而是回 null</b>（已實測）。
+     * 於是任務建立成功、案件存在，但 {@code assignee=null} 且沒有候選群組
+     * —— <b>這個任務對所有人都不可見</b>。沒有人收到通知、沒有人能認領，
+     * 案件永遠卡在引擎裡。而 {@code [1]}（階數 2）正是設計器的預設值。
+     *
+     * <p>簽核系統裡「靜默產生看不見的任務」比「啟動失敗」嚴重得多：
+     * 後者使用者會立刻重試或回報，前者要等到有人問「我的假單怎麼還沒過」。
+     *
+     * <h2>鏈比要求的短時為什麼回最高階而不是拋錯</h2>
+     *
+     * <p>「要求第 3 階但只有 2 階」與 {@code getAuthorizedManager} 當初忽略
+     * {@code amount} 的情況不同（那是把呼叫端的意圖整個丟掉）。這裡組織圖明確
+     * 說了上面沒有人 —— 回最高階是「現存的最高權限」，不是「比要求的低」。
+     *
+     * <p>但這也可能代表組織資料不完整，所以會記一筆 warn。
+     * 完全沒有主管則沒有任何說得過去的答案，拋例外。
+     *
+     * @throws IllegalArgumentException level 小於 1
+     * @throws IllegalStateException    這個人完全沒有主管
+     */
+    public String getManagerAtLevel(String userId, int level) {
+        if (level < 1) {
+            throw new IllegalArgumentException(
+                    "主管階數必須大於 0（收到 " + level + "）。1 代表直屬主管。");
+        }
+
+        List<String> chain = getManagerChain(userId, level);
+        if (chain.isEmpty()) {
+            throw new IllegalStateException(
+                    userId + " 在組織系統中沒有任何主管，無法推導第 " + level + " 階簽核人。"
+                            + "請改用明確指定的受理人，或修正組織資料。");
+        }
+        if (chain.size() < level) {
+            log.warn("{} 的主管鏈只有 {} 階（要求第 {} 階），改用最高階主管 {}。"
+                            + "若這不是預期結果，請檢查組織資料是否完整",
+                    userId, chain.size(), level, chain.getLast());
+            return chain.getLast();
+        }
+        return chain.get(level - 1);
+    }
+
     private static List<String> truncate(List<String> chain, int levels) {
         return chain.size() <= levels ? chain : List.copyOf(chain.subList(0, levels));
     }

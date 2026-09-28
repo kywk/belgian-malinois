@@ -41,10 +41,27 @@ public class BpmnLintService {
     private static final Set<String> DEFAULT_NAMES = Set.of(
             "Task", "Task 1", "Task 2", "Task 3", "");
 
-    private final FormService formService;
+    /**
+     * 平台保證一定存在的流程變數。
+     *
+     * <p>指派運算式裡的裸變數參照（{@code ${name}}，沒有點）只能是這些之一，
+     * 或是在 {@code bpm_process_variable_spec} 裡宣告過的變數。
+     *
+     * <p>{@code firstTaskAssignee} / {@code firstTaskCandidateGroups} 只有外部 API
+     * 發起時才會設定，但 {@code InitialAssigneeResolver} 是透過 {@code execution}
+     * 讀它們而非 JUEL 識別字，所以在指派運算式裡直接參照仍會在人工發起時爆掉
+     * —— 列在這裡是為了不誤擋刻意這樣寫的 BPMN，不代表推薦這種寫法。
+     */
+    static final Set<String> PLATFORM_VARIABLES = Set.of(
+            "initiator", "effectiveInitiator", "firstTaskAssignee", "firstTaskCandidateGroups");
 
-    public BpmnLintService(FormService formService) {
+    private final FormService formService;
+    private final com.bpm.core.repository.ProcessVariableSpecRepository specRepo;
+
+    public BpmnLintService(FormService formService,
+                           com.bpm.core.repository.ProcessVariableSpecRepository specRepo) {
         this.formService = formService;
+        this.specRepo = specRepo;
     }
 
     public LintResult lint(String xml) {
@@ -122,11 +139,27 @@ public class BpmnLintService {
         }
 
         // Rule g: EL function whitelist
-        for (String expr : List.of(
+        List<String> exprs = List.of(
                 assignee != null ? assignee : "",
                 candidateUsers,
-                candidateGroups)) {
+                candidateGroups);
+        for (String expr : exprs) {
             checkElWhitelist(expr, ut.getId(), ut.getName(), errors);
+        }
+
+        // Rule i: 裸變數參照必須是平台變數或已宣告的流程變數（P2-6）
+        for (String expr : exprs) {
+            checkBareVariableReferences(expr, ut.getId(), ut.getName(), process.getId(), errors);
+        }
+
+        // Rule j: 不得對主管鏈直接做索引（P2-6）
+        if (assignee != null && assignee.contains("getManagerChain")
+                && assignee.matches(".*getManagerChain\\s*\\([^)]*\\)\\s*\\[.*")) {
+            errors.add(new LintError(ut.getId(), ut.getName(), "manager-chain-index",
+                    "不可對 getManagerChain(...) 直接做索引 —— 主管鏈可能比要求的短，"
+                            + "而 JUEL 對越界索引不拋例外而是回 null，"
+                            + "於是會產生 assignee 為空且無候選群組的任務（對所有人都不可見）。"
+                            + "請改用 ${orgService.getManagerAtLevel(initiator, N)}", "error"));
         }
 
         // Rule h: external-initiated process, first UserTask should not use initiator EL
@@ -157,6 +190,59 @@ public class BpmnLintService {
         if (!hasBoundary) {
             errors.add(new LintError(st.getId(), st.getName(), "service-error-boundary",
                     "ServiceTask 必須有錯誤邊界事件", "warning"));
+        }
+    }
+
+    /**
+     * 檢查裸變數參照 {@code ${name}}（沒有點的那種）。
+     *
+     * <h2>為什麼白名單 regex 抓不到它們（security-audit P2-6）</h2>
+     *
+     * <p>{@link #checkElWhitelist} 的 regex 是 {@code \$\{(\w+)\.} ——
+     * <b>必須有「點」</b>才匹配，因為它要抽出 bean 名稱。所以
+     * {@code ${dept}} 這種純變數參照完全不被任何規則檢查。
+     *
+     * <p>而設計器原本就會產生它們：使用者在「部門代碼」欄輸入 {@code dept001}，
+     * 舊版的 setValue 會存成 {@code ${dept001}}。部署順利通過，
+     * 等到使用者送出表單、引擎求值 candidateGroups 時才拋
+     * {@code Unknown property used in expression}（已實測）。
+     *
+     * <p>也就是說錯誤出現的時間點與造成它的那次編輯完全脫鉤 ——
+     * 流程設計者按了部署、看到綠燈，問題留給第一個送件的人。
+     *
+     * <h2>為什麼不直接禁止所有裸變數</h2>
+     *
+     * <p>用流程變數決定候選群組是合法的 BPMN 寫法。所以放行兩類：
+     * 平台保證存在的變數，以及在 {@code bpm_process_variable_spec} 裡宣告過的。
+     * 後者給了正當需求一條明路 —— 先宣告，再使用。
+     */
+    private void checkBareVariableReferences(String expr, String elementId, String elementName,
+                                              String processKey, List<LintError> errors) {
+        if (expr == null || !expr.contains("${")) return;
+
+        // ${name} 且 name 之後直接是 } —— 有點或有括號的都由白名單規則處理
+        var matcher = java.util.regex.Pattern.compile("\\$\\{(\\w+)\\}").matcher(expr);
+        Set<String> declared = declaredVariables(processKey);
+        while (matcher.find()) {
+            String name = matcher.group(1);
+            if (PLATFORM_VARIABLES.contains(name) || declared.contains(name)) continue;
+            errors.add(new LintError(elementId, elementName, "undeclared-variable",
+                    "運算式參照了未宣告的流程變數 '" + name + "'。"
+                            + "若這是字面值（例如部門代碼），請直接填寫不要包 ${}；"
+                            + "若確實是流程變數，請先在流程變數規格中宣告它。"
+                            + "（平台變數: " + PLATFORM_VARIABLES + "）", "error"));
+        }
+    }
+
+    private Set<String> declaredVariables(String processKey) {
+        if (processKey == null || processKey.isBlank()) return Set.of();
+        try {
+            return specRepo.findByProcessDefinitionKeyOrderByVariableName(processKey).stream()
+                    .map(com.bpm.core.model.ProcessVariableSpec::getVariableName)
+                    .collect(java.util.stream.Collectors.toSet());
+        } catch (Exception e) {
+            // lint 不該因為讀不到規格而整個失敗；退化為只放行平台變數（較嚴格的一邊）。
+            return Set.of();
         }
     }
 
