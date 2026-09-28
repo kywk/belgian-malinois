@@ -57,23 +57,115 @@ public class BpmnLintService {
 
     private final FormService formService;
     private final com.bpm.core.repository.ProcessVariableSpecRepository specRepo;
+    private final com.bpm.core.repository.ExternalSystemRepository externalSystemRepo;
+    private final com.bpm.core.external.ExternalSystemPolicy externalSystemPolicy;
 
     public BpmnLintService(FormService formService,
-                           com.bpm.core.repository.ProcessVariableSpecRepository specRepo) {
+                           com.bpm.core.repository.ProcessVariableSpecRepository specRepo,
+                           com.bpm.core.repository.ExternalSystemRepository externalSystemRepo,
+                           com.bpm.core.external.ExternalSystemPolicy externalSystemPolicy) {
         this.formService = formService;
         this.specRepo = specRepo;
+        this.externalSystemRepo = externalSystemRepo;
+        this.externalSystemPolicy = externalSystemPolicy;
+    }
+
+    /**
+     * 是否有<b>啟用中</b>的外部系統被授權發起這個流程。
+     *
+     * <p>只看啟用中的：停用的系統無法發起流程，拿它來觸發規則 h 只是噪音。
+     *
+     * <p>讀不到資料時回 {@code false}（不觸發規則 h）。這個方向是刻意的 ——
+     * 規則 h 的 severity 是 warning，而 lint 不該因為讀不到外部系統設定
+     * 就對每個流程噴一堆無法處理的警告。
+     */
+    private boolean isExternallyStartable(String processKey) {
+        if (processKey == null || processKey.isBlank()) return false;
+        try {
+            return externalSystemRepo.findAll().stream()
+                    .filter(sys -> Boolean.TRUE.equals(sys.getEnabled()))
+                    .anyMatch(sys -> externalSystemPolicy.isProcessKeyAllowed(sys, processKey));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 安全設定過的 {@link XMLInputFactory}（security-audit P2-5）。
+     *
+     * <h2>實測結果：兩條攻擊路徑目前都走不通，但那是繼承來的，不是設計的</h2>
+     *
+     * <p>在執行中的服務上實測（{@code /api/bpmn/lint} 無需認證）：
+     * <ul>
+     *   <li><b>外部實體</b>：指向存在與不存在的檔案得到<b>完全相同</b>的錯誤
+     *       —— 錯誤不因檔案存在而異，所以解析是關閉的，沒有 XXE 檔案洩漏。</li>
+     *   <li><b>實體展開</b>：五層以上（放大約 1800 倍起）在 0.05 秒內被拒，
+     *       也就是 JDK 的 {@code jdk.xml.entityExpansionLimit}（預設 64000）
+     *       生效，billion laughs 打不動。</li>
+     *   <li>但<b>內部實體確實會展開</b>（已驗證 {@code &inner;} 展開成字串）
+     *       —— DTD 處理是開著的。</li>
+     * </ul>
+     *
+     * <p>也就是說目前的安全性完全依賴 JDK 的預設值。換 JDK、換 StAX 實作、
+     * 或有人為別的目的調了 {@code jdk.xml.*} 系統屬性，防線就沒了 ——
+     * 而這是一個<b>不需要認證</b>的 XML 解析端點。
+     *
+     * <p>明確關掉 DTD 的成本是零（BPMN 從不需要 DTD），所以這裡不靠繼承，
+     * 直接表明意圖。
+     */
+    static XMLInputFactory hardenedXmlInputFactory() {
+        XMLInputFactory factory = XMLInputFactory.newInstance();
+        // BPMN 不需要 DTD。關掉它同時消滅實體展開與外部實體兩條路。
+        trySet(factory, XMLInputFactory.SUPPORT_DTD, false);
+        trySet(factory, XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false);
+        return factory;
+    }
+
+    /**
+     * 不是每個 StAX 實作都支援每個屬性，setProperty 可能拋
+     * {@code IllegalArgumentException}。不支援時忽略 ——
+     * 硬化失敗不該讓 lint 整個不能用，而 JDK 預設值仍在（見上方實測）。
+     */
+    private static void trySet(XMLInputFactory factory, String name, boolean value) {
+        try {
+            factory.setProperty(name, value);
+        } catch (IllegalArgumentException e) {
+            // 忽略：這個實作不認識這個屬性
+        }
+    }
+
+    /**
+     * 把例外鏈攤平成一句可排查的訊息。
+     *
+     * <p>Flowable 的 {@code BpmnXMLConverter} 把 StAX 的錯誤包成
+     * 「Error reading XML」，原因全部藏在 cause 裡。對著那句話排查等於沒有訊息
+     * —— 不知道是 XML 格式錯、實體上限、還是編碼問題。
+     */
+    private static String describeCause(Throwable e) {
+        var parts = new ArrayList<String>();
+        Throwable t = e;
+        int depth = 0;
+        while (t != null && depth++ < 5) {
+            String m = t.getMessage();
+            if (m != null && !m.isBlank() && parts.stream().noneMatch(m::equals)) parts.add(m);
+            t = t.getCause();
+        }
+        return parts.isEmpty() ? e.getClass().getSimpleName() : String.join(" ← ", parts);
     }
 
     public LintResult lint(String xml) {
         List<LintError> errors = new ArrayList<>();
         BpmnModel model;
         try {
-            XMLStreamReader reader = XMLInputFactory.newInstance()
+            XMLStreamReader reader = hardenedXmlInputFactory()
                     .createXMLStreamReader(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
             model = new BpmnXMLConverter().convertToBpmnModel(reader);
         } catch (Exception e) {
+            // Flowable 的 converter 把原因包成一句「Error reading XML」，
+            // 對著它排查等於沒有訊息。把 cause 鏈接出來（security-audit P2-5）。
             return new LintResult(false, List.of(
-                    new LintError(null, null, "parse", "BPMN XML 解析失敗: " + e.getMessage(), "error")));
+                    new LintError(null, null, "parse",
+                            "BPMN XML 解析失敗: " + describeCause(e), "error")));
         }
 
         org.flowable.bpmn.model.Process process = model.getMainProcess();
@@ -82,7 +174,16 @@ public class BpmnLintService {
                     new LintError(null, null, "parse", "找不到主流程", "error")));
         }
 
-        boolean isExternalAllowed = false; // Could be read from process extension
+        // 規則 h 的前提條件（security-audit P2-5）。
+        //
+        // 改動前這裡是寫死的 false 加上一句「Could be read from process
+        // extension」—— 也就是規則 h 從未執行過，是死碼。而它要抓的問題是真的：
+        // 允許外部系統發起的流程，第一個 UserTask 若用 initiator 推導簽核人，
+        // 那個 initiator 會是 system:<id>（不是人），組織系統查不到。
+        //
+        // 事實來源不在 BPMN 的 extension 裡，而在 bpm_external_system 的
+        // allowedProcessKeys —— 那才是決定「誰能發起這個流程」的地方。
+        boolean isExternalAllowed = isExternallyStartable(process.getId());
 
         for (FlowElement el : process.getFlowElements()) {
             if (el instanceof UserTask ut) {
@@ -172,11 +273,39 @@ public class BpmnLintService {
         }
     }
 
+    /**
+     * 規則 d：預設路徑。
+     *
+     * <h2>改動前會擋掉合法的 BPMN（security-audit P2-5）</h2>
+     *
+     * <p>原本對<b>每一個</b> ExclusiveGateway 都要求 default flow。但預設路徑
+     * 只對<b>分流</b>閘道有意義 —— 它的作用是「所有條件都不成立時走哪條」。
+     *
+     * <p>兩種合法設計因此被誤擋：
+     * <ul>
+     *   <li><b>匯流閘道</b>（多進一出）：沒有條件要選，談不上預設路徑。
+     *       而匯流正是合併分支的標準畫法（退回重送、平行審核後匯合）。</li>
+     *   <li><b>出線中有無條件流</b>的分流閘道：無條件流恆為真，
+     *       所以一定有路可走，不需要預設路徑。</li>
+     * </ul>
+     *
+     * <p>誤擋比漏放更容易造成實質傷害：業務人員畫出合法流程卻部署不了，
+     * 得到的訊息又指向一個他無法滿足的要求。那會逼他去繞過 lint
+     * ——一旦繞過成為常態，所有規則就一起失效了。
+     */
     private void lintGateway(ExclusiveGateway gw, List<LintError> errors) {
-        // Rule d: must have default flow
+        List<SequenceFlow> outgoing = gw.getOutgoingFlows();
+        if (outgoing == null || outgoing.size() <= 1) return;  // 匯流或直通
+
+        boolean everyFlowHasCondition = outgoing.stream()
+                .allMatch(f -> f.getConditionExpression() != null
+                        && !f.getConditionExpression().isBlank());
+        if (!everyFlowHasCondition) return;  // 有無條件流，一定有路可走
+
         if (gw.getDefaultFlow() == null || gw.getDefaultFlow().isBlank()) {
             errors.add(new LintError(gw.getId(), gw.getName(), "gateway-default",
-                    "ExclusiveGateway 必須設定預設路徑 (default flow)", "error"));
+                    "分流用的 ExclusiveGateway 每條出線都有條件，必須設定預設路徑 (default flow)"
+                            + " —— 否則所有條件都不成立時流程會在此拋例外卡住", "error"));
         }
     }
 

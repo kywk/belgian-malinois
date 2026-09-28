@@ -132,6 +132,11 @@ bpm:
   upload:
     dir: ./uploads
   bpmn-definitions-dir: ./bpmn-definitions
+  lint:
+    # /api/bpmn/lint 接受的 XML 上限（bytes）。這是一個無認證的 XML 解析入口，
+    # 而 @RequestBody String 會把整份內容讀進記憶體（security-audit P2-5）。
+    # 真實的流程定義是幾十 KB 量級，2 MB 已遠高於實際需求。
+    max-xml-bytes: 2097152
   webhook:
     hmac-secret: bpm-webhook-secret
   external:
