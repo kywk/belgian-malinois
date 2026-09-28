@@ -6,7 +6,9 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.5.13</version>
+        <!-- 3.5.16 是 3.5 線最後一個 OSS 版本（2026-06-25）；3.5 已於 2026-06-30 結束 OSS 支援。
+             升級路徑見 docs/plan/2026-09-28-springboot4-upgrade.md（不要直接跳 4.x，Flowable 需經 7.x 中繼）。 -->
+        <version>3.5.16</version>
     </parent>
     <groupId>com.bpm</groupId>
     <artifactId>bpm-core</artifactId>

@@ -6,7 +6,10 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.5.13</version>
+        <!-- 3.5.16 是 3.5 線最後一個 OSS 版本（2026-06-25）；3.5 已於 2026-06-30 結束 OSS 支援。
+             升級路徑見 docs/plan/2026-09-28-springboot4-upgrade.md。
+             注意：本模組預計併入 bpm-core，見 docs/plan/2026-09-28-adr-001-form-service-consolidation.md -->
+        <version>3.5.16</version>
     </parent>
     <groupId>com.bpm</groupId>
     <artifactId>form-service</artifactId>
