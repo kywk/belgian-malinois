@@ -1,0 +1,21 @@
+# form-service 整合測試 profile。DataSource 由 @DynamicPropertySource 注入。
+spring:
+  jpa:
+    hibernate:
+      # 與 production 一致：schema 由 Flyway 建立，測試才驗得到 migration。
+      ddl-auto: none
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 0
+  sql:
+    init:
+      mode: always
+      # MERGE 語法需要 @@ 分隔符（預設的 ; 會把 MERGE 切碎）。
+      # 這裡必須與 application.yml 一致，否則測試跑的 seed 路徑與實際不同。
+      separator: "@@"
+  rabbitmq:
+    # 測試不驗證 AMQP 發布；指向不存在的 port，連線失敗不影響待測行為。
+    host: localhost
+    port: 65001

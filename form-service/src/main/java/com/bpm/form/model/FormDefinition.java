@@ -12,7 +12,10 @@ public class FormDefinition {
     @GeneratedValue(strategy = GenerationType.UUID)
     private String id;
 
-    @Column(nullable = false)
+    // columnDefinition 不可省略：預設的 String 對映會建成 VARCHAR，
+    // 而三個 DB 的定序是 SQL_Latin1_General_CP1_CI_AS，VARCHAR 存不了中文
+    // （寫入時靜默變成問號）。見 db/migration/V2__form_name_nvarchar.sql。
+    @Column(nullable = false, columnDefinition = "NVARCHAR(255)")
     private String name;
 
     @Column(nullable = false, length = 100)
