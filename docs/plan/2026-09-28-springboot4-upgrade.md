@@ -1,7 +1,7 @@
 # Spring Boot 4 升級計畫
 
 **建立日期**：2026-09-28
-**狀態**：Stage 0 ✅ / Stage 1 ✅ 已完成（2026-09-28）；Stage 2 起待開工
+**狀態**：Stage 0 ✅ / 1 ✅ / 2 ✅ / 3 ✅ / 4 ✅ 已完成（2026-09-28）；**Stage 5 起待開工**
 **優先級**：P0（安全性阻斷項）
 **預估**：22 人日（含前置安全網，含 form-service 整併）
 
@@ -110,7 +110,7 @@ Jackson 的風險也有退路：Flowable 8 雖預設 Jackson 3，但可用 **`fl
 
 排在升級**之前**的理由：升級面從 2 個模組降到 1 個。沒有理由先花力氣把 form-service 升到 Boot 4，再把它刪掉。
 
-### Stage 4 — Flowable 6.8.1 → 7.2.x（留在 Spring Boot 3.5.16）（3 人日）
+### ✅ Stage 4 — Flowable 6.8.1 → 7.2.0（留在 Spring Boot 3.5.16）（已完成 2026-09-28）
 
 **單獨變更 Flowable 主版本，Boot 版本不動。** 這一步若出問題，可以確定問題來自 Flowable，而不是 Boot。
 
@@ -122,6 +122,51 @@ Jackson 的風險也有退路：Flowable 8 雖預設 Jackson 3，但可用 **`fl
 3. **檢查唯一的 internal API 使用**：`org.flowable.engine.impl.persistence.entity.ExecutionEntity`
    —— 全專案僅 `webhook/ProcessCompletedListener.java:8`（import）與 `:34`（`instanceof ExecutionEntity exec`）兩處。`.impl.` 套件不保證跨主版本穩定，**這是整個升級最高風險的單點**，優先驗證。
 4. ✅ 已確認未啟用 async history（`bpm-core/src/main/resources/` 無相關設定）。
+
+#### 實施結果（2026-09-28）
+
+升到 **7.2.0**（7.x 線最新）。四項必辦事項的實際結果：
+
+1. **`@ImportAutoConfiguration` 已移除** —— 實際確認 7.2.0 的
+   `flowable-spring-boot-autoconfigure` jar 內含
+   `META-INF/spring/...AutoConfiguration.imports`，因此那三行不再需要。
+   **但 `@Lazy RuntimeService` 仍然必要** —— 實測移除後啟動直接失敗。
+   它不是 Flowable 6 的遺留物，而是結構性循環：
+   `processCompletedListener → runtimeService → StandaloneEngineConfiguration
+   → engineConfigurers → processEngineConfigurer → processCompletedListener`。
+   成因是 `FlowableConfig.processEngineConfigurer` 必須注入該 listener 才能
+   呼叫 `setEventListeners()`，而它又需要引擎產生的 `RuntimeService`。
+   確切的循環路徑已寫入 `ProcessCompletedListener` 的註解，避免再被移除。
+2. ✅ `flowable-bpmn-layout` 7.2.0 存在（已查 Maven Central metadata）。
+3. ✅ **最高風險的單點沒問題** —— `org.flowable.engine.impl.persistence.entity.ExecutionEntity`
+   與 `org.flowable.engine.delegate.event.impl.FlowableEntityEventImpl` 在
+   7.2.0 的 jar 內都仍存在（直接 `unzip -l` 驗證），`ProcessCompletedListener`
+   無需改動。
+4. ✅ 無 async history。
+
+**DB schema 升級（測試網測不到的部分，需實測）**
+
+Testcontainers 每次都是全新 DB，因此測試<b>驗不到「既有 schema 升級」</b>這條路徑。
+對 dev 環境實測結果：
+
+| 項目 | 升級前 | 升級後 |
+|---|---|---|
+| Flowable schema 版本 | `6.8.1.0` | `7.2.0.2` |
+| `ACT_*` / `FLW_*` 表數 | 47 | 45 |
+| 執行中流程實例 | 116 | 116（保留） |
+| 歷史流程實例 | 196 | 196（保留） |
+
+升級為**就地自動完成**（`flowable.database-schema-update: true`），啟動無任何 ERROR。
+
+消失的兩張表是 `FLW_EV_DATABASECHANGELOG` 與 `FLW_EV_DATABASECHANGELOGLOCK`
+—— Flowable 7 把 Liquibase 從事件註冊表移除。**這正好驗證了 Stage 2 把
+`FLW_*` 排除在 Flyway 之外的決定**：若當初把它們納入 Flyway 管理，
+這次升級會與 Flyway 的歷史表直接衝突。
+
+**最關鍵的驗證**：一個在 6.8.1 時期啟動的既有任務，在 7.2.0 下成功簽核完成。
+
+**其他驗證**：144 個測試全過（零修改）、`acceptance-test.sh` PASS 7 / FAIL 0、
+`seed-data.sh` 全綠。
 
 ### Stage 5 — Spring Boot 3.5.16 → 4.1.1 + Flowable 7.2.x → 8.0.x（5 人日）
 

@@ -12,13 +12,13 @@
 ## 架構
 
 ```
-Vue 3 SPA ──> Nginx (:80) ──> bpm-core :8080   (Flowable 6.8.1 + 表單 + 稽核)
+Vue 3 SPA ──> Nginx (:80) ──> bpm-core :8080   (Flowable 7.2.0 + 表單 + 稽核)
               RabbitMQ (5672/15672) · Redis (6379) · MSSQL 2022 (1433)
 ```
 
 | 模組 | 說明 | DB |
 |---|---|---|
-| `bpm-core/` | Spring Boot 3.5.16 ⚠️（3.5 線已 EOL，見下）/ Java 21，內嵌 Flowable。流程、任務、附屬簽、附件、公文編號、Webhook、通知、BPMN Lint、外部系統 API、**表單 schema 與表單資料**、稽核 | `bpm_core_db` + `bpm_audit_db` + `bpm_form_db`（**三個 DataSource**） |
+| `bpm-core/` | Spring Boot 3.5.16 ⚠️（3.5 線已 EOL，見下）/ Java 21，內嵌 Flowable **7.2.0**。流程、任務、附屬簽、附件、公文編號、Webhook、通知、BPMN Lint、外部系統 API、**表單 schema 與表單資料**、稽核 | `bpm_core_db` + `bpm_audit_db` + `bpm_form_db`（**三個 DataSource**） |
 | `bpm-frontend/` | Vue 3.4 + Vite 5 + Element Plus + Pinia，bpmn-js 17 編輯器、拖拉式表單設計器 | — |
 
 Nginx 路由（`infra/nginx/nginx.conf`）：`/api/` → bpm-core，`/` → SPA。
@@ -43,7 +43,9 @@ Nginx 路由（`infra/nginx/nginx.conf`）：`/api/` → bpm-core，`/` → SPA�
 
 ## 必讀的既有事實（容易踩雷）
 
-0. ⚠️ **Spring Boot 3.5 已於 2026-06-30 結束 OSS 支援**。已升到該線最後一個 OSS 版本 **3.5.16**（2026-09-28），此後新 CVE 不會再有 OSS 修補 —— 這是止血，不是解決。升級到 Boot 4 **會強制 Flowable 6.8.1 → 8.0.x 跨兩個主版本**（Flowable 7.2.0 在 Boot 4 上無法運作）。**不要擅自 bump 到 4.x** —— 路徑有中繼點設計（先在 Boot 3.5.16 上完成 Flowable 6→7），見升級計畫。
+0. ⚠️ **Spring Boot 3.5 已於 2026-06-30 結束 OSS 支援**。已升到該線最後一個 OSS 版本 **3.5.16**（2026-09-28），此後新 CVE 不會再有 OSS 修補 —— 這是止血，不是解決。升級到 Boot 4 **會強制 Flowable → 8.0.x**（Flowable 7.2.0 在 Boot 4 上無法運作、Flowable 8 不支援 Boot 3 —— 兩者必須同步跳，沒有中繼點）。**不要擅自 bump 到 4.x**，見升級計畫 Stage 5。
+
+   ✅ 中繼點（Flowable 6→7）已於 2026-09-28 完成：目前是 **Boot 3.5.16 + Flowable 7.2.0**，這是合法且可運作的組合。
 1. **稽核已併入 bpm-core**（2026-04-24，`docs/history/2026-04-24-architecture-refactor/summary.md`，commit `a955a06`）。稽核 API 在 bpm-core 的 `/api/audit-logs`，資料仍在獨立的 `bpm_audit_db`。原 `audit-log-service/` 模組目錄已於 2026-09-28 刪除。`docs/history/**` 中仍提及 :8082 的內容屬歷史紀錄，**不要修改**。
 
    **form-service 亦已於 2026-09-28 併入**（同樣的模式：合併部署單元、保留獨立 DB）。`docs/history/**` 與部分計畫文件仍提及 :8081，屬歷史紀錄。
@@ -53,7 +55,11 @@ Nginx 路由（`infra/nginx/nginx.conf`）：`/api/` → bpm-core，`/` → SPA�
 5. **組織／權限仍是 Mock**：`MockOrgController` / `MockPermController` 提供 `orgService`、`permService`、`bpmQueryService` 的資料來源。真正的權限中心是另一個尚未開工的專案（`docs/rbac-enterprise-backlog.md`）。
 6. ⚠️ **BPMN EL bean 白名單實際上不成立**（2026-09-28 審查修正 —— 本檔先前宣稱它是「唯一真正落實的授權邊界」，那是錯的）。`lint/BpmnLintService.java` 的白名單只是**部署前的字串檢查**，而且：`config/FlowableConfig.java` 沒有呼叫 `setBeans()`，因此**執行期任何 Spring bean 都能從運算式取用**；白名單的 regex `\$\{(\w+)\.` 對 `${''.getClass()...}` 完全不 match（不 match 就放行）；只掃 UserTask 的 3 個屬性，`conditionExpression` 與 listener 的 `delegateExpression` 都沒檢查；且不遞迴 SubProcess，包一層就全繞過。詳見 `docs/plan/2026-09-28-security-audit.md` P0-2。**修 `setBeans()` 時 map 必須含 `notifyTaskListener`**，否則現有 BPMN 會壞。
 7. ⚠️ **稽核的不可篡改性目前無效**（2026-09-28 審查）。設計是 SHA-256 hash chain + `INSTEAD OF UPDATE/DELETE` 觸發器，但實作有四個破口：`integrityCheck()` **從不比對 `log[n].previousHash == log[n-1].hashValue`**，所以刪除中間一筆或篡改後重算都回報 intact；hash 只涵蓋 17 個欄位中的 7 個；hash 在 `createdAt` 賦值**之前**計算，導致部分記錄被永久誤報為篡改；`synchronized` 跨實例無效且無 `@Transactional`。觸發器仍需**手動執行**，且兩個 DataSource 都用 `sa` → 應用自己就能 DROP TRIGGER。詳見 `docs/plan/2026-09-28-security-audit.md` P0-3。修 `append()` 時**必須寫 `@Transactional("auditTransactionManager")`**，未限定的 `@Transactional` 會開在 `bpm_core_db` 上導致稽核寫入毫無原子性。
-8. **Flowable 6.8.1 + Spring Boot 3 相容 workaround**：`BpmCoreApplication` 的 `@ImportAutoConfiguration({...})` 與 `@Lazy RuntimeService` 不可移除（Flowable 仍用 Boot 2 風格 `spring.factories`）。詳見 `docs/history/2026-04-19-test-and-verify/walkthrough.md`（16 項踩雷紀錄，動到底層前先看）。
+8. **Flowable 已升至 7.2.0**（2026-09-28，Stage 4，仍在 Boot 3.5.16 上）。`BpmCoreApplication` 的 `@ImportAutoConfiguration({...})` 已移除 —— Flowable 7 改用 Boot 3 的 `AutoConfiguration.imports` 格式。
+
+   ⚠️ **但 `ProcessCompletedListener` 的 `@Lazy RuntimeService` 仍不可移除**。實測移除後啟動直接失敗：這是結構性循環（`processCompletedListener → runtimeService → 引擎設定 → processEngineConfigurer → processCompletedListener`），不是 Flowable 6 的遺留物。確切路徑寫在該類別的註解裡。
+
+   詳見 `docs/history/2026-04-19-test-and-verify/walkthrough.md`（16 項踩雷紀錄，動到底層前先看）。
 9. **MSSQL 資料初始化**：`spring.sql.init.separator: "@@"`（MERGE 語法需要），不可改回預設 `;`。
 
 ## 開發與測試流程

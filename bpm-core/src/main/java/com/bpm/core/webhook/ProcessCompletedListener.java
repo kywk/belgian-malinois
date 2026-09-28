@@ -21,6 +21,27 @@ public class ProcessCompletedListener implements FlowableEventListener {
     private final RabbitTemplate rabbitTemplate;
     private final RuntimeService runtimeService;
 
+    /**
+     * ⚠️ {@code @Lazy} 不可移除 —— Stage 4 已實測確認（2026-09-28）。
+     *
+     * <p>升級計畫要求「確認 @Lazy RuntimeService 的循環依賴 workaround 是否仍必要」。
+     * 答案是<b>仍然必要</b>，而且它不是 Flowable 6 的遺留物，是結構性的循環：
+     *
+     * <pre>
+     *   processCompletedListener
+     *     → runtimeService
+     *       → StandaloneEngineConfiguration
+     *         → engineConfigurers
+     *           → processEngineConfigurer（FlowableConfig）
+     *             → processCompletedListener   ← 回到起點
+     * </pre>
+     *
+     * <p>成因：{@code FlowableConfig.processEngineConfigurer} 必須注入本 listener
+     * 才能呼叫 {@code setEventListeners()}，而本 listener 又需要引擎產生的
+     * {@code RuntimeService}。移除 {@code @Lazy} 後啟動直接失敗：
+     * {@code Requested bean is currently in creation: Is there an unresolvable
+     * circular reference?}（Boot 3 預設禁止循環參照）。
+     */
     public ProcessCompletedListener(RabbitTemplate rabbitTemplate, @Lazy RuntimeService runtimeService) {
         this.rabbitTemplate = rabbitTemplate;
         this.runtimeService = runtimeService;

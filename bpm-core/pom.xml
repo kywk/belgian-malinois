@@ -17,7 +17,11 @@
 
     <properties>
         <java.version>21</java.version>
-        <flowable.version>6.8.1</flowable.version>
+        <!-- Stage 4（docs/plan/2026-09-28-springboot4-upgrade.md）：
+             6.8.1 → 7.2.x，Spring Boot 版本刻意不動（留在 3.5.16）。
+             單獨變更 Flowable 主版本，出問題就能確定來源是 Flowable 而非 Boot。
+             ⚠️ 不要在這裡直接跳 8.x —— Flowable 8 不支援 Boot 3。 -->
+        <flowable.version>7.2.0</flowable.version>
     </properties>
 
     <dependencies>
