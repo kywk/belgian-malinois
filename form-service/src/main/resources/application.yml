@@ -23,6 +23,17 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.SQLServerDialect
+        # 讓 Hibernate 預設把 String 對映到 NVARCHAR 而非 VARCHAR。
+        #
+        # 這是「不要再發生一次」的那道防線。DB 定序是
+        # SQL_Latin1_General_CP1_CI_AS，VARCHAR 存不了中文且寫入時靜默換成
+        # 問號 —— 表單名稱、通知主旨、稽核操作者姓名都曾因此損壞，
+        # 其中稽核那筆還讓完整性檢查全面誤報。
+        #
+        # 沒有這個設定時，任何人新增一個 String 欄位就會再製造一個
+        # 會吃掉中文的 VARCHAR 欄位，而且不會有任何錯誤提示。
+        # 對應的既有欄位轉型見 db/migration 的 nvarchar_all_text_columns。
+        use_nationalized_character_data: true
   flyway:
     enabled: true
     locations: classpath:db/migration

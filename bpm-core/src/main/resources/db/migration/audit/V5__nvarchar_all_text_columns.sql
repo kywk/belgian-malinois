@@ -1,0 +1,90 @@
+-- 全 schema 的 VARCHAR 文字欄位改為 NVARCHAR。
+--
+-- ## 為什麼要做
+--
+-- 三個 DB 的定序都是 SQL_Latin1_General_CP1_CI_AS，而 Hibernate 把沒有明確
+-- columnDefinition 的 String 欄位建成 VARCHAR。這造成兩個獨立的問題：
+--
+-- 1. **中文被靜默破壞**。寫入 VARCHAR 的非 ASCII 字元直接變成問號，
+--    而且不報任何錯誤。已實際造成：表單名稱全是 ?????、通知信主旨全是亂碼、
+--    以及（最嚴重）稽核 operator_name 的中文姓名毀損後，v2 hash 涵蓋該欄位
+--    使 integrityCheck 把每一筆都誤報為遭篡改。
+--    這對一個繁中企業系統是資料正確性問題，不是外觀問題。
+--
+-- 2. **索引無法 seek**。JDBC 的 sendStringParametersAsUnicode 預設為 true，
+--    因此應用送出的字串參數是 NVARCHAR。NVARCHAR 參數與 VARCHAR 欄位比較時，
+--    SQL Server 依型別優先序把「欄位」轉成 NVARCHAR —— 轉換發生在欄位側，
+--    索引因此無法 seek，只能掃描。process_instance_id、operator_id、form_key、
+--    system_id 這些查詢熱點目前全都踩在這上面。
+--    統一改成 NVARCHAR 同時解決正確性與這個效能陷阱。
+--
+-- ## 為什麼連 id / hash / IP 這類純 ASCII 欄位也一起轉
+--
+-- 因為第 2 點。findById 是最頻繁的查詢，PK 若留 VARCHAR 就會一直吃轉換。
+-- 代價是儲存與索引鍵變成兩倍寬，但這些欄位都遠小於 SQL Server 的
+-- 1700 bytes 索引鍵上限（最寬的是 NVARCHAR(255) = 510 bytes，
+-- 最寬的複合唯一鍵 process_definition_key+event_type+channel = 630 bytes）。
+--
+-- ## 約束名稱為何用動態查詢卸除、用固定名稱重建
+--
+-- 既有 dev 環境的 schema 是 ddl-auto 建的，約束名稱是 Hibernate 的隨機後綴
+-- （PK__bpm_docu__3213E83F88FFBD8A、UKnph9fl3vdlll11fvrgwkj7ekw…）；
+-- 而全新環境是 V1 baseline 建的，名稱是決定性的（pk_*／uk_*）。
+-- 因此卸除時只能依「表 + 約束類型」動態查名，重建時統一用決定性名稱
+-- —— 這個 migration 也順帶讓兩種環境的約束命名收斂為一致。
+
+DECLARE @n SYSNAME, @s NVARCHAR(MAX);
+-- 注意：operator_name 與 business_key 已於 V4 轉為 NVARCHAR；id 是 BIGINT，其 PK 無需重建。
+
+-- ── 1. 卸除涵蓋 VARCHAR 欄位的約束與索引 ──────────────────────
+
+-- ⚠️ operation_type 上有一個 Hibernate 針對 @Enumerated(STRING) 自動產生的
+-- CHECK 約束（CK__bpm_audit__opera__<hash>），它會讓 ALTER COLUMN 失敗：
+--     Msg 4922: ALTER TABLE ALTER COLUMN operation_type failed because
+--               one or more objects access this column.
+--
+-- 這個約束只存在於「由 ddl-auto 建立」的既有環境。全新環境的 schema 是
+-- V1 baseline 建的，baseline 沒有包含它 —— 所以這個 migration 在
+-- Testcontainers 上完全正常，卻在 dev 環境失敗。
+--
+-- 卸除後**刻意不重建**：
+--  1. 值的合法性已由 Java 端保證 —— AuditEventPublisher 走
+--     OperationType.valueOf()，非法值在進到 DB 之前就會拋例外。
+--  2. 重建等於把 21 個 enum 值硬寫進 migration，它必然與 Java enum 漂移
+--     （而且漂移時不會有人發現）。
+--  3. 全新環境本來就沒有它，卸除讓兩種環境收斂為一致。
+SET @n = NULL;
+SELECT @n = cc.name
+  FROM sys.check_constraints cc
+  JOIN sys.columns c ON c.object_id = cc.parent_object_id
+                    AND c.column_id = cc.parent_column_id
+ WHERE cc.parent_object_id = OBJECT_ID('bpm_audit_log')
+   AND c.name = 'operation_type';
+IF @n IS NOT NULL
+BEGIN
+    SET @s = N'ALTER TABLE bpm_audit_log DROP CONSTRAINT [' + @n + N']';
+    EXEC sp_executesql @s;
+END
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_audit_operator' AND object_id = OBJECT_ID('bpm_audit_log'))
+    DROP INDEX idx_audit_operator ON bpm_audit_log;
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'idx_audit_process' AND object_id = OBJECT_ID('bpm_audit_log'))
+    DROP INDEX idx_audit_process ON bpm_audit_log;
+
+-- ── 2. 欄位轉型（保留長度與可空性）──────────────────────────
+
+-- bpm_audit_log
+ALTER TABLE bpm_audit_log ALTER COLUMN hash_value NVARCHAR(80) NOT NULL;
+ALTER TABLE bpm_audit_log ALTER COLUMN ip_address NVARCHAR(255) NULL;
+ALTER TABLE bpm_audit_log ALTER COLUMN operation_type NVARCHAR(30) NOT NULL;
+ALTER TABLE bpm_audit_log ALTER COLUMN operator_id NVARCHAR(255) NULL;
+ALTER TABLE bpm_audit_log ALTER COLUMN operator_source NVARCHAR(20) NULL;
+ALTER TABLE bpm_audit_log ALTER COLUMN previous_hash NVARCHAR(80) NULL;
+ALTER TABLE bpm_audit_log ALTER COLUMN process_definition_key NVARCHAR(255) NULL;
+ALTER TABLE bpm_audit_log ALTER COLUMN process_instance_id NVARCHAR(255) NULL;
+ALTER TABLE bpm_audit_log ALTER COLUMN task_id NVARCHAR(255) NULL;
+ALTER TABLE bpm_audit_log ALTER COLUMN trace_id NVARCHAR(255) NULL;
+ALTER TABLE bpm_audit_log ALTER COLUMN user_agent NVARCHAR(255) NULL;
+
+-- ── 3. 以決定性名稱重建 ─────────────────────────────────────
+CREATE INDEX idx_audit_operator ON bpm_audit_log (operator_id);
+CREATE INDEX idx_audit_process ON bpm_audit_log (process_instance_id);

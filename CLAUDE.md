@@ -68,6 +68,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 ## 慣例
 
+- **資料庫欄位一律 NVARCHAR，不要用 VARCHAR**。三個 DB 的定序是 `SQL_Latin1_General_CP1_CI_AS`，VARCHAR 存不了中文且寫入時**靜默換成問號**（無例外、無警告）。兩個模組都已設 `hibernate.use_nationalized_character_data: true`，因此 entity 加新的 `String` 欄位會自動是 NVARCHAR；但**手寫 migration 時必須自己寫 NVARCHAR**。`SchemaEncodingGuardTest` 會掃出任何殘留的 VARCHAR 欄位並讓 build 失敗。
 - API 一律以 `/api/` 為前綴，**絕不對外暴露 Flowable 原生 REST**。
 - 前端所有 API 呼叫一律走 `src/services/http.js` 的共用 axios instance（統一附身分 header、集中錯誤處理）。**不要在 view/component 直接 `import axios`**。
 - 身分的單一來源是 `src/services/session.js`；`decodeToken()` 是接上真實 JWT 的唯一縫線，mock 角色對照表 `MOCK_ROLE_MAP` 也在這裡。取使用者 id 用 `auth.userId`，不要用 `auth.token`。
@@ -94,4 +95,6 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 6. **外部 API 授權**：字串子串比對已於 2026-09-28 改為精確比對（R-09，commit `f12a8c2`，**未經編譯驗證**），授權判定集中在 `external/ExternalSystemPolicy.java`，擁有權改用 server 寫入的 `_externalSystemId`。仍存在的問題見 R-18 ~ R-25，其中 R-18（`/api/admin/**` 無認證）會讓 R-09 完全可被繞過。`lastUsedAt` 仍每請求寫一次 DB。
 7. **Redis 快取失效用 `KEYS` 掃描**（`perm:users:{code}:*`），production 隱憂。
 8. 文件／版控雜項（見 backlog R-11 ~ R-17）：根目錄 `backend-development-backlog.md` 與 `docs/` 那份位元完全相同（重複，易漂移）；`bpm-frontend/dist/` 被 commit 進版控；無根 README、無 ESLint/Prettier/Checkstyle/Spotless 設定；`docker-compose.prod.yml` 仍有已淘汰的 `version: '3.8'` 且未設 JVM heap 上限（backlog #50）。
-9. **潛在 bug**：`form-service/src/main/resources/data.sql` 用 snake_case 欄位名，但 `FormDefinition` 的 `@UniqueConstraint(columnNames = {"formKey","version"})` 用 camelCase —— 乾淨 DB 上需驗證實際產生的 constraint。
+9. ~~**潛在 bug**：`data.sql` 的 snake_case 與 `@UniqueConstraint` 的 camelCase~~ —— **已於 2026-09-28 在乾淨 DB 上驗證為非問題**，Hibernate 正確解析成 `(form_key, version)`。
+
+   但同一次驗證發現了真正的問題並已修復：**全 schema 的文字欄位都是 VARCHAR 而定序是 Latin1**，中文寫入時被靜默換成問號。已造成表單名稱全毀、通知信主旨全毀，以及稽核 `operator_name` 損壞後使 `integrityCheck` 全面誤報。56 個欄位已轉為 NVARCHAR（migration `nvarchar_all_text_columns`），並加上 `hibernate.use_nationalized_character_data` 與 `SchemaEncodingGuardTest` 防止復發。

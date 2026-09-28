@@ -30,11 +30,9 @@ class MassAssignmentTest extends IntegrationTestBase {
     @Test
     @DisplayName("POST /api/admin/notify-templates 不得以 body 的 id 覆寫既有模板")
     void createTemplateCannotOverwriteExisting() throws Exception {
-        // ⚠️ fixture 刻意全用 ASCII。
-        // name 與 subject_template 是 VARCHAR，而 DB 定序為
-        // SQL_Latin1_General_CP1_CI_AS → 中文會被靜默換成問號。
-        // 若受害者與攻擊者的值都是中文，兩者都會變成 "????" 而無法區分，
-        // 這個測試就驗不到任何東西（見 chineseSubjectIsCurrentlyCorrupted）。
+        // fixture 用 ASCII 以便清楚區分受害者與攻擊者的值。
+        // （在 NVARCHAR 全面修復之前，這裡是「必須」用 ASCII —— 中文會被
+        //   靜默換成問號，兩邊都變 "????" 就驗不到任何東西。現在只是偏好。）
         NotifyTemplate victim = new NotifyTemplate();
         victim.setName("ORIGINAL-TEMPLATE");
         victim.setChannel("EMAIL");
@@ -61,28 +59,27 @@ class MassAssignmentTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("⚠️ 已知缺陷：通知模板的中文主旨被靜默損壞（NVARCHAR 全面修復的變更偵測點）")
-    void chineseSubjectIsCurrentlyCorrupted() {
-        // subject_template／name 是 VARCHAR，DB 定序為 Latin1
-        // → 中文寫入時被換成問號，且不報任何錯誤。
-        // 對一個繁中系統而言，這代表「所有通知信的主旨都是亂碼」。
-        // 屬全 schema 系統性 NVARCHAR 問題的一部分，範圍待決策 ——
-        // 此處斷言現況，修復後應改為 isEqualTo 原文。
+    @DisplayName("通知模板的中文主旨必須完整保存（NVARCHAR 全面修復後）")
+    void chineseSubjectIsPreserved() {
+        // 這個測試原本斷言「中文主旨已損壞」，作為 NVARCHAR 全面修復的
+        // 變更偵測點。修復完成後依當初註明的方式反轉為斷言正確值。
+        //
+        // 對繁中系統而言這條路徑的後果最直接：subject_template 損壞
+        // 等於所有通知信的主旨都是亂碼。
         NotifyTemplate t = new NotifyTemplate();
         t.setName("中文模板名稱");
         t.setChannel("EMAIL");
         t.setSubjectTemplate("【BPM】您有新的待辦事項");
-        t.setBodyTemplate("內容放在 NVARCHAR(MAX)，這裡是正常的");
+        t.setBodyTemplate("內容放在 NVARCHAR(MAX)，這裡一直是正常的");
         t = templateRepo.save(t);
 
         NotifyTemplate reloaded = templateRepo.findById(t.getId()).orElseThrow();
         assertThat(reloaded.getSubjectTemplate())
-                .as("現況：VARCHAR 欄位的中文已損壞。NVARCHAR 修復後改為 "
-                        + "isEqualTo(\"【BPM】您有新的待辦事項\")")
-                .contains("?");
+                .as("中文主旨必須完整保存")
+                .isEqualTo("【BPM】您有新的待辦事項");
+        assertThat(reloaded.getName()).isEqualTo("中文模板名稱");
         assertThat(reloaded.getBodyTemplate())
-                .as("對照組：bodyTemplate 是 NVARCHAR(MAX)，中文正常")
-                .isEqualTo("內容放在 NVARCHAR(MAX)，這裡是正常的");
+                .isEqualTo("內容放在 NVARCHAR(MAX)，這裡一直是正常的");
     }
 
     @Test

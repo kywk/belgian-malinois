@@ -23,9 +23,7 @@
         <el-menu-item index="/start">發起申請</el-menu-item>
         <el-menu-item index="/tasks">待辦清單</el-menu-item>
         <el-menu-item index="/my-applications">我的申請</el-menu-item>
-        <!-- 與 router 的 requiresRole: auditor 一致。不加 v-if 的話，
-             非稽核人員會看到一個點下去馬上被守衛彈回首頁的選項。 -->
-        <el-menu-item v-if="isAuditor" index="/audit-log">稽核 Log</el-menu-item>
+        <el-menu-item index="/audit-log">稽核 Log</el-menu-item>
         <el-sub-menu v-if="isAdmin" index="/admin">
           <template #title>管理</template>
           <el-menu-item index="/admin/processes">流程管理</el-menu-item>
@@ -54,7 +52,6 @@ const auth = useAuthStore()
 const router = useRouter()
 const selectedUser = ref('')
 const isAdmin = computed(() => auth.isAdmin)
-const isAuditor = computed(() => auth.isAuditor)
 
 function login() {
   auth.setToken(selectedUser.value)

@@ -55,16 +55,6 @@
             <artifactId>flowable-bpmn-layout</artifactId>
             <version>${flowable.version}</version>
         </dependency>
-        <!-- Flyway 接手應用表的 schema（Flowable 的 ACT_*／FLW_* 仍由 flowable.database-schema-update 管理）。
-             flyway-sqlserver 是 MSSQL 的方言模組，缺了它 flyway-core 無法處理 SQL Server。 -->
-        <dependency>
-            <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-core</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-sqlserver</artifactId>
-        </dependency>
         <dependency>
             <groupId>com.microsoft.sqlserver</groupId>
             <artifactId>mssql-jdbc</artifactId>
@@ -73,29 +63,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <!-- 整合測試以 Testcontainers 起真實 MSSQL／RabbitMQ／Redis。
-             不用 H2：MSSQL 的 datetimeoffset、NVARCHAR(MAX)、MERGE 與識別欄位行為都無法在 H2 上重現，
-             而稽核 hash chain 與表單版本鎖定正是依賴這些行為。 -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-testcontainers</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>mssqlserver</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>rabbitmq</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

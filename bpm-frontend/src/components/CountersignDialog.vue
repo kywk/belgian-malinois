@@ -30,14 +30,7 @@ async function submit() {
   const users = Array.isArray(selectedUsers.value) ? selectedUsers.value : [selectedUsers.value]
   try {
     for (const userId of users) {
-      // createSubtask 的簽章是 (taskId, data) —— 改動前這裡只傳一個物件，
-      // 導致實際發出 POST /api/countersign/[object Object] 且 body 為 undefined，
-      // @RequestBody 直接 400。這是 TC-A01 驗收不過的直接原因。
-      // 欄位名也必須對齊後端：countersignUserId / message（不是 assignee / description）。
-      await createSubtask(props.taskId, {
-        countersignUserId: userId,
-        message: description.value,
-      })
+      await createSubtask({ parentTaskId: props.taskId, assignee: userId, description: description.value })
     }
     ElMessage.success(`已發送加簽請求給 ${users.length} 人`)
     selectedUsers.value = []
