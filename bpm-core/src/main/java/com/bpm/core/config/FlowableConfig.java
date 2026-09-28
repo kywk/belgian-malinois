@@ -55,6 +55,7 @@ public class FlowableConfig {
     public EngineConfigurationConfigurer<SpringProcessEngineConfiguration> processEngineConfigurer(
             ProcessCompletedListener processCompletedListener,
             OrgService orgService,
+            com.bpm.core.service.InitialAssigneeResolver assigneeResolver,
             BpmPermissionService permService,
             BpmQueryService bpmQueryService,
             NotifyTaskListener notifyTaskListener) {
@@ -64,6 +65,9 @@ public class FlowableConfig {
                     "orgService", orgService,
                     "permService", permService,
                     "bpmQueryService", bpmQueryService,
+                    // 第一個任務的受理人判斷（P2-7）。BPMN 的 managerReview 由它決定，
+                    // 因為 initiator 在外部系統發起時是 system:<id>，不是人。
+                    "assigneeResolver", assigneeResolver,
                     // ⚠️ 不可移除：purchase-approval 的 delegateExpression 依賴它
                     "notifyTaskListener", notifyTaskListener));
         };

@@ -29,6 +29,7 @@ public class ExternalApiController {
     private final AuditEventPublisher auditPublisher;
     private final FormVersionLocker formVersionLocker;
     private final ExternalSystemPolicy policy;
+    private final com.bpm.core.service.OrgService orgService;
 
     /**
      * 流程實例的擁有者。啟動時由 server 寫入，外部系統無法透過 request body 影響。
@@ -41,7 +42,8 @@ public class ExternalApiController {
     public ExternalApiController(RuntimeService runtimeService, TaskService taskService,
                                   HistoryService historyService, ProcessVariableSpecRepository specRepo,
                                   AuditEventPublisher auditPublisher, FormVersionLocker formVersionLocker,
-                                  ExternalSystemPolicy policy) {
+                                  ExternalSystemPolicy policy,
+                                  com.bpm.core.service.OrgService orgService) {
         this.runtimeService = runtimeService;
         this.taskService = taskService;
         this.historyService = historyService;
@@ -49,6 +51,7 @@ public class ExternalApiController {
         this.auditPublisher = auditPublisher;
         this.formVersionLocker = formVersionLocker;
         this.policy = policy;
+        this.orgService = orgService;
     }
 
     // ── 1. Start Process ──
@@ -79,10 +82,30 @@ public class ExternalApiController {
                     "此系統未被授權啟動流程: " + processDefKey);
         }
 
-        // Validate: system initiator needs firstTaskAssignee or groups
-        if (initiator.startsWith("system:") && firstAssignee == null && firstGroups == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "外部系統發起流程必須指定 firstTaskAssignee 或 firstTaskCandidateGroups");
+        // 沒有指定受理人也沒有候選群組 → 流程會走組織查詢（initiator 的直屬主管）。
+        //
+        // ⚠️ 原本的條件是 initiator.startsWith("system:")，而 initiator 完全由
+        // 呼叫端指定（R-20）—— 送一個不以 system: 開頭的值就能整個跳過這個檢查。
+        // 改動前的後果不是「檢查被跳過」而已：組織 mock 對未知 userId 一律回
+        // mgr001，所以案件會<b>啟動成功並派給 mgr001</b>，看起來毫無異常。
+        //
+        // 現在判斷的依據換成「流程接下來需不需要查組織」這個客觀事實，
+        // 不再依賴呼叫端可任意指定的字串。system:<id> 一定查不到（不是人），
+        // 偽造的員工編號也一樣 —— 兩者都會在這裡拿到明確的 400，
+        // 而不是流程啟動時 JUEL 求值失敗的 500。
+        if (firstAssignee == null && firstGroups == null) {
+            if (initiator.startsWith("system:")) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "外部系統發起流程必須指定 firstTaskAssignee 或 firstTaskCandidateGroups"
+                                + "（initiator=" + initiator + " 不是組織系統中的人員，無法推導簽核主管）");
+            }
+            try {
+                orgService.getDirectManager(initiator);
+            } catch (Exception e) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "initiator=" + initiator + " 不是組織系統認識的人員，"
+                                + "無法推導簽核主管。請指定 firstTaskAssignee 或 firstTaskCandidateGroups。", e);
+            }
         }
 
         // Validate variables against ProcessVariableSpec
@@ -96,6 +119,16 @@ public class ExternalApiController {
         if (initiator.startsWith("system:") && firstAssignee != null) {
             variables.put("effectiveInitiator", firstAssignee);
         }
+        // ⚠️ 必須在 startProcessInstanceByKey 之前放進變數（P2-7）。
+        //
+        // BPMN 的 managerReview 在流程<b>啟動當下</b>就求值 assignee 運算式，
+        // 也就是在下面那幾行 taskService.setAssignee 之前。原本的運算式是
+        // ${orgService.getDirectManager(initiator)}，而外部系統發起時
+        // initiator 是 system:<id> —— 不是人，組織系統查不到它的主管。
+        //
+        // 先前沒被發現是因為組織 mock 對未知 userId 一律回 mgr001，
+        // 而測試剛好都用 firstTaskAssignee=mgr001，捏造值與預期值恰好相同。
+        com.bpm.core.service.InitialAssigneeResolver.putIfPresent(variables, firstAssignee, firstGroups);
         if (callbackUrl != null) variables.put("_callbackUrl", callbackUrl);
 
         // Start process

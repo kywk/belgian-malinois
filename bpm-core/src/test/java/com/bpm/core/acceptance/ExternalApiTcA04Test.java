@@ -34,6 +34,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ExternalApiTcA04Test extends IntegrationTestBase {
 
     @Autowired
+    private org.flowable.engine.TaskService taskService;
+
+    @Autowired
     private ExternalSystemRepository repo;
 
     private static final String PLAIN_KEY = "sk-tca04-testkey";
@@ -217,17 +220,38 @@ class ExternalApiTcA04Test extends IntegrationTestBase {
                 .contains("processInstanceId");
     }
 
+    /**
+     * 偽造 initiator 不再能繞過受理人的必填要求（P2-7 修復）。
+     *
+     * <h2>改動前為什麼會通過</h2>
+     *
+     * <p>必填檢查原本寫成 {@code initiator.startsWith("system:")} 才要求
+     * {@code firstTaskAssignee}。而 initiator 完全由呼叫端指定（R-20），
+     * 送一個不以 {@code system:} 開頭的值就整個跳過檢查。
+     *
+     * <p>後果不只是「檢查被跳過」：BPMN 接著算
+     * {@code orgService.getDirectManager("not-a-system-prefix")}，
+     * 而組織 mock 對未知 userId 一律回 {@code mgr001} ——
+     * 案件<b>啟動成功並派給 mgr001</b>，外部系統收到 200，看起來毫無異常。
+     *
+     * <h2>現在的行為</h2>
+     *
+     * <p>檢查的依據換成「流程接下來需不需要查組織」這個客觀事實，
+     * 不再依賴呼叫端可任意指定的字串。所以 system 帳號與偽造的員工編號
+     * 都會拿到 400。
+     *
+     * <h2>R-20 仍未完全修復</h2>
+     *
+     * <p>呼叫端仍可冒用<b>真實存在</b>的員工編號當 initiator ——
+     * 那會通過這裡的檢查，案件派給那個人的主管。要徹底修掉必須讓 initiator
+     * 由 server 依 API key 決定，那是 R-20 的本體，尚未施作。
+     * 這次只拿掉了「用一個不存在的身分繞過必填檢查」這條路。
+     */
     @Test
-    @DisplayName("⚠️ 已知缺陷（R-20）：偽造 initiator 可繞過 firstTaskAssignee 的必填要求")
-    void forgedInitiatorBypassesAssigneeRequirement() throws Exception {
+    @DisplayName("R-20（部分修復）：偽造 initiator 不得繞過受理人的必填要求")
+    void forgedInitiatorCannotBypassAssigneeRequirement() throws Exception {
         given("erp", "[\"start_process\"]", "[\"leave-approval\"]");
 
-        // 後端的檢查是 initiator.startsWith("system:") 才要求 firstTaskAssignee。
-        // 由於 initiator 完全由呼叫端指定（R-20），只要送一個不以 system: 開頭
-        // 的值就能整個跳過該檢查 —— 案件於是在沒有指定受理人的情況下啟動。
-        //
-        // 本測試刻意記錄「目前會成功」這個事實，作為 R-20 修復後的變更偵測點：
-        // 等 initiator 改為由 server 決定，這裡就會變成 400，屆時應把斷言反轉。
         String body = "{\"processDefinitionKey\":\"leave-approval\","
                 + "\"businessKey\":\"TCA04-bypass\","
                 + "\"initiator\":\"not-a-system-prefix\","
@@ -238,6 +262,33 @@ class ExternalApiTcA04Test extends IntegrationTestBase {
                         .header("X-System-Id", "erp")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
-                .andExpect(status().isOk());  // ← R-20 修復後應改為 isBadRequest()
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("代真實員工發起時不需指定受理人 —— 主管路由仍須可用")
+    void onBehalfOfRealEmployeeStillRoutesToManager() throws Exception {
+        // 上一個測試不能是靠「一律要求 firstTaskAssignee」達成的 ——
+        // 那會擋掉「外部系統代員工送件」這個正當用途。
+        // 這裡確認 initiator 是組織系統認識的人時，仍可省略受理人並走主管路由。
+        given("erp", "[\"start_process\"]", "[\"leave-approval\"]");
+
+        String body = "{\"processDefinitionKey\":\"leave-approval\","
+                + "\"businessKey\":\"TCA04-onbehalf-" + UUID.randomUUID() + "\","
+                + "\"initiator\":\"user001\","
+                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}";
+
+        mockMvc.perform(post("/api/external/process-instances")
+                        .header("X-API-Key", PLAIN_KEY)
+                        .header("X-System-Id", "erp")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk());
+
+        // 第一個任務應落在 user001 的主管身上，而不是任何捏造的預設值。
+        var task = taskService.createTaskQuery()
+                .processVariableValueEquals("initiator", "user001")
+                .orderByTaskCreateTime().desc().list().get(0);
+        org.assertj.core.api.Assertions.assertThat(task.getAssignee()).isEqualTo("mgr001");
     }
 }

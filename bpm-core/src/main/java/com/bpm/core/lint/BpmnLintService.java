@@ -15,8 +15,29 @@ import java.util.*;
 @Service
 public class BpmnLintService {
 
-    private static final Set<String> EL_WHITELIST = Set.of(
-            "orgService", "permService", "bpmQueryService");
+    /**
+     * BPMN 運算式可以取用的 bean 名稱。
+     *
+     * <h2>⚠️ 必須與 {@code FlowableConfig.setBeans()} 保持一致</h2>
+     *
+     * <p>這是兩份各自維護的清單，沒有任何機制強制它們相同。方向性很重要：
+     * <ul>
+     *   <li>這裡有、{@code setBeans()} 沒有 → lint 放行，但執行期取不到那個 bean，
+     *       錯誤會在<b>使用者送出簽核的時候</b>才出現，而不是部署時。</li>
+     *   <li>{@code setBeans()} 有、這裡沒有 → 部署被 lint 擋下。安全，但訊息容易誤導。</li>
+     * </ul>
+     *
+     * <p>{@code BpmnExpressionBeanScopeTest} 斷言這裡的每個名稱都在執行期命名空間內，
+     * 防止第一種漂移。
+     */
+    // public 是為了讓 BpmnExpressionBeanScopeTest 從這裡推導測試對象
+    // （測試在另一個 package）。不可變的 Set.of，外部無法修改。
+    public static final Set<String> EL_WHITELIST = Set.of(
+            "orgService", "permService", "bpmQueryService",
+            // 第一個任務的受理人判斷（P2-7）。BPMN 的 managerReview 用它取代
+            // 直接呼叫 orgService.getDirectManager(initiator) —— 後者在外部系統
+            // 發起時會對 system:<id> 查主管，永遠查不到。
+            "assigneeResolver");
     private static final Set<String> DEFAULT_NAMES = Set.of(
             "Task", "Task 1", "Task 2", "Task 3", "");
 

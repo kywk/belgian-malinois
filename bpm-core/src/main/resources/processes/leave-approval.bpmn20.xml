@@ -11,7 +11,7 @@
     <sequenceFlow id="flow1" sourceRef="start" targetRef="managerReview"/>
 
     <userTask id="managerReview" name="主管審核"
-              flowable:assignee="${orgService.getDirectManager(initiator)}"
+              flowable:assignee="${assigneeResolver.resolve(execution)}"
               flowable:formKey="leave-review">
       <extensionElements>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>

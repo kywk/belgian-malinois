@@ -77,15 +77,30 @@ class BpmnExpressionBeanScopeTest extends IntegrationTestBase {
         return key;
     }
 
+    /**
+     * 清單刻意<b>從 {@code BpmnLintService.EL_WHITELIST} 推導</b>，不是寫死（P2-7）。
+     *
+     * <p>lint 白名單與 {@code FlowableConfig.setBeans()} 是兩份各自維護的清單。
+     * 若某個 bean 只加進 lint 白名單而忘了加進 {@code setBeans()}，
+     * lint 會放行那支 BPMN，但執行期取不到那個 bean ——
+     * 錯誤在<b>使用者送出簽核時</b>才出現，而不是部署時。
+     *
+     * <p>從白名單推導，新增 bean 時這個測試會自動涵蓋它，漏掉一邊就會紅。
+     */
     @Test
-    @DisplayName("白名單內的 bean 必須可用（orgService／permService／bpmQueryService）")
+    @DisplayName("lint 白名單內的每個 bean 都必須在執行期命名空間內")
     void whitelistedBeansRemainAvailable() {
-        for (String bean : List.of("orgService", "permService", "bpmQueryService")) {
+        assertThat(com.bpm.core.lint.BpmnLintService.EL_WHITELIST)
+                .as("白名單是空的，這個測試就成了空門")
+                .isNotEmpty();
+
+        for (String bean : com.bpm.core.lint.BpmnLintService.EL_WHITELIST) {
             String key = "beanok-" + bean.toLowerCase();
             deployWithCondition(key, "${" + bean + " != null}");
             // 能啟動且不拋例外 = 該 bean 在 EL 命名空間內
             assertThat(runtimeService.startProcessInstanceByKey(key))
-                    .as(bean + " 必須可從 BPMN 運算式取用").isNotNull();
+                    .as("%s 在 lint 白名單內，但執行期取不到 —— FlowableConfig.setBeans() 漏了它", bean)
+                    .isNotNull();
         }
     }
 

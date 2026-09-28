@@ -135,6 +135,14 @@ bpm:
   webhook:
     hmac-secret: bpm-webhook-secret
   external:
+    # 開發用 mock 的總開關（security-audit P2-7）。
+    #
+    # 這裡設 true 是因為<b>預設文件就是本機開發設定</b>（DB 也指向 localhost）。
+    # 正式環境走 prod profile，那裡明確設回 false —— 見本檔末端。
+    #
+    # ⚠️ 不要把這個值改成靠 profile 繼承來關掉。ExternalSystemUrlValidator
+    # 會在啟動時檢查「開關」與「URL」是否一致，兩者對不上就拒絕啟動。
+    mock-enabled: true
     # ⚠️ 這兩個 URL 指向 bpm-core 自己（MockOrgController / MockPermController）。
     # 也就是容器內 bpm-core 會對自己發同步 HTTP，而且是在 taskService.complete()
     # 的 DB 交易之內 —— 每次任務建立占用 2 個 Tomcat 執行緒。
@@ -177,3 +185,28 @@ bpm:
   datasource:
     # docker profile 唯一需要換的東西：MSSQL 的位置。
     host: mssql:1433
+
+---
+# 正式環境 profile（security-audit P2-7）。
+#
+# 為什麼需要它：改動前 base／dev／prod 三個 compose 檔都用
+# SPRING_PROFILES_ACTIVE: docker，所以 profile 完全不區分 dev 與 prod。
+# 於是「正式環境要關掉 mock」沒有任何地方可以表達。
+#
+# 用法：SPRING_PROFILES_ACTIVE: docker,prod
+# —— docker 提供容器內的 host 覆蓋，prod 疊上正式環境該有的限制。
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+bpm:
+  external:
+    # 關掉開發 fixture。組織與權限是授權的事實來源，
+    # 正式環境用寫死的 9 人 fixture 做授權判定是不可接受的。
+    mock-enabled: false
+    # 沒有預設值，必須由部署環境提供。
+    # 猜一個位置的後果是錯誤的授權決定，所以這裡刻意讓它在未設定時啟動失敗
+    # （ExternalSystemUrlValidator 會擋）。
+    org-service-url: ${ORG_SERVICE_URL:}
+    perm-service-url: ${PERM_SERVICE_URL:}
