@@ -16,7 +16,12 @@ spring:
       driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
   jpa:
     hibernate:
-      ddl-auto: update
+      # Flyway 接手 schema 之後這裡必須是 none。
+      # 留著 update 會讓 Hibernate 在 Flyway 之外偷偷改 schema，
+      # 於是 migration 不再是唯一事實來源，兩邊漂移後無從判斷哪個才對。
+      # 不用 validate：Hibernate 對 datetimeoffset／NVARCHAR(MAX) 的型別比對
+      # 會誤報，改由 Testcontainers 整合測試守住 schema 與 entity 的一致性。
+      ddl-auto: none
     show-sql: false
     properties:
       hibernate:
@@ -43,11 +48,23 @@ spring:
     properties:
       mail.smtp.auth: false
       mail.smtp.starttls.enable: false
+  flyway:
+    # 只給主 DataSource（bpm_core_db）。稽核 DB 的 migration 由
+    # config/AuditFlywayConfig.java 手動驅動 —— Boot 的自動配置只認主 DataSource。
+    enabled: true
+    locations: classpath:db/migration/core
+    # 既有 dev DB 的 schema 非空但沒有歷史表；baseline-version: 0 讓 V1 仍會執行，
+    # 搭配 V1 的幂等寫法。理由詳見 migration 檔內的註解。
+    baseline-on-migrate: true
+    baseline-version: 0
   servlet:
     multipart:
       max-file-size: 50MB
       max-request-size: 50MB
 
+# Flowable 自己的 ACT_*（39 張）與 FLW_*（8 張，事件註冊表用它自己的 Liquibase）
+# 仍由 Flowable 管理，刻意不納入 Flyway —— 納入會在 Flowable 6→7 升級時
+# 與它的 changelog 互相打架。見 docs/plan/2026-09-28-springboot4-upgrade.md Stage 2。
 flowable:
   database-schema-update: true
   async-executor-activate: true

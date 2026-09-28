@@ -11,12 +11,23 @@ spring:
     driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
   jpa:
     hibernate:
-      ddl-auto: update
+      # 同 bpm-core：Flyway 接手後必須關掉，否則 schema 有兩個事實來源。
+      ddl-auto: none
     show-sql: false
-    defer-datasource-initialization: true
+    # 刻意移除 defer-datasource-initialization。
+    # 它原本的用途是「等 ddl-auto 建好表再跑 data.sql」；Flyway 接手 DDL 之後
+    # 這個旗標不但多餘，還會造成 flyway 與 entityManagerFactory 的
+    # circular depends-on（Boot 會讓 EMF 依賴 flyway，而此旗標讓
+    # dataSourceInitializer 反向依賴 EMF）→ 服務直接啟動失敗。
+    # data.sql 仍由 spring.sql.init 執行，Boot 預設就排在 Flyway 之後。
     properties:
       hibernate:
         dialect: org.hibernate.dialect.SQLServerDialect
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 0
   sql:
     init:
       mode: always
