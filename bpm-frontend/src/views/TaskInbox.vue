@@ -26,7 +26,7 @@ import { getTasks } from '../services/flowableApi.js'
 
 const router = useRouter()
 const auth = useAuthStore()
-const userId = auth.token
+const userId = auth.userId
 const tasks = ref([])
 const fmt = (t) => t ? new Date(t).toLocaleString('zh-TW') : ''
 

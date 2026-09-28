@@ -44,7 +44,7 @@ import { useAuthStore } from '../stores/auth'
 import { getTasks, getHistoricTasks } from '../services/flowableApi.js'
 
 const auth = useAuthStore()
-const userId = computed(() => auth.token)
+const userId = computed(() => auth.userId)
 const stats = reactive({ pending: 0, completedThisWeek: 0, urgent: 0 })
 const urgentTasks = ref([])
 

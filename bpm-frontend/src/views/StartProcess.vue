@@ -58,7 +58,7 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import axios from 'axios'
+import http from '../services/http'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -72,7 +72,7 @@ const purchaseForm = reactive({ itemName: '', quantity: 1, amount: 0, reason: ''
 function onProcessChange() { result.value = null }
 
 async function submit() {
-  const userId = auth.token
+  const userId = auth.userId
   let variables = {}
 
   if (processKey.value === 'leave-approval') {
@@ -93,7 +93,7 @@ async function submit() {
 
   submitting.value = true
   try {
-    const { data } = await axios.post('/api/process-instances', {
+    const { data } = await http.post('/api/process-instances', {
       processDefinitionKey: processKey.value,
       initiator: userId,
       variables

@@ -39,7 +39,7 @@ import { useAuthStore } from '../stores/auth'
 import { getProcessInstances, getHistoricProcessInstances } from '../services/flowableApi.js'
 
 const auth = useAuthStore()
-const userId = computed(() => auth.token)
+const userId = computed(() => auth.userId)
 const activeTab = ref('running')
 const list = ref([])
 const fmt = (t) => t ? new Date(t).toLocaleString('zh-TW') : ''
