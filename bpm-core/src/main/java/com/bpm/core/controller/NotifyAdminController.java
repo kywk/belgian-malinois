@@ -57,6 +57,23 @@ public class NotifyAdminController {
     @PostMapping("/notify-configs")
     public NotifyConfig createConfig(@RequestBody NotifyConfig c) {
         c.setId(null);
+        // ⚠️ templateId 必須指向存在的模板（security-audit P1-13）。
+        // 改動前完全不驗證，而 NotifyConfig 也沒有 nullable=false：
+        // 一筆 templateId 為 null（或指向不存在的模板）的設定，會讓
+        // EmailConsumer 的 findById(null) 拋 IllegalArgumentException →
+        // retry 3 次後進 dlq.bpm → 該通知永久遺失，
+        // 而且同一 config 之後每則通知都重踩同一個坑。
+        //
+        // 消費端已加上防護（改用預設模板並記錄警告），但錯誤設定不該
+        // 一開始就能存進去 —— 在寫入端擋掉才是正確的位置。
+        if (c.getTemplateId() == null || c.getTemplateId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "templateId 為必填");
+        }
+        if (!templateRepo.existsById(c.getTemplateId())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "templateId 指向不存在的模板: " + c.getTemplateId());
+        }
         return configRepo.save(c);
     }
 
