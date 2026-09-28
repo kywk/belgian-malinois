@@ -101,12 +101,46 @@ public class TaskController {
         }
 
         // Filter out candidate tasks where user already reviewed in the same process
+        //
+        // ⚠️ 這個「同一人不得重複簽核」的規則有兩個已知問題尚未處理，
+        //    因為兩者都需要業務政策決策（security-audit P1-5，該項是審查中
+        //    唯一沒有給出「修法」的）：
+        //
+        //  1. **範圍是整個流程實例而非節點**。只要該使用者在此 instance 完成過
+        //     任何任務，所有未指派的候選任務都被移除。實際情境：財務退回 →
+        //     主管再審通過 → 案子回到 financeReview（candidateUsers），
+        //     但當初退件的財務人員已有 finished 歷史 → 該任務對他永久隱藏。
+        //     若該權限只有一人，案件靜默卡死。
+        //     （改用 taskDefinitionKey 也解不掉 —— 退回後回到的是同一個節點。
+        //       真正要區分的是「同一輪」，而目前沒有輪次的概念。）
+        //
+        //  2. **只隱藏不阻擋**。PUT /api/tasks/{id} 沒有對應檢查 →
+        //     知道 taskId 就能簽第二次。這個被當成業務規則展示的東西
+        //     實際上從未被強制。
+        //
+        // 本次只修下面那個沒有語意爭議的效能問題。
         String filterUser = assignee != null ? assignee : candidateUser;
-        if (filterUser != null) {
-            Set<String> reviewedProcessIds = historyService.createHistoricTaskInstanceQuery()
-                    .taskAssignee(filterUser).finished().list().stream()
-                    .map(ht -> ht.getProcessInstanceId())
+        if (filterUser != null && !taskMap.isEmpty()) {
+            // 只查「手上這批任務所屬的流程實例」的歷史。
+            //
+            // 改動前是 .taskAssignee(user).finished().list() —— 撈該使用者
+            // 全部歷史已完成任務，無時間範圍、無分頁。待辦查詢是最高頻的
+            // 端點之一，而這個結果集只會隨使用年資單向成長。
+            // 語意完全不變：原本也只用它來比對手上這批任務的 instance id。
+            Set<String> relevantProcessIds = taskMap.values().stream()
+                    .map(Task::getProcessInstanceId)
+                    .filter(Objects::nonNull)
                     .collect(java.util.stream.Collectors.toSet());
+
+            Set<String> reviewedProcessIds = relevantProcessIds.isEmpty()
+                    ? Set.of()
+                    : historyService.createHistoricTaskInstanceQuery()
+                            .taskAssignee(filterUser).finished()
+                            .processInstanceIdIn(relevantProcessIds)
+                            .list().stream()
+                            .map(ht -> ht.getProcessInstanceId())
+                            .collect(java.util.stream.Collectors.toSet());
+
             taskMap.entrySet().removeIf(e -> {
                 Task t = e.getValue();
                 // Keep if directly assigned; remove only unassigned candidate tasks
