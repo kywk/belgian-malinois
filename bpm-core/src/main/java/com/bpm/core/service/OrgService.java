@@ -1,6 +1,8 @@
 package com.bpm.core.service;
 
 import com.bpm.core.client.OrgRestClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -10,6 +12,8 @@ import java.util.List;
 
 @Service("orgService")
 public class OrgService {
+
+    private static final Logger log = LoggerFactory.getLogger(OrgService.class);
 
     private final OrgRestClient orgRestClient;
     private final StringRedisTemplate redis;
@@ -21,10 +25,10 @@ public class OrgService {
 
     public String getDirectManager(String userId) {
         String key = "org:manager:" + userId;
-        String cached = redis.opsForValue().get(key);
+        String cached = cacheGet(key);
         if (cached != null) return cached;
         String manager = orgRestClient.getManager(userId);
-        if (manager != null) redis.opsForValue().set(key, manager, Duration.ofMinutes(60));
+        if (manager != null) cachePut(key, manager, Duration.ofMinutes(60));
         return manager;
     }
 
@@ -50,10 +54,10 @@ public class OrgService {
 
     public String resolveEffective(String userId) {
         String key = "org:substitute:" + userId;
-        String cached = redis.opsForValue().get(key);
+        String cached = cacheGet(key);
         if (cached != null) return cached.isEmpty() ? userId : cached;
         String substitute = orgRestClient.getSubstitute(userId);
-        redis.opsForValue().set(key, substitute != null ? substitute : "", Duration.ofMinutes(1));
+        cachePut(key, substitute != null ? substitute : "", Duration.ofMinutes(1));
         return substitute != null ? substitute : userId;
     }
 
@@ -86,14 +90,14 @@ public class OrgService {
      */
     public List<String> getManagerChain(String userId, int levels) {
         String key = "org:manager-chain:" + userId + ":" + levels;
-        String cached = redis.opsForValue().get(key);
+        String cached = cacheGet(key);
         if (cached != null) return clean(splitCsv(cached), userId);
 
         List<String> chain = orgRestClient.getManagerChain(userId, levels);
         if (chain == null) return List.of();
         List<String> cleaned = clean(chain, userId);
         if (!cleaned.isEmpty()) {
-            redis.opsForValue().set(key, String.join(",", cleaned), Duration.ofMinutes(60));
+            cachePut(key, String.join(",", cleaned), Duration.ofMinutes(60));
         }
         return cleaned;
     }
@@ -119,31 +123,31 @@ public class OrgService {
 
     public String getDeptId(String userId) {
         String key = "org:dept:" + userId;
-        String cached = redis.opsForValue().get(key);
+        String cached = cacheGet(key);
         if (cached != null) return cached;
         String deptId = orgRestClient.getDepartment(userId);
-        if (deptId != null) redis.opsForValue().set(key, deptId, Duration.ofMinutes(60));
+        if (deptId != null) cachePut(key, deptId, Duration.ofMinutes(60));
         return deptId;
     }
 
     public boolean isUserAvailable(String userId) {
         String key = "org:available:" + userId;
-        String cached = redis.opsForValue().get(key);
+        String cached = cacheGet(key);
         if (cached != null) return "true".equals(cached);
         // Default: available if substitute is null (user is not on leave)
         String substitute = orgRestClient.getSubstitute(userId);
         boolean available = substitute == null;
-        redis.opsForValue().set(key, String.valueOf(available), Duration.ofMinutes(5));
+        cachePut(key, String.valueOf(available), Duration.ofMinutes(5));
         return available;
     }
 
     public List<String> getDeptMembers(String deptId) {
         String key = "org:dept-members:" + deptId;
-        String cached = redis.opsForValue().get(key);
+        String cached = cacheGet(key);
         if (cached != null) return splitCsv(cached);
         List<String> members = orgRestClient.getDeptMembers(deptId);
         if (members != null && !members.isEmpty()) {
-            redis.opsForValue().set(key, String.join(",", members), Duration.ofMinutes(30));
+            cachePut(key, String.join(",", members), Duration.ofMinutes(30));
         }
         return members;
     }
@@ -151,14 +155,51 @@ public class OrgService {
     public void invalidateCache(List<String> userIds, String type) {
         if (userIds == null) return;
         for (String userId : userIds) {
-            redis.delete("org:manager:" + userId);
-            redis.delete("org:substitute:" + userId);
-            redis.delete("org:available:" + userId);
-            redis.delete("org:dept:" + userId);
+            cacheEvict("org:manager:" + userId);
+            cacheEvict("org:substitute:" + userId);
+            cacheEvict("org:available:" + userId);
+            cacheEvict("org:dept:" + userId);
             // Delete manager-chain with common levels
             for (int i = 1; i <= 5; i++) {
-                redis.delete("org:manager-chain:" + userId + ":" + i);
+                cacheEvict("org:manager-chain:" + userId + ":" + i);
             }
+        }
+    }
+
+    // ── 快取容錯（security-audit P1-10）───────────────────────────────
+    //
+    // 改動前每個方法第一件事就是 redis.opsForValue().get(key)，且無 try/catch。
+    // Redis 不可用時，連「直接去問組織系統」的退路都走不到 ——
+    // 所有 assignee 解析在讀快取那一行就爆，於是任務建立整批失敗。
+    //
+    // 也就是說快取層變成了比被快取的系統更關鍵的單點。快取的用途是加速，
+    // 它掛掉應該退化成「每次都問來源」，而不是讓整個功能不可用。
+
+    /** 讀快取；任何 Redis 故障都視為 cache miss。 */
+    private String cacheGet(String key) {
+        try {
+            return redis.opsForValue().get(key);
+        } catch (Exception e) {
+            log.warn("讀取快取失敗，退化為直接查詢來源（key={}）: {}", key, e.toString());
+            return null;
+        }
+    }
+
+    /** 寫快取；失敗只記錄，不影響已取得的正確結果。 */
+    private void cachePut(String key, String value, Duration ttl) {
+        try {
+            redis.opsForValue().set(key, value, ttl);
+        } catch (Exception e) {
+            log.warn("寫入快取失敗，本次結果仍然有效（key={}）: {}", key, e.toString());
+        }
+    }
+
+    /** 刪快取；失敗只記錄。失效失敗會讓舊值活到 TTL 到期，但不應讓請求失敗。 */
+    private void cacheEvict(String key) {
+        try {
+            redis.delete(key);
+        } catch (Exception e) {
+            log.warn("清除快取失敗（key={}）: {}", key, e.toString());
         }
     }
 }

@@ -1,6 +1,8 @@
 package com.bpm.core.service;
 
 import com.bpm.core.client.PermRestClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -9,6 +11,8 @@ import java.util.List;
 
 @Service("permService")
 public class BpmPermissionService {
+
+    private static final Logger log = LoggerFactory.getLogger(BpmPermissionService.class);
 
     private final PermRestClient permRestClient;
     private final StringRedisTemplate redis;
@@ -22,22 +26,22 @@ public class BpmPermissionService {
 
     public List<String> getUsersByPermission(String permCode) {
         String key = "perm:users:" + permCode;
-        String cached = redis.opsForValue().get(key);
+        String cached = cacheGet(key);
         if (cached != null) return List.of(cached.split(","));
         List<String> users = permRestClient.getUsersByPermission(permCode);
         if (users != null && !users.isEmpty()) {
-            redis.opsForValue().set(key, String.join(",", users), Duration.ofMinutes(5));
+            cachePut(key, String.join(",", users), Duration.ofMinutes(5));
         }
         return users;
     }
 
     public List<String> getUsersByPermissionAndDept(String permCode, String deptId) {
         String key = "perm:users:" + permCode + ":" + deptId;
-        String cached = redis.opsForValue().get(key);
+        String cached = cacheGet(key);
         if (cached != null) return List.of(cached.split(","));
         List<String> users = permRestClient.getUsersByPermissionAndDept(permCode, deptId);
         if (users != null && !users.isEmpty()) {
-            redis.opsForValue().set(key, String.join(",", users), Duration.ofMinutes(10));
+            cachePut(key, String.join(",", users), Duration.ofMinutes(10));
         }
         return users;
     }
@@ -71,13 +75,13 @@ public class BpmPermissionService {
     /** 取使用者的權限清單（快取），冷熱路徑回傳相同的資料結構。 */
     private List<String> userPermissions(String userId) {
         String key = "perm:user:" + userId;
-        String cached = redis.opsForValue().get(key);
+        String cached = cacheGet(key);
         if (cached != null) return splitCsv(cached);
 
         List<String> perms = permRestClient.getUserPermissions(userId);
         if (perms == null) return List.of();
         // 空清單也要快取，否則「沒有權限」的使用者每次都打外部系統。
-        redis.opsForValue().set(key, String.join(",", perms), Duration.ofMinutes(5));
+        cachePut(key, String.join(",", perms), Duration.ofMinutes(5));
         return perms;
     }
 
@@ -125,15 +129,61 @@ public class BpmPermissionService {
 
     public void invalidateCache(List<String> userIds, List<String> permCodes) {
         if (userIds != null) {
-            userIds.forEach(uid -> redis.delete("perm:user:" + uid));
+            userIds.forEach(uid -> cacheEvict("perm:user:" + uid));
         }
         if (permCodes != null) {
             permCodes.forEach(code -> {
-                redis.delete("perm:users:" + code);
-                // Also delete dept-scoped keys via pattern
-                var keys = redis.keys("perm:users:" + code + ":*");
-                if (keys != null) redis.delete(keys);
+                cacheEvict("perm:users:" + code);
+                // Also delete dept-scoped keys via pattern.
+                //
+                // ⚠️ KEYS 會掃整個 keyspace 並阻塞 Redis，production 隱憂
+                // （CLAUDE.md 已知技術債 #7 / backlog）。此處先包上容錯 ——
+                // 失效失敗只會讓舊值活到 TTL 到期（5/10 分鐘），
+                // 不應該讓呼叫端的請求失敗。改用 SCAN 是另一個題目。
+                try {
+                    var keys = redis.keys("perm:users:" + code + ":*");
+                    if (keys != null && !keys.isEmpty()) redis.delete(keys);
+                } catch (Exception e) {
+                    log.warn("清除部門層級權限快取失敗（code={}）: {}", code, e.toString());
+                }
             });
+        }
+    }
+
+    // ── 快取容錯（security-audit P1-10）───────────────────────────────
+    //
+    // 改動前每個方法第一件事就是 redis.opsForValue().get(key)，且無 try/catch。
+    // Redis 不可用時，連「直接去問組織系統」的退路都走不到 ——
+    // 所有 assignee 解析在讀快取那一行就爆，於是任務建立整批失敗。
+    //
+    // 也就是說快取層變成了比被快取的系統更關鍵的單點。快取的用途是加速，
+    // 它掛掉應該退化成「每次都問來源」，而不是讓整個功能不可用。
+
+    /** 讀快取；任何 Redis 故障都視為 cache miss。 */
+    private String cacheGet(String key) {
+        try {
+            return redis.opsForValue().get(key);
+        } catch (Exception e) {
+            log.warn("讀取快取失敗，退化為直接查詢來源（key={}）: {}", key, e.toString());
+            return null;
+        }
+    }
+
+    /** 寫快取；失敗只記錄，不影響已取得的正確結果。 */
+    private void cachePut(String key, String value, Duration ttl) {
+        try {
+            redis.opsForValue().set(key, value, ttl);
+        } catch (Exception e) {
+            log.warn("寫入快取失敗，本次結果仍然有效（key={}）: {}", key, e.toString());
+        }
+    }
+
+    /** 刪快取；失敗只記錄。失效失敗會讓舊值活到 TTL 到期，但不應讓請求失敗。 */
+    private void cacheEvict(String key) {
+        try {
+            redis.delete(key);
+        } catch (Exception e) {
+            log.warn("清除快取失敗（key={}）: {}", key, e.toString());
         }
     }
 }

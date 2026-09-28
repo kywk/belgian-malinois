@@ -87,8 +87,20 @@ bpm:
   webhook:
     hmac-secret: bpm-webhook-secret
   external:
+    # ⚠️ 這兩個 URL 指向 bpm-core 自己（MockOrgController / MockPermController）。
+    # 也就是容器內 bpm-core 會對自己發同步 HTTP，而且是在 taskService.complete()
+    # 的 DB 交易之內 —— 每次任務建立占用 2 個 Tomcat 執行緒。
+    # 執行緒池飽和時會自我死鎖（security-audit P1-10）。
+    #
+    # 逾時讓死鎖至少會自行解開，但不能消除它。真正的解法是讓 OrgService／
+    # BpmPermissionService 在 mock 階段直接呼叫 in-process 的 bean，
+    # 而不是繞一圈 HTTP —— 那是獨立的重構，尚未施作。
     org-service-url: http://localhost:8080/mock/org
     perm-service-url: http://localhost:8080/mock/perm
+    # 刻意設得短：這些呼叫在簽核的同步路徑上，使用者正在等待。
+    # 寧可快速失敗也不要把執行緒與 DB 交易一起卡住。
+    connect-timeout-ms: 2000
+    read-timeout-ms: 3000
 
 management:
   endpoints:
