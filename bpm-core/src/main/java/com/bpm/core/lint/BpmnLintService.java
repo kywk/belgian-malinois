@@ -3,8 +3,8 @@ package com.bpm.core.lint;
 import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.*;
 import org.springframework.beans.factory.annotation.Value;
+import com.bpm.core.form.service.FormService;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
 
 import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLStreamReader;
@@ -20,10 +20,10 @@ public class BpmnLintService {
     private static final Set<String> DEFAULT_NAMES = Set.of(
             "Task", "Task 1", "Task 2", "Task 3", "");
 
-    private final RestClient formClient;
+    private final FormService formService;
 
-    public BpmnLintService(@Value("${bpm.form-service-url:http://localhost:8081}") String formServiceUrl) {
-        this.formClient = RestClient.builder().baseUrl(formServiceUrl).build();
+    public BpmnLintService(FormService formService) {
+        this.formService = formService;
     }
 
     public LintResult lint(String xml) {
@@ -86,12 +86,17 @@ public class BpmnLintService {
         }
 
         // Rule c: if formKey is not external:, check form exists
+        //
+        // Stage 3（ADR-001 §2）：改為 in-process 查詢。改動前是跨服務同步 HTTP
+        // 且 catch 所有例外都當成「表單不存在」—— 於是 form-service 短暫不可用
+        // 時，一支完全正確的 BPMN 會被 lint 判為「表單定義不存在」而部署失敗，
+        // 錯誤訊息還指向不存在的問題。in-process 之後「查不到」只會是真的查不到。
         if (formKey != null && !formKey.startsWith("external:") && !isBlank(formKey)) {
             try {
-                formClient.get().uri("/api/forms/{formKey}", formKey).retrieve().toBodilessEntity();
+                formService.getSchema(formKey, null);
             } catch (Exception e) {
                 errors.add(new LintError(ut.getId(), ut.getName(), "formkey-exists",
-                        "表單定義 '" + formKey + "' 不存在於 Form Service", "error"));
+                        "表單定義 '" + formKey + "' 不存在或尚未發布", "error"));
             }
         }
 

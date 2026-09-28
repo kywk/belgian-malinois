@@ -3,7 +3,9 @@
 # 使用方式：./scripts/acceptance-test.sh [BPM_URL] [FORM_URL]
 
 BPM_URL="${1:-http://localhost:8080}"
-FORM_URL="${2:-http://localhost:8081}"
+# Stage 3（ADR-001）：form-service 已併入 bpm-core，
+# 表單 API 由同一個服務提供，因此預設與 BPM_URL 相同。
+FORM_URL="${2:-http://localhost:8080}"
 
 PASS=0; FAIL=0
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; NC='\033[0m'

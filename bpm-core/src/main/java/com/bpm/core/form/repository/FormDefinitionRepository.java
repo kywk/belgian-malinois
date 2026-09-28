@@ -1,6 +1,6 @@
-package com.bpm.form.repository;
+package com.bpm.core.form.repository;
 
-import com.bpm.form.model.FormDefinition;
+import com.bpm.core.form.model.FormDefinition;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;

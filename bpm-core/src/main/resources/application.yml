@@ -14,6 +14,13 @@ spring:
       username: sa
       password: BpmDev@2026!
       driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    # 第三個 DataSource（Stage 3 / ADR-001）。form-service 併入 bpm-core，
+    # 但資料模型保持分離 —— bpm_form_db 仍是獨立的資料庫。
+    form:
+      url: jdbc:sqlserver://localhost:1433;databaseName=bpm_form_db;encrypt=false;trustServerCertificate=true
+      username: sa
+      password: BpmDev@2026!
+      driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
   jpa:
     hibernate:
       # Flyway 接手 schema 之後這裡必須是 none。
@@ -120,11 +127,11 @@ spring:
     url: jdbc:sqlserver://mssql:1433;databaseName=bpm_core_db;encrypt=false;trustServerCertificate=true
     audit:
       url: jdbc:sqlserver://mssql:1433;databaseName=bpm_audit_db;encrypt=false;trustServerCertificate=true
+    form:
+      url: jdbc:sqlserver://mssql:1433;databaseName=bpm_form_db;encrypt=false;trustServerCertificate=true
   rabbitmq:
     host: rabbitmq
   data:
     redis:
       host: redis
 
-bpm:
-  form-service-url: http://form-service:8081

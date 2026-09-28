@@ -63,6 +63,10 @@ class DataSourceBindingTest extends IntegrationTestBase {
     private DataSource auditDataSource;
 
     @Autowired
+    @Qualifier("formDataSource")
+    private DataSource formDataSource;
+
+    @Autowired
     @Qualifier("primaryTransactionManager")
     private PlatformTransactionManager primaryTx;
 
@@ -71,10 +75,17 @@ class DataSourceBindingTest extends IntegrationTestBase {
     private PlatformTransactionManager auditTx;
 
     @Autowired
+    @Qualifier("formTransactionManager")
+    private PlatformTransactionManager formTx;
+
+    @Autowired
     private DocumentRequestRepository docRepo;
 
     @Autowired
     private AuditLogRepository auditLogRepo;
+
+    @Autowired
+    private com.bpm.core.form.repository.FormDefinitionRepository formDefRepo;
 
     private static String databaseOf(DataSource ds) throws Exception {
         try (Connection c = ds.getConnection();
@@ -95,18 +106,51 @@ class DataSourceBindingTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("兩個 DataSource 必須指向不同且正確的資料庫")
+    @DisplayName("三個 DataSource 必須指向不同且正確的資料庫")
     void dataSourcesPointAtTheirOwnDatabases() throws Exception {
         assertThat(databaseOf(primaryDataSource)).isEqualTo("bpm_core_db");
         assertThat(databaseOf(auditDataSource)).isEqualTo("bpm_audit_db");
+        // Stage 3：form 是第三個 persistence unit，資料模型仍分離（ADR-001）
+        assertThat(databaseOf(formDataSource)).isEqualTo("bpm_form_db");
     }
 
     @Test
-    @DisplayName("兩個交易管理器必須是不同實例（綁到同一個就是 cecdbe4）")
+    @DisplayName("三個交易管理器必須互不相同（綁到同一個就是 cecdbe4）")
     void transactionManagersAreDistinct() {
         assertThat(auditTx)
                 .as("稽核與主資料庫共用同一個交易管理器時，稽核寫入會靜默不落地")
                 .isNotSameAs(primaryTx);
+        assertThat(formTx)
+                .as("表單與主資料庫共用交易管理器時，表單寫入會靜默不落地")
+                .isNotSameAs(primaryTx);
+        assertThat(formTx).isNotSameAs(auditTx);
+    }
+
+    @Test
+    @DisplayName("表單 repository 必須寫進 bpm_form_db（Stage 3 新增的第三個 unit）")
+    void formRepositoryWritesToFormDatabase() throws Exception {
+        String key = "binding-" + UUID.randomUUID().toString().substring(0, 8);
+
+        new TransactionTemplate(formTx).executeWithoutResult(s -> {
+            var d = new com.bpm.core.form.model.FormDefinition();
+            d.setFormKey(key);
+            d.setName("綁定測試表單");
+            d.setVersion(1);
+            d.setStatus("draft");
+            d.setSchemaJson("{}");
+            formDefRepo.save(d);
+        });
+
+        assertThat(countIn(formDataSource,
+                "SELECT COUNT(*) FROM bpm_form_definition WHERE form_key = '" + key + "'"))
+                .as("資料列必須真的出現在 bpm_form_db")
+                .isEqualTo(1);
+        // 反向確認：表單的表不該出現在另外兩個 DB
+        assertThat(countIn(primaryDataSource,
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
+                        + "WHERE TABLE_NAME = 'bpm_form_definition'"))
+                .as("bpm_core_db 不該有表單的表 —— 若有，代表 migration 套錯 DataSource")
+                .isZero();
     }
 
     @Test
@@ -169,6 +213,12 @@ class DataSourceBindingTest extends IntegrationTestBase {
                 "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
                         + "WHERE TABLE_NAME LIKE 'bpm[_]%' AND TABLE_NAME <> 'bpm_audit_log'"))
                 .as("稽核 DB 只該有 bpm_audit_log")
+                .isZero();
+        assertThat(countIn(formDataSource,
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
+                        + "WHERE TABLE_NAME LIKE 'ACT[_]%' OR TABLE_NAME LIKE 'FLW[_]%' "
+                        + "OR TABLE_NAME = 'bpm_audit_log'"))
+                .as("表單 DB 只該有表單的表")
                 .isZero();
     }
 }

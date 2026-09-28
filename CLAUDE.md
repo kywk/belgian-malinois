@@ -12,18 +12,20 @@
 ## 架構
 
 ```
-Vue 3 SPA ──> Nginx (:80) ──┬─> bpm-core     :8080   (Flowable 6.8.1 + 稽核)
-                            └─> form-service :8081
+Vue 3 SPA ──> Nginx (:80) ──> bpm-core :8080   (Flowable 6.8.1 + 表單 + 稽核)
               RabbitMQ (5672/15672) · Redis (6379) · MSSQL 2022 (1433)
 ```
 
 | 模組 | 說明 | DB |
 |---|---|---|
-| `bpm-core/` | Spring Boot 3.5.16 ⚠️（3.5 線已 EOL，見下）/ Java 21，內嵌 Flowable。流程、任務、附屬簽、附件、公文編號、Webhook、通知、BPMN Lint、外部系統 API、稽核 | `bpm_core_db` + `bpm_audit_db`（雙 DataSource） |
-| `form-service/` | Spring Boot 3.5.16 / 表單 schema 註冊表與表單資料。**預計併入 bpm-core**（ADR-001） | `bpm_form_db` |
+| `bpm-core/` | Spring Boot 3.5.16 ⚠️（3.5 線已 EOL，見下）/ Java 21，內嵌 Flowable。流程、任務、附屬簽、附件、公文編號、Webhook、通知、BPMN Lint、外部系統 API、**表單 schema 與表單資料**、稽核 | `bpm_core_db` + `bpm_audit_db` + `bpm_form_db`（**三個 DataSource**） |
 | `bpm-frontend/` | Vue 3.4 + Vite 5 + Element Plus + Pinia，bpmn-js 17 編輯器、拖拉式表單設計器 | — |
 
-Nginx 路由（`infra/nginx/nginx.conf`）：`^~ /api/forms` 與 `^~ /api/form-data` → form-service，其餘 `/api/` → bpm-core，`/` → SPA。
+Nginx 路由（`infra/nginx/nginx.conf`）：`/api/` → bpm-core，`/` → SPA。
+
+⚠️ **form-service 已於 2026-09-28 併入 bpm-core**（Stage 3 / ADR-001）。合併的是**部署單元**，不是**資料模型** —— `bpm_form_db` 仍是獨立資料庫，表單程式碼在 `com.bpm.core.form.*`。
+
+⚠️ **三個 DataSource 的注入點一律要寫 `@Qualifier`**。`primaryEntityManagerFactory` 帶 `@Primary`，而依型別注入時 `@Primary` 的優先序**高於「參數名稱剛好相同」**。少寫一個 qualifier，該 persistence unit 的寫入就會**靜默不落地**（沒有例外、沒有錯誤日誌、commit 還「成功」）—— 這正是 commit `cecdbe4` 造成稽核長期一筆都沒寫的原因。`DataSourceBindingTest` 會抓這件事（已驗證移除 qualifier 後它真的會失敗）。
 
 ## 待開工計畫
 
@@ -43,6 +45,8 @@ Nginx 路由（`infra/nginx/nginx.conf`）：`^~ /api/forms` 與 `^~ /api/form-d
 
 0. ⚠️ **Spring Boot 3.5 已於 2026-06-30 結束 OSS 支援**。已升到該線最後一個 OSS 版本 **3.5.16**（2026-09-28），此後新 CVE 不會再有 OSS 修補 —— 這是止血，不是解決。升級到 Boot 4 **會強制 Flowable 6.8.1 → 8.0.x 跨兩個主版本**（Flowable 7.2.0 在 Boot 4 上無法運作）。**不要擅自 bump 到 4.x** —— 路徑有中繼點設計（先在 Boot 3.5.16 上完成 Flowable 6→7），見升級計畫。
 1. **稽核已併入 bpm-core**（2026-04-24，`docs/history/2026-04-24-architecture-refactor/summary.md`，commit `a955a06`）。稽核 API 在 bpm-core 的 `/api/audit-logs`，資料仍在獨立的 `bpm_audit_db`。原 `audit-log-service/` 模組目錄已於 2026-09-28 刪除。`docs/history/**` 中仍提及 :8082 的內容屬歷史紀錄，**不要修改**。
+
+   **form-service 亦已於 2026-09-28 併入**（同樣的模式：合併部署單元、保留獨立 DB）。`docs/history/**` 與部分計畫文件仍提及 :8081，屬歷史紀錄。
 2. **表單欄位 `id` == Flowable 流程變數名**（spec §8.5）。這是貫穿前後端的關鍵約定，改表單 schema 前務必確認。
 3. **退回 vs 駁回**靠流程變數區分：`approved=false` 為退回；必須再加 `rejected=true` 才是終止。
 4. **表單版本鎖定**：`FormVersionLocker` 在流程啟動時把 `_formVersions`（formKey→version）寫入流程變數，進行中案件不受表單改版影響。`TaskController.toMap()` 會回傳 `formVersion`。
@@ -59,8 +63,13 @@ Nginx 路由（`infra/nginx/nginx.conf`）：`^~ /api/forms` 與 `^~ /api/form-d
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 ./scripts/seed-data.sh        # 部署兩支 BPMN + 驗證 4 個 form key
-./scripts/acceptance-test.sh  # 唯一的自動化測試（curl 黑箱，需要 python3）
+./scripts/acceptance-test.sh  # curl 黑箱驗收（需要 python3）
+
+# 自動化測試（Testcontainers：真實 MSSQL / RabbitMQ / Redis，不用 H2）
+cd bpm-core && mvn verify
 ```
+
+兩支腳本的 `FORM_URL` 預設已與 `BPM_URL` 相同（form-service 併入後表單 API 在同一個服務），不帶參數直接跑即可。
 
 前端開發：`cd bpm-frontend && npm run dev`（:3000，proxy `/api` → :80）。
 
@@ -88,7 +97,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 ## 已知技術債（勿當作 bug 重複回報，修改前先確認範圍）
 
 1. **無應用層認證授權**。所有 `/api/**` 全開放，含 `/api/admin/**`、`/api/internal/cache-invalidate`、`/api/audit-logs/integrity-check`；身分靠請求參數自報（`assignee`、`operatorId`、`createdBy`…）。前端 `Bearer {userId}` 為假 token。router 已有 `beforeEach` 角色守衛（2026-09-28），但那只是 UX 層防線，後端仍全開放。對應 backlog #62 / R-01。
-2. **零單元測試**。兩個 Java 模組皆無 `src/test`（但 pom 已宣告 `spring-boot-starter-test`），前端無測試框架 → CI 的 `mvn verify` 與分支保護的 status check 實質為空門。對應 backlog #63/#64 與 R-06 —— **升級與整併的前置條件**。
+2. ~~**零單元測試**~~ —— **已於 2026-09-28 建立測試網**（Stage 2）。bpm-core 有 `src/test`，以 Testcontainers 起真實 MSSQL／RabbitMQ／Redis（**刻意不用 H2**：`DATETIMEOFFSET`、`NVARCHAR(MAX)`、`IDENTITY`、`MERGE`、`INSTEAD OF` 觸發器都無法在 H2 重現，而稽核 hash chain 與表單版本鎖定正好踩在這些行為上）。`mvn verify` 會實際執行測試，CI 的 status check 不再是空門。**前端仍無測試框架**（對應 backlog #64）。
 3. **CI/CD 雙軌並行**：GitHub Actions 與 GitLab CI 同時維護，registry 不一致（GHCR vs `$CI_REGISTRY`），而 `docker-compose.prod.yml` 只認 GHCR 命名。所有 deploy job 仍是 `echo` 佔位。
 4. **`bpmn-definitions/` 目錄不存在**，兩邊的 BPMN deploy job 實質 no-op；env 替換用 shell 假 YAML parser，遇到 `http://` 的冒號會解析錯誤。
 5. **密碼治理（部分已修）**：`infra/mssql/entrypoint.sh` 的密碼不一致已於 2026-09-28 修復（改讀 `MSSQL_SA_PASSWORD`，未設即啟動失敗）。**尚未處理**：開發密碼仍散落於兩個 `application.yml` 與 `docker-compose.yml`；`bpm.webhook.hmac-secret` 預設字面值 `bpm-webhook-secret`。見 backlog R-04。

@@ -1,6 +1,7 @@
-package com.bpm.form;
+package com.bpm.core.form;
 
 import org.junit.jupiter.api.DisplayName;
+import com.bpm.core.support.IntegrationTestBase;
 import org.junit.jupiter.api.Test;
 
 import java.sql.ResultSet;
@@ -25,13 +26,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>這類錯誤無法用 H2 或單元測試抓到，必須對真實 MSSQL 跑真實的 seed 路徑。
  */
-class FormSeedEncodingTest extends FormServiceIntegrationTestBase {
+class FormSeedEncodingTest extends IntegrationTestBase {
 
     @Test
     @DisplayName("seed 的表單名稱必須保留中文，不能變成問號")
     void seededFormNamesKeepChinese() {
         List<String> names = new ArrayList<>();
-        withConnection(c -> {
+        withFormConnection(c -> {
             // 只查這 4 個 seed formKey，不查全表。
             // 容器是 static 且由所有測試共用（見 FormServiceIntegrationTestBase），
             // 其他測試會新增表單 —— 對全表計數會讓本測試隨執行順序而壞掉。
@@ -60,7 +61,7 @@ class FormSeedEncodingTest extends FormServiceIntegrationTestBase {
     @Test
     @DisplayName("schema_json 的欄位 label 也必須保留中文")
     void seededSchemaJsonKeepsChinese() {
-        withConnection(c -> {
+        withFormConnection(c -> {
             try (Statement st = c.createStatement();
                  ResultSet rs = st.executeQuery(
                          "SELECT schema_json FROM bpm_form_definition WHERE form_key = 'leave-request'")) {

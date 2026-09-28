@@ -8,9 +8,8 @@ import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import com.bpm.core.form.service.FormService;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
 
 import java.io.Serializable;
 import java.util.HashMap;
@@ -29,16 +28,13 @@ public class FormVersionLocker {
 
     private final RepositoryService repositoryService;
     private final RuntimeService runtimeService;
-    private final RestClient formClient;
-    /** 保留原始 URL 供錯誤訊息使用（RestClient 建立後無法取回 baseUrl）。 */
-    private final String formServiceUrl;
+    private final FormService formService;
 
     public FormVersionLocker(RepositoryService repositoryService, RuntimeService runtimeService,
-                             @Value("${bpm.form-service-url:http://localhost:8081}") String formServiceUrl) {
+                             FormService formService) {
         this.repositoryService = repositoryService;
         this.runtimeService = runtimeService;
-        this.formServiceUrl = formServiceUrl;
-        this.formClient = RestClient.builder().baseUrl(formServiceUrl).build();
+        this.formService = formService;
     }
 
     /**
@@ -81,28 +77,43 @@ public class FormVersionLocker {
         if (formKeys.size() > versions.size()) {
             log.warn("流程實例 {} 的表單版本鎖定不完整：BPMN 中有 {} 個 formKey，"
                             + "但只解析到 {} 個版本。未鎖定的表單將在案件進行中隨改版而變動。"
-                            + "請確認 form-service ({}) 可連線且這些 formKey 都有已發布版本。",
-                    processInstanceId, formKeys.size(), versions.size(), formServiceUrl);
+                            + "請確認這些 formKey 都有已發布版本。",
+                    processInstanceId, formKeys.size(), versions.size());
         }
     }
 
+    /**
+     * 解析 formKey 的已發布版本號。
+     *
+     * <p><b>Stage 3（ADR-001 §2）消除了一個靜默失效。</b>改動前這裡是同步 HTTP：
+     *
+     * <pre>
+     *   formClient.get().uri("/api/forms/{formKey}", formKey)...   // 跨服務呼叫
+     *   catch (Exception e) { return null; }                       // 例外被吞掉
+     * </pre>
+     *
+     * <p>form-service 不可用時例外被吞掉、回傳 null，{@code versions} 保持為空，
+     * {@code lockVersions()} 的 {@code if (!versions.isEmpty())} 不成立
+     * → <b>{@code _formVersions} 完全不寫入，但流程照常啟動成功</b>。
+     * 該案件此後永遠走「最新版表單」，版本鎖定靜默失效 ——
+     * 而這正是版本鎖定要防的事。
+     *
+     * <p>而且這個呼叫發生在流程啟動的交易之內，且 URL 預設指向自己
+     * （見 P1-10 的自我死鎖）。改為 in-process 之後，這整類失敗模式消失：
+     * 沒有網路、沒有 timeout、沒有被吞掉的連線例外。
+     *
+     * <p>剩下唯一的「解析不到」情形是<b>真的沒有已發布版本</b>，
+     * 那是資料問題而非基礎設施問題，由 lockVersions() 的警告負責可觀察性。
+     */
     private Integer resolveVersion(String formKey) {
         try {
-            var resp = formClient.get().uri("/api/forms/{formKey}", formKey)
-                    .retrieve().body(Map.class);
-            if (resp == null) {
-                log.warn("form-service 對 formKey '{}' 回傳空內容，無法鎖定版本", formKey);
-                return null;
-            }
-            Object version = resp.get("version");
-            if (version instanceof Integer i) return i;
-            if (version instanceof Number n) return n.intValue();
-            log.warn("formKey '{}' 的回應缺少可用的 version 欄位（實際值: {}）", formKey, version);
-            return null;
+            var def = formService.getSchema(formKey, null);
+            return def == null ? null : def.getVersion();
         } catch (Exception e) {
-            // 刻意不重新拋出：流程啟動不應因表單服務短暫不可用而失敗。
-            // 但必須留下記錄，否則此失敗完全不可觀察。
-            log.warn("解析 formKey '{}' 的版本失敗，將不鎖定此表單版本: {}",
+            // 這裡只會是「找不到已發布版本」（ResponseStatusException 404）。
+            // 仍不重新拋出：一個 formKey 沒有發布版本不該讓整個流程無法啟動，
+            // 但 lockVersions() 會統計並警告。
+            log.warn("formKey '{}' 沒有可用的已發布版本，將不鎖定此表單版本: {}",
                     formKey, e.toString());
             return null;
         }

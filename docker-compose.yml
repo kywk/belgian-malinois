@@ -67,18 +67,6 @@ services:
       # 對 ISO 27001 的紀錄保存是直接違反。
       - bpm-uploads:/app/uploads
 
-  form-service:
-    build: ./form-service
-    ports:
-      - "8081:8081"
-    depends_on:
-      mssql:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    environment:
-      SPRING_PROFILES_ACTIVE: docker
-
   nginx:
     image: nginx:alpine
     ports:
@@ -88,7 +76,6 @@ services:
       - ./bpm-frontend/dist:/usr/share/nginx/html:ro
     depends_on:
       - bpm-core
-      - form-service
 
 volumes:
   mssql-data:

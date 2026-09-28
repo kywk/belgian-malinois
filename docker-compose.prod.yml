@@ -62,18 +62,6 @@ services:
       - bpm-uploads:/app/uploads
     restart: unless-stopped
 
-  form-service:
-    image: ghcr.io/${GITHUB_REPO}/form-service:${IMAGE_TAG:-latest}
-    depends_on:
-      mssql: { condition: service_healthy }
-      rabbitmq: { condition: service_healthy }
-    environment:
-      SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATASOURCE_PASSWORD: "${MSSQL_SA_PASSWORD}"
-      SPRING_RABBITMQ_USERNAME: "${RABBITMQ_USER}"
-      SPRING_RABBITMQ_PASSWORD: "${RABBITMQ_PASS}"
-    restart: unless-stopped
-
   nginx:
     image: nginx:alpine
     ports:
@@ -83,7 +71,6 @@ services:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - bpm-core
-      - form-service
     restart: unless-stopped
 
 volumes:

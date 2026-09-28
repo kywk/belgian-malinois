@@ -1,8 +1,9 @@
-package com.bpm.form.controller;
+package com.bpm.core.form.controller;
 
-import com.bpm.form.audit.AuditEventPublisher;
-import com.bpm.form.model.FormData;
-import com.bpm.form.service.FormService;
+import com.bpm.core.audit.AuditEventPublisher;
+import com.bpm.core.dto.AuditEvent;
+import com.bpm.core.form.model.FormData;
+import com.bpm.core.form.service.FormService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -23,8 +24,8 @@ public class FormDataController {
     @PostMapping
     public FormData submit(@RequestBody FormData data) {
         FormData saved = formService.submitData(data);
-        auditPublisher.publish("FORM_SUBMIT", data.getSubmittedBy(), data.getProcessInstanceId(),
-                Map.of("formDefinitionId", data.getFormDefinitionId(), "formDataId", saved.getId()));
+        auditPublisher.publish(new AuditEvent("FORM_SUBMIT", data.getSubmittedBy(), data.getProcessInstanceId(),
+                null, Map.of("formDefinitionId", data.getFormDefinitionId(), "formDataId", saved.getId())));
         return saved;
     }
 
@@ -36,8 +37,8 @@ public class FormDataController {
     @PutMapping("/{id}")
     public FormData update(@PathVariable String id, @RequestBody FormData data) {
         FormData saved = formService.updateData(id, data);
-        auditPublisher.publish("FORM_UPDATE", data.getSubmittedBy(), saved.getProcessInstanceId(),
-                Map.of("formDataId", id));
+        auditPublisher.publish(new AuditEvent("FORM_UPDATE", data.getSubmittedBy(), saved.getProcessInstanceId(),
+                null, Map.of("formDataId", id)));
         return saved;
     }
 }

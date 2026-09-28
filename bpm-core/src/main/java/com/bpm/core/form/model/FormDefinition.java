@@ -1,4 +1,4 @@
-package com.bpm.form.model;
+package com.bpm.core.form.model;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;

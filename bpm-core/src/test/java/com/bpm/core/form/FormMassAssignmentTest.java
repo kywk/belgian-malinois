@@ -1,15 +1,14 @@
-package com.bpm.form;
+package com.bpm.core.form;
 
-import com.bpm.form.model.FormData;
-import com.bpm.form.model.FormDefinition;
-import com.bpm.form.repository.FormDataRepository;
-import com.bpm.form.repository.FormDefinitionRepository;
+import com.bpm.core.form.model.FormData;
+import com.bpm.core.form.model.FormDefinition;
+import com.bpm.core.form.repository.FormDataRepository;
+import com.bpm.core.form.repository.FormDefinitionRepository;
 import org.junit.jupiter.api.DisplayName;
+import com.bpm.core.support.IntegrationTestBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
-import org.springframework.test.web.servlet.MockMvc;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -31,11 +30,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  *       而 submittedAt 是 {@code updatable = false} → <b>篡改無跡</b>。</li>
  * </ul>
  */
-@AutoConfigureMockMvc
-class MassAssignmentTest extends FormServiceIntegrationTestBase {
-
-    @Autowired
-    private MockMvc mockMvc;
+class FormMassAssignmentTest extends IntegrationTestBase {
 
     @Autowired
     private FormDefinitionRepository defRepo;

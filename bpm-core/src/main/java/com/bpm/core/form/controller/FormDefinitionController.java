@@ -1,8 +1,9 @@
-package com.bpm.form.controller;
+package com.bpm.core.form.controller;
 
-import com.bpm.form.audit.AuditEventPublisher;
-import com.bpm.form.model.FormDefinition;
-import com.bpm.form.service.FormService;
+import com.bpm.core.audit.AuditEventPublisher;
+import com.bpm.core.dto.AuditEvent;
+import com.bpm.core.form.model.FormDefinition;
+import com.bpm.core.form.service.FormService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.*;
@@ -103,13 +104,13 @@ public class FormDefinitionController {
      * （表單欄位 id 就是流程變數名，spec §8.5）。
      */
     private void audit(String operationType, String userId, FormDefinition def, String action) {
-        auditPublisher.publish(operationType,
+        auditPublisher.publish(new AuditEvent(operationType,
                 userId != null ? userId : "unknown",
                 null,
-                Map.of("action", action,
+                null, Map.of("action", action,
                        "formKey", def.getFormKey() != null ? def.getFormKey() : "",
                        "version", def.getVersion() != null ? def.getVersion() : 0,
                        "status", def.getStatus() != null ? def.getStatus() : "",
-                       "formDefinitionId", def.getId() != null ? def.getId() : ""));
+                       "formDefinitionId", def.getId() != null ? def.getId() : "")));
     }
 }

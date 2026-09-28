@@ -1,9 +1,9 @@
-package com.bpm.form.service;
+package com.bpm.core.form.service;
 
-import com.bpm.form.model.FormData;
-import com.bpm.form.model.FormDefinition;
-import com.bpm.form.repository.FormDataRepository;
-import com.bpm.form.repository.FormDefinitionRepository;
+import com.bpm.core.form.model.FormData;
+import com.bpm.core.form.model.FormDefinition;
+import com.bpm.core.form.repository.FormDataRepository;
+import com.bpm.core.form.repository.FormDefinitionRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.dao.DataIntegrityViolationException;

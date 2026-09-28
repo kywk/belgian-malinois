@@ -13,7 +13,6 @@
 
 ### 影響範圍
 - [ ] bpm-core
-- [ ] form-service
 - [ ] bpm-frontend
 - [ ] bpmn-definitions
 - [ ] infra / config

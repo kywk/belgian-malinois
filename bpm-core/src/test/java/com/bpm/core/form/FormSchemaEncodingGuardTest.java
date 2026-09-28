@@ -1,8 +1,9 @@
-package com.bpm.form;
+package com.bpm.core.form;
 
-import com.bpm.form.model.FormDefinition;
-import com.bpm.form.repository.FormDefinitionRepository;
+import com.bpm.core.form.model.FormDefinition;
+import com.bpm.core.form.repository.FormDefinitionRepository;
 import org.junit.jupiter.api.DisplayName;
+import com.bpm.core.support.IntegrationTestBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -20,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * DB 定序為 Latin1，VARCHAR 會靜默吃掉中文，而本模組正是第一個被發現
  * 受害的地方（4 個表單名稱全部變成 {@code ?????}）。
  */
-class SchemaEncodingGuardTest extends FormServiceIntegrationTestBase {
+class FormSchemaEncodingGuardTest extends IntegrationTestBase {
 
     /** 刻意允許保留 VARCHAR 的欄位；目前為空。加入前請註明理由。 */
     private static final Set<String> ALLOWED_VARCHAR = Set.of();
@@ -32,7 +33,7 @@ class SchemaEncodingGuardTest extends FormServiceIntegrationTestBase {
     @DisplayName("自有資料表不得留下任何 VARCHAR 欄位")
     void noVarcharColumnsRemain() {
         List<String> offenders = new ArrayList<>();
-        withConnection(c -> {
+        withFormConnection(c -> {
             try (Statement st = c.createStatement();
                  ResultSet rs = st.executeQuery(
                          "SELECT TABLE_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "

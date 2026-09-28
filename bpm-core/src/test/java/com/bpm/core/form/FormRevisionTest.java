@@ -1,13 +1,12 @@
-package com.bpm.form;
+package com.bpm.core.form;
 
-import com.bpm.form.model.FormDefinition;
-import com.bpm.form.repository.FormDefinitionRepository;
+import com.bpm.core.form.model.FormDefinition;
+import com.bpm.core.form.repository.FormDefinitionRepository;
 import org.junit.jupiter.api.DisplayName;
+import com.bpm.core.support.IntegrationTestBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
-import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 import java.util.UUID;
@@ -36,11 +35,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 兩筆 published</b>（clone 到 v2，又把來源 draft 也標 published）→
  * UI 出現重複表單；{@code findMaxVersion()} 讀寫非原子。
  */
-@AutoConfigureMockMvc
-class FormRevisionTest extends FormServiceIntegrationTestBase {
-
-    @Autowired
-    private MockMvc mockMvc;
+class FormRevisionTest extends IntegrationTestBase {
 
     @Autowired
     private FormDefinitionRepository defRepo;

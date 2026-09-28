@@ -92,6 +92,11 @@ public abstract class IntegrationTestBase {
         r.add("spring.datasource.audit.username", MSSQL::getUsername);
         r.add("spring.datasource.audit.password", MSSQL::getPassword);
 
+        // 第三個 DataSource（Stage 3：form-service 併入 bpm-core）
+        r.add("spring.datasource.form.url", () -> jdbc("bpm_form_db"));
+        r.add("spring.datasource.form.username", MSSQL::getUsername);
+        r.add("spring.datasource.form.password", MSSQL::getPassword);
+
         r.add("spring.rabbitmq.host", RABBIT::getHost);
         r.add("spring.rabbitmq.port", RABBIT::getAmqpPort);
         r.add("spring.rabbitmq.username", RABBIT::getAdminUsername);
@@ -109,6 +114,16 @@ public abstract class IntegrationTestBase {
         // 容器啟動較慢，留一行讓 CI log 看得出時間花在哪裡。
         System.out.println("[IntegrationTestBase] MSSQL=" + MSSQL.getMappedPort(1433)
                 + " RabbitMQ=" + RABBIT.getAmqpPort() + " Redis=" + REDIS.getMappedPort(6379));
+    }
+
+    /** 直接對表單 DB 執行 SQL。 */
+    protected static void withFormConnection(ConnectionConsumer work) {
+        try (Connection c = DriverManager.getConnection(
+                jdbc("bpm_form_db"), MSSQL.getUsername(), MSSQL.getPassword())) {
+            work.accept(c);
+        } catch (Exception e) {
+            throw new IllegalStateException("表單 DB 操作失敗", e);
+        }
     }
 
     /** 直接對稽核 DB 執行 SQL（測試要驗證的是「真的寫進去了」，不能只信 repository）。 */

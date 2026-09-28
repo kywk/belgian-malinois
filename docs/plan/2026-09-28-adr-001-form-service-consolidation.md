@@ -1,9 +1,40 @@
 # ADR-001：form-service 整併進 bpm-core
 
 **日期**：2026-09-28
-**狀態**：提議中（待核可）
-**決策者**：待填
+**狀態**：✅ **已實施**（2026-09-28）
+**決策者**：Bruce
 **預估**：3 人日
+
+---
+
+## 實施結果（2026-09-28）
+
+已完成。實際順序與決策時的設計一致（合併部署單元、保留 `bpm_form_db` 獨立）。
+
+**施作順序**（刻意把守衛放在最前面）：
+
+1. 先建 `DataSourceBindingTest` —— 第三個 persistence unit 會放大 `cecdbe4`
+   那類「交易綁錯 EntityManagerFactory → 寫入靜默不落地」的風險。
+   已驗證這個守衛不是空的：暫時移除 `@Qualifier` 後它立刻失敗。
+2. 建 `FormDataSourceConfig` / `FormFlywayConfig`（每個注入點都寫明 `@Qualifier`）
+3. 搬 7 個類別到 `com.bpm.core.form.*`；刪掉 4 個不需要搬的
+   （`FormServiceApplication`、以及與 bpm-core 逐字重複的
+   `JacksonAmqpConfig`／`HealthController`／`AuditEventPublisher`）
+4. `FormVersionLocker` 與 `BpmnLintService` 改為 in-process 注入 `FormService`
+   —— 這消除了本文 §2 描述的那個靜默失效
+5. 表單稽核改走 in-process publisher —— 一併消除 P1-15 的 MQ 遺失窗口
+6. `data.sql` 轉為 Flyway migration（`spring.sql.init` 只作用於主 DataSource）
+7. 刪除 form-service 模組、nginx 兩條路由、compose 服務、CI pipeline、
+   `cicd/envs/*` 的 `form.service.url`
+
+**驗證**：bpm-core **143 → 149 個測試**全過；`seed-data.sh` 與
+`acceptance-test.sh` 皆全綠（PASS 7 / FAIL 0）；表單中文完整、改版路徑正常、
+表單稽核立即落地。
+
+**行為差異（刻意記錄）**：表單 seed 從「每次啟動跑一次 MERGE」變成
+「Flyway 只執行一次」。由於原本的 MERGE 只有 `WHEN NOT MATCHED INSERT`、
+沒有 UPDATE 分支，既有列從來也不會被 `data.sql` 更新，
+因此這個差異在實務上不改變任何結果。
 
 ---
 
