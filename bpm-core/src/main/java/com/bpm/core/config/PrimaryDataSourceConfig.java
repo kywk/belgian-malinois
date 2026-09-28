@@ -1,6 +1,7 @@
 package com.bpm.core.config;
 
 import jakarta.persistence.EntityManagerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.orm.jpa.EntityManagerFactoryBuilder;
@@ -47,9 +48,12 @@ public class PrimaryDataSourceConfig {
                 .build();
     }
 
+    // 這裡目前是靠 @Primary 湊巧拿到正確的 EMF。明確寫出 qualifier，
+    // 免得日後有人移除 @Primary 時，重演稽核那個「靜默不寫入」的問題。
     @Primary
     @Bean
     public PlatformTransactionManager primaryTransactionManager(
+            @Qualifier("primaryEntityManagerFactory")
             EntityManagerFactory primaryEntityManagerFactory) {
         return new JpaTransactionManager(primaryEntityManagerFactory);
     }
