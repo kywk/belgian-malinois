@@ -6,4 +6,4 @@ ENV_PURCHASE_GROUP: purchase_dept_uat
 
 bpm.core.url: http://bpm-core-uat:8080
 form.service.url: http://form-service-uat:8081
-audit.service.url: http://audit-log-service-uat:8082
+# audit-log-service 已於 2026-04-24 併入 bpm-core，稽核 API 走 bpm.core.url

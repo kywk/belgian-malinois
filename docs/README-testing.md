@@ -39,7 +39,6 @@ chmod +x scripts/acceptance-test.sh
 | 前端 | http://localhost | Vue3 SPA |
 | bpm-core | http://localhost:8080 | BPM API |
 | form-service | http://localhost:8081 | 表單 API |
-| audit-log-service | http://localhost:8082 | 稽核 API |
 | RabbitMQ 管理介面 | http://localhost:15672 | guest/guest |
 | MailHog Web UI | http://localhost:8025 | Email mock（dev 環境） |
 
@@ -154,11 +153,11 @@ curl -X POST http://localhost:8080/api/tasks/{taskId}/comments \
 
 ### 稽核 Log
 ```bash
-# 查詢特定流程的稽核紀錄
-curl "http://localhost:8082/api/audit-logs?processInstanceId={procId}"
+# 查詢特定流程的稽核紀錄（audit-log-service 已於 2026-04-24 併入 bpm-core）
+curl "http://localhost:8080/api/audit-logs?processInstanceId={procId}"
 
 # 驗證 hash chain 完整性
-curl "http://localhost:8082/api/audit-logs/integrity-check"
+curl "http://localhost:8080/api/audit-logs/integrity-check"
 ```
 
 ---

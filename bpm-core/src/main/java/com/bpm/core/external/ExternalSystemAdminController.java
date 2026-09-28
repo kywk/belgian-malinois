@@ -82,8 +82,9 @@ public class ExternalSystemAdminController {
 
     @GetMapping("/{systemId}/usage-logs")
     public Map<String, String> usageLogs(@PathVariable String systemId) {
-        // Delegate to audit-log-service; placeholder for now
-        return Map.of("message", "Query audit-log-service with operatorSource=external_api and systemId=" + systemId);
+        // Placeholder: 稽核查詢已併入 bpm-core（2026-04-24），改指向本服務的 /api/audit-logs。
+        // 真正的實作見 docs/backend-development-backlog.md 外部系統 usage logs 項目。
+        return Map.of("message", "Query /api/audit-logs with operatorSource=external_api and systemId=" + systemId);
     }
 
     private ExternalSystem find(String systemId) {
