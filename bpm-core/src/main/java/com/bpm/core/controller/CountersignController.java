@@ -30,7 +30,23 @@ public class CountersignController {
         Task parent = taskService.createTaskQuery().taskId(taskId).singleResult();
         if (parent == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found");
 
-        String assignee = req.get("countersignUserId");
+        String assignee = req == null ? null : req.get("countersignUserId");
+
+        // ⚠️ 這個驗證必須在 saveTask 之前，順序是重點而非防禦性程式碼。
+        //
+        // 改動前沒有任何驗證：assignee 為 null 時子任務仍會在下面落地
+        // （assignee 為 null → 任務清單查不到它、沒有人看得到），
+        // 接著 Map.of("assignee", null) 拋 NPE 變成 500。
+        // 結果是父任務被「有未完成加簽子任務」的守門永遠攔住 ——
+        // 案件死鎖，只能進 DB 手動清。
+        //
+        // 前端過去正是送出 {assignee, description}（欄位名與後端不一致），
+        // 因此每一次加簽都會踩到這條路徑。
+        if (assignee == null || assignee.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "countersignUserId 為必填（注意：欄位名不是 assignee）");
+        }
+
         Task subtask = taskService.newTask();
         subtask.setParentTaskId(taskId);
         subtask.setAssignee(assignee);
@@ -38,12 +54,20 @@ public class CountersignController {
         subtask.setDescription(req.getOrDefault("message", ""));
         taskService.saveTask(subtask);
 
+        // Map.of 不接受 null 值。assignee 在上面已驗證非空，
+        // 但 subtask.getName() 仍可能為 null（parent.getName() 為 null 時），
+        // 因此回傳值改用允許 null 的 HashMap，避免同一類 NPE 再次把
+        // 成功的操作變成 500。
         auditPublisher.publish(new AuditEvent("TASK_COUNTERSIGN", assignee,
                 parent.getProcessInstanceId(), subtask.getId(),
                 Map.of("parentTaskId", taskId, "assignee", assignee)));
 
-        return Map.of("taskId", subtask.getId(), "parentTaskId", taskId,
-                      "assignee", assignee, "name", subtask.getName());
+        Map<String, Object> result = new HashMap<>();
+        result.put("taskId", subtask.getId());
+        result.put("parentTaskId", taskId);
+        result.put("assignee", assignee);
+        result.put("name", subtask.getName());
+        return result;
     }
 
     @GetMapping("/{taskId}")
