@@ -27,6 +27,14 @@ bpm:
   upload:
     dir: ./target/test-uploads
   external:
-    org-service-url: http://localhost:${local.server.port:8080}/mock/org
-    perm-service-url: http://localhost:${local.server.port:8080}/mock/perm
+    # ⚠️ org/perm 的 URL 刻意<b>不在這裡</b>設定。
+    #
+    # 這裡原本寫的是 http://localhost:${local.server.port:8080}/mock/org。
+    # webEnvironment=MOCK 下沒有 local.server.port，於是退回 8080 ——
+    # 也就是 docker-compose 上 bpm-core 容器的 port。整合測試因此打的是
+    # 另外部署的容器，測試結果不再反映原始碼。詳見 IntegrationTestBase 的註解。
+    #
+    # 現在由 IntegrationTestBase 的 @DynamicPropertySource 注入實際 port。
+    # 不留預設值：漏設就要大聲失敗，不要靜默打到別的服務。
+    mock-enabled: true
 

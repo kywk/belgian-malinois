@@ -35,8 +35,32 @@ import java.sql.Statement;
  * 三個 DB（core／audit／form）由 {@link #createDatabases()} 在容器起來後建出來，
  * 等同 {@code infra/mssql/init-databases.sql} 在 dev 環境做的事。
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
-@AutoConfigureMockMvc  // @SpringBootTest(MOCK) 本身不會建立 MockMvc bean
+/*
+ * ⚠️ 為什麼是 DEFINED_PORT 而不是 MOCK（security-audit P2-7 施作時發現）
+ * ─────────────────────────────────────────────────────────────────
+ * OrgService／BpmPermissionService 透過 HTTP 呼叫 bpm.external.org-service-url，
+ * 而測試的 mock controller 只存在於本 context 之內。MOCK 模式<b>不綁任何 port</b>，
+ * 所以那些 HTTP 呼叫必須有一個真實的 port 才打得到自己。
+ *
+ * 改動前 application-test.yml 寫的是
+ *     http://localhost:${local.server.port:8080}/mock/org
+ * MOCK 模式下 local.server.port 不存在，於是<b>退回預設值 8080</b>
+ * —— 那是 docker-compose 上 bpm-core 容器的 port。結果：整合測試打的是
+ * 另外部署的那個容器，不是自己。
+ *
+ * 危害不是「慢」或「要開 docker」，而是<b>測試結果不再反映原始碼</b>：
+ * 容器裡是舊 build 時，安全性測試會因為容器有修正而通過，即使當前原始碼是壞的。
+ * 這個問題在施作 P2-7 時被抓到 —— 把 mock 的 fail-open 預設值放回原始碼，
+ * MockFailClosedTest 竟然照樣通過，因為它驗的是容器裡那份程式碼。
+ * 容器停掉後，177 個測試有 47 個失敗，全部是這個原因。
+ *
+ * 現在的做法：測試自己挑一個空閒 port（不是寫死，避免 CI 併行衝突），
+ * 用 DEFINED_PORT 起真正的 Tomcat，並把 org/perm URL 指向那個 port。
+ * application-test.yml 裡的 :8080 預設值已移除 —— 那個預設值就是陷阱本身，
+ * 它讓「設定漏了」靜默變成「打到別人」，而不是大聲失敗。
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
+@AutoConfigureMockMvc  // DEFINED_PORT 下仍需要它才會有 MockMvc bean
 @ActiveProfiles("test")
 public abstract class IntegrationTestBase {
 
@@ -82,8 +106,36 @@ public abstract class IntegrationTestBase {
                 + ";databaseName=" + database + ";encrypt=false;trustServerCertificate=true";
     }
 
+    /**
+     * 測試專用的 servlet port。
+     *
+     * <p>在 context 啟動<b>之前</b>就選定，這樣 org/perm 的 URL 能在
+     * RestClient 建構時就靜態解析完成。用 {@code local.server.port} 不行 ——
+     * 它是在 {@code WebServerInitializedEvent} 時才寫進 Environment，
+     * 那已經晚於 singleton 建構。
+     *
+     * <p>不寫死 port 是為了避免 CI 併行時互相搶。ServerSocket(0) 到實際綁定之間
+     * 有極小的競爭窗口，但這是這類測試的標準做法。
+     */
+    private static final int SERVLET_PORT = findFreePort();
+
+    private static int findFreePort() {
+        try (var socket = new java.net.ServerSocket(0)) {
+            return socket.getLocalPort();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("找不到可用的 port 給測試用的 servlet container", e);
+        }
+    }
+
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry r) {
+        r.add("server.port", () -> SERVLET_PORT);
+
+        // 指向本 context 自己的 mock controller。
+        // ⚠️ 這裡必須是實際 port —— 見類別上方註解說明為什麼不能靠預設值。
+        r.add("bpm.external.org-service-url", () -> "http://localhost:" + SERVLET_PORT + "/mock/org");
+        r.add("bpm.external.perm-service-url", () -> "http://localhost:" + SERVLET_PORT + "/mock/perm");
+
         r.add("spring.datasource.url", () -> jdbc("bpm_core_db"));
         r.add("spring.datasource.username", MSSQL::getUsername);
         r.add("spring.datasource.password", MSSQL::getPassword);
