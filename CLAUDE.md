@@ -29,9 +29,13 @@ Nginx 路由（`infra/nginx/nginx.conf`）：`^~ /api/forms` 與 `^~ /api/form-d
 
 計畫與決策文件集中在 `docs/plan/`（索引見 `docs/plan/README.md`）。**動到框架版本、服務邊界或安全性之前先看該目錄**，不要重新規劃已經決定的事。
 
+- `docs/plan/2026-09-28-handover.md` —— ⚠️ **先讀**：`feature/tech-debt-remediation` 分支的交接，所有程式碼變更皆**未經編譯**
+- `docs/plan/2026-09-28-security-audit.md` —— 全系統安全與正確性審查（40+ 項，含一條 RCE 路徑）
 - `docs/plan/2026-09-28-springboot4-upgrade.md` —— Boot 4 + Flowable 8 分階段升級（22 人日）
 - `docs/plan/2026-09-28-adr-001-form-service-consolidation.md` —— form-service 併入 bpm-core（3 人日，提議中）
-- `docs/plan/2026-09-28-remediation-backlog.md` —— 工程品質與安全性改進 R-01 ~ R-17（26 人日）
+- `docs/plan/2026-09-28-remediation-backlog.md` —— 工程品質與安全性改進 R-01 ~ R-25
+
+部署狀態：**尚未部署，只有本機開發**。因此 Stage 2 測試網優先於 R-01 認證授權。
 
 ## 必讀的既有事實（容易踩雷）
 
@@ -63,7 +67,8 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 ## 慣例
 
 - API 一律以 `/api/` 為前綴，**絕不對外暴露 Flowable 原生 REST**。
-- 前端 `src/services/*.js` 為薄 axios 封裝；目前無共用 instance／interceptor。
+- 前端所有 API 呼叫一律走 `src/services/http.js` 的共用 axios instance（統一附身分 header、集中錯誤處理）。**不要在 view/component 直接 `import axios`**。
+- 身分的單一來源是 `src/services/session.js`；`decodeToken()` 是接上真實 JWT 的唯一縫線，mock 角色對照表 `MOCK_ROLE_MAP` 也在這裡。取使用者 id 用 `auth.userId`，不要用 `auth.token`。
 - Pinia 僅有 `stores/auth.js` 一個 store，其餘為元件本地狀態。
 - CI/CD 環境變數替換用 `cicd/envs/{dev,sit,uat,prod}.yml`（BPMN EL 群組佔位符）。
 - 分支流程：`feature/* → dev → sit → uat → main`（`cicd/BRANCH_PROTECTION.md`）。
@@ -79,12 +84,12 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 ## 已知技術債（勿當作 bug 重複回報，修改前先確認範圍）
 
-1. **無應用層認證授權**。所有 `/api/**` 全開放，含 `/api/admin/**`、`/api/internal/cache-invalidate`、`/api/audit-logs/integrity-check`；身分靠請求參數自報（`assignee`、`operatorId`、`createdBy`…）。前端 `Bearer {userId}` 為假 token；router 的 `meta.requiresRole` 沒有 `beforeEach` 守衛。對應 backlog #62。
+1. **無應用層認證授權**。所有 `/api/**` 全開放，含 `/api/admin/**`、`/api/internal/cache-invalidate`、`/api/audit-logs/integrity-check`；身分靠請求參數自報（`assignee`、`operatorId`、`createdBy`…）。前端 `Bearer {userId}` 為假 token。router 已有 `beforeEach` 角色守衛（2026-09-28），但那只是 UX 層防線，後端仍全開放。對應 backlog #62 / R-01。
 2. **零單元測試**。兩個 Java 模組皆無 `src/test`（但 pom 已宣告 `spring-boot-starter-test`），前端無測試框架 → CI 的 `mvn verify` 與分支保護的 status check 實質為空門。對應 backlog #63/#64 與 R-06 —— **升級與整併的前置條件**。
 3. **CI/CD 雙軌並行**：GitHub Actions 與 GitLab CI 同時維護，registry 不一致（GHCR vs `$CI_REGISTRY`），而 `docker-compose.prod.yml` 只認 GHCR 命名。所有 deploy job 仍是 `echo` 佔位。
 4. **`bpmn-definitions/` 目錄不存在**，兩邊的 BPMN deploy job 實質 no-op；env 替換用 shell 假 YAML parser，遇到 `http://` 的冒號會解析錯誤。
 5. **密碼治理（部分已修）**：`infra/mssql/entrypoint.sh` 的密碼不一致已於 2026-09-28 修復（改讀 `MSSQL_SA_PASSWORD`，未設即啟動失敗）。**尚未處理**：開發密碼仍散落於兩個 `application.yml` 與 `docker-compose.yml`；`bpm.webhook.hmac-secret` 預設字面值 `bpm-webhook-secret`。見 backlog R-04。
-6. **外部 API 授權用字串比對**：`allowedActions` 對 JSON 字串做 `contains()`、`verifyOwnership()` 用 `initiator.contains(systemId)` —— 皆可能誤判放行。另每次請求都寫一次 `lastUsedAt`。
+6. **外部 API 授權**：字串子串比對已於 2026-09-28 改為精確比對（R-09，commit `f12a8c2`，**未經編譯驗證**），授權判定集中在 `external/ExternalSystemPolicy.java`，擁有權改用 server 寫入的 `_externalSystemId`。仍存在的問題見 R-18 ~ R-25，其中 R-18（`/api/admin/**` 無認證）會讓 R-09 完全可被繞過。`lastUsedAt` 仍每請求寫一次 DB。
 7. **Redis 快取失效用 `KEYS` 掃描**（`perm:users:{code}:*`），production 隱憂。
 8. 文件／版控雜項（見 backlog R-11 ~ R-17）：根目錄 `backend-development-backlog.md` 與 `docs/` 那份位元完全相同（重複，易漂移）；`bpm-frontend/dist/` 被 commit 進版控；無根 README、無 ESLint/Prettier/Checkstyle/Spotless 設定；`docker-compose.prod.yml` 仍有已淘汰的 `version: '3.8'` 且未設 JVM heap 上限（backlog #50）。
 9. **潛在 bug**：`form-service/src/main/resources/data.sql` 用 snake_case 欄位名，但 `FormDefinition` 的 `@UniqueConstraint(columnNames = {"formKey","version"})` 用 camelCase —— 乾淨 DB 上需驗證實際產生的 constraint。
