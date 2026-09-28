@@ -54,13 +54,21 @@ public class ProcessController {
         result.put("status", "running");
 
         // Include currentTask info
-        Task currentTask = taskService.createTaskQuery()
-                .processInstanceId(pi.getProcessInstanceId()).singleResult();
-        if (currentTask != null) {
+        //
+        // ⚠️ 不可用 singleResult()：它在結果超過一筆時拋 FlowableException。
+        // 平行閘道或 multi-instance 會簽會產生併發任務 —— 而這一行在流程
+        // 已經成功啟動「之後」才執行，因此例外會讓使用者收到 500 並重送，
+        // 造成重複案件（security-audit P1-2）。
+        List<Task> currentTasks = taskService.createTaskQuery()
+                .processInstanceId(pi.getProcessInstanceId())
+                .orderByTaskCreateTime().asc().list();
+        if (!currentTasks.isEmpty()) {
+            Task currentTask = currentTasks.get(0);
             result.put("currentTask", Map.of(
                     "taskId", currentTask.getId(),
                     "taskName", currentTask.getName() != null ? currentTask.getName() : "",
                     "assignee", currentTask.getAssignee() != null ? currentTask.getAssignee() : ""));
+            result.put("currentTaskCount", currentTasks.size());
         }
         return result;
     }
@@ -78,12 +86,22 @@ public class ProcessController {
                     m.put("startTime", pi.getStartTime());
                     m.put("status", "running");
                     // currentTask
-                    Task task = taskService.createTaskQuery()
-                            .processInstanceId(pi.getProcessInstanceId()).singleResult();
-                    if (task != null) {
+                    //
+                    // ⚠️ 這一行在 GET /api/process-instances 的 stream 之中。
+                    // 用 singleResult() 的話，只要系統中「任何一個」案件有
+                    // 併發任務，這個端點就對「所有使用者」整體 500 ——
+                    // 而業務人員在設計器畫一個平行閘道就能觸發。
+                    List<Task> tasks = taskService.createTaskQuery()
+                            .processInstanceId(pi.getProcessInstanceId())
+                            .orderByTaskCreateTime().asc().list();
+                    if (!tasks.isEmpty()) {
+                        Task task = tasks.get(0);
                         m.put("currentTask", Map.of(
                                 "taskName", task.getName() != null ? task.getName() : "",
                                 "assignee", task.getAssignee() != null ? task.getAssignee() : ""));
+                        // 併發時只顯示其中一個會讓使用者以為案件只等一個人；
+                        // 把數量一併帶出來，讓前端至少有能力呈現「還有其他關卡」。
+                        m.put("currentTaskCount", tasks.size());
                     }
                     return m;
                 }).toList();
