@@ -177,7 +177,20 @@ Testcontainers 每次都是全新 DB，因此測試<b>驗不到「既有 schema 
 3. **Spring AMQP retry 機制從 Spring Retry 移到 Spring Framework**。本專案用的是 `spring.rabbitmq.listener.simple.retry.*` 屬性而非 `RabbitRetryTemplateCustomizer`，預期影響小，但需實測 DLQ 路由仍正常。
 4. **⚠️ 前端連動：Flowable 8 的日期屬性（如 process instance start time）改回傳 ISO 8601 UTC。**
    影響 `ApprovalTimeline.vue`、`TaskInbox.vue`、`MyApplications.vue`、`AuditLog.vue` 的時間顯示與時區。**這是唯一會外溢到前端的破壞性變更**，不要漏。
-5. 確認 Liquibase 移除不影響本專案 —— Flowable 8 把 Liquibase 從 App / CMMN / DMN / event registry 引擎移除改成手動 SQL。本專案只用 process 引擎，預期無影響，但需實測空 DB 啟動。
+5. **⚠️ 檢查 `spring.datasource.audit.*` / `.form.*` 這兩個巢狀節點是否還綁得起來。**
+   `DataSourceProperties` 的 `@ConfigurationProperties(prefix = "spring.datasource")` 預設
+   `ignoreUnknownFields = true`，所以 `audit`／`form` 這兩個 Boot 不認識的子節點目前會被靜默忽略，
+   primary 才綁得成功。這在 Boot 3 沒問題，但它依賴的是「寬鬆綁定」這個預設值。
+
+   Boot 4 若收緊綁定（或本專案哪天開啟嚴格綁定），primary 的 DataSource 會在啟動時綁定失敗。
+   **現況刻意不動**：改成 `bpm.datasource.audit.*` 需要動三個 `@ConfigurationProperties`
+   前綴、`application.yml`、`IntegrationTestBase` 的 `@DynamicPropertySource`、
+   以及 `DataSourceCredentialSourceTest` 的斷言 —— 為一個條件性風險付這個代價不划算，
+   而 Stage 5 本來就要全面實測啟動，是發現它的正確時機。
+
+   若真的失敗：把 audit／form 的前綴改到 `bpm.datasource.audit` / `bpm.datasource.form`
+   （`bpm.datasource.*` 已經是共用帳密的來源，位置上很自然），`hikari` 子節點跟著搬。
+6. 確認 Liquibase 移除不影響本專案 —— Flowable 8 把 Liquibase 從 App / CMMN / DMN / event registry 引擎移除改成手動 SQL。本專案只用 process 引擎，預期無影響，但需實測空 DB 啟動。
 
 ### Stage 6 — Jackson 2 → 3（3 人日，可延後）
 
@@ -218,6 +231,7 @@ Stage 0 與 1 已於 2026-09-28 完成，**剩餘 21 人日**。下一個開工�
 - [ ] 既有 DB 熱啟動成功（驗證向後相容，**Stage 4/5 必驗**）
 - [ ] `/api/audit-logs/integrity-check` 回報 hash chain 完整
 - [ ] 前端手動走完一次請假 + 採購流程（Stage 5 必驗，因日期格式變更）
+- [ ] 三個 DataSource 的 `hikari.*` 確實生效（`DataSourceBindingTest` 斷言 pool-name，Boot 4 的綁定重構可能影響 bean 方法上的 `@ConfigurationProperties`）
 
 ## 8. 施工時必須自行確認的事項
 

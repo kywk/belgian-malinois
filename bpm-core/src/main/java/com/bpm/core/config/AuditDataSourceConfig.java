@@ -28,9 +28,27 @@ public class AuditDataSourceConfig {
         return new DataSourceProperties();
     }
 
+    /**
+     * ⚠️ {@code @ConfigurationProperties} 指向 hikari 前綴不可省略
+     * （security-audit P2-3）。
+     *
+     * <p>{@code initializeDataSourceBuilder().build()} 只綁
+     * url／username／password／driver —— {@code hikari.*} 的設定
+     * <b>完全不生效</b>。
+     *
+     * <p>後果：三個池都跑預設 {@code maximumPoolSize=10}，而 primary 池同時要
+     * 餵 web 執行緒<b>和</b> Flowable 的 async executor → 負載一上來 job
+     * executor 會餓死 web 層。而運維在 yml 加參數會<b>靜默無效</b>，
+     * 那種問題在事故現場極難診斷 —— 設定看起來就在那裡。
+     *
+     * <p>把 {@code @ConfigurationProperties} 放在 bean 方法上，Spring 會把該前綴
+     * 綁到回傳的 {@code HikariDataSource} 上，這是 Boot 多 DataSource 的標準做法。
+     */
     @Bean
+    @ConfigurationProperties("spring.datasource.audit.hikari")
     public DataSource auditDataSource() {
-        return auditDataSourceProperties().initializeDataSourceBuilder().build();
+        return auditDataSourceProperties().initializeDataSourceBuilder()
+                .type(com.zaxxer.hikari.HikariDataSource.class).build();
     }
 
     // auditFlywayMigrator 必須先跑完 migration，EntityManagerFactory 才能對著存在的表初始化。

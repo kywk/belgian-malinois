@@ -51,7 +51,16 @@ services:
       redis: { condition: service_healthy }
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATASOURCE_PASSWORD: "${MSSQL_SA_PASSWORD}"
+      # ⚠️ 這一個變數覆蓋全部三個 DataSource（core／audit／form）。
+      #
+      # 原本這裡寫的是 SPRING_DATASOURCE_PASSWORD，那只蓋得到 primary ——
+      # audit 與 form 會沿用 application.yml 裡的 dev 密碼去連正式資料庫
+      # （security-audit P2-3）。改成 bpm.datasource.password 這個單一來源後，
+      # 「漏蓋其中一個池」在結構上就不可能發生。
+      #
+      # 新增 DataSource 時不需要回來加環境變數；但如果新的 DB 用不同帳號，
+      # 就必須明確地在這裡多注入一組，不要偷用共用的那組。
+      BPM_DATASOURCE_PASSWORD: "${MSSQL_SA_PASSWORD}"
       SPRING_RABBITMQ_USERNAME: "${RABBITMQ_USER}"
       SPRING_RABBITMQ_PASSWORD: "${RABBITMQ_PASS}"
       SPRING_DATA_REDIS_PASSWORD: "${REDIS_PASSWORD}"

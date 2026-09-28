@@ -5,22 +5,54 @@ spring:
   application:
     name: bpm-core
   datasource:
-    url: jdbc:sqlserver://localhost:1433;databaseName=bpm_core_db;encrypt=false;trustServerCertificate=true
-    username: sa
-    password: BpmDev@2026!
+    # 三個 DataSource 的 host／帳密都指向 bpm.datasource.*（見檔案末端），
+    # 因為它們是同一個 MSSQL 實例上的同一個帳號。
+    #
+    # ⚠️ 不要把帳密展開回這裡各寫一份（security-audit P2-3）。
+    # 原本三處各自寫死 password，而 prod compose 只注入
+    # SPRING_DATASOURCE_PASSWORD —— 只蓋掉 primary，audit 與 form
+    # 會拿 dev 密碼去連 production DB。收斂成單一來源之後，
+    # 「漏蓋其中一個」這個失誤就不可能發生了。
+    url: jdbc:sqlserver://${bpm.datasource.host};databaseName=bpm_core_db;encrypt=false;trustServerCertificate=true
+    username: ${bpm.datasource.username}
+    password: ${bpm.datasource.password}
     driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    # ⚠️ hikari.* 只有在 DataSource bean 上標了
+    # @ConfigurationProperties("spring.datasource.hikari") 才會生效；
+    # initializeDataSourceBuilder().build() 本身只綁 url/username/password/driver。
+    # 見 PrimaryDataSourceConfig#primaryDataSource 的註解。
+    hikari:
+      # primary 池同時餵 web 執行緒和 Flowable async executor，
+      # 所以比另外兩個大。pool-name 是為了讓三個池在 log 裡可辨識
+      # —— 預設的 HikariPool-1/2/3 編號依初始化順序而定，排查時分不出誰是誰。
+      pool-name: bpm-core-pool
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 10000
     audit:
-      url: jdbc:sqlserver://localhost:1433;databaseName=bpm_audit_db;encrypt=false;trustServerCertificate=true
-      username: sa
-      password: BpmDev@2026!
+      url: jdbc:sqlserver://${bpm.datasource.host};databaseName=bpm_audit_db;encrypt=false;trustServerCertificate=true
+      username: ${bpm.datasource.username}
+      password: ${bpm.datasource.password}
       driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+      hikari:
+        # 稽核是 write-only 且交易極短（append 一列就提交），不需要大池。
+        pool-name: bpm-audit-pool
+        maximum-pool-size: 10
+        minimum-idle: 2
+        connection-timeout: 10000
     # 第三個 DataSource（Stage 3 / ADR-001）。form-service 併入 bpm-core，
     # 但資料模型保持分離 —— bpm_form_db 仍是獨立的資料庫。
     form:
-      url: jdbc:sqlserver://localhost:1433;databaseName=bpm_form_db;encrypt=false;trustServerCertificate=true
-      username: sa
-      password: BpmDev@2026!
+      url: jdbc:sqlserver://${bpm.datasource.host};databaseName=bpm_form_db;encrypt=false;trustServerCertificate=true
+      username: ${bpm.datasource.username}
+      password: ${bpm.datasource.password}
       driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+      hikari:
+        # 表單定義讀多寫少且有快取。
+        pool-name: bpm-form-pool
+        maximum-pool-size: 10
+        minimum-idle: 2
+        connection-timeout: 10000
   jpa:
     hibernate:
       # Flyway 接手 schema 之後這裡必須是 none。
@@ -88,6 +120,15 @@ flowable:
   async-executor-activate: true
 
 bpm:
+  # 三個 DataSource 共用的連線來源（security-audit P2-3）。
+  # 三個 DB 在同一個 MSSQL 實例上、用同一個帳號，所以收斂成一組屬性；
+  # prod 只要注入 BPM_DATASOURCE_PASSWORD 一個環境變數就全部覆蓋到，
+  # 不會再出現「漏蓋 audit／form」的部署缺陷。
+  datasource:
+    host: localhost:1433
+    username: sa
+    # dev 預設值。prod 由 BPM_DATASOURCE_PASSWORD 覆蓋（見 docker-compose.prod.yml）。
+    password: BpmDev@2026!
   upload:
     dir: ./uploads
   bpmn-definitions-dir: ./bpmn-definitions
@@ -123,15 +164,16 @@ spring:
   config:
     activate:
       on-profile: docker
-  datasource:
-    url: jdbc:sqlserver://mssql:1433;databaseName=bpm_core_db;encrypt=false;trustServerCertificate=true
-    audit:
-      url: jdbc:sqlserver://mssql:1433;databaseName=bpm_audit_db;encrypt=false;trustServerCertificate=true
-    form:
-      url: jdbc:sqlserver://mssql:1433;databaseName=bpm_form_db;encrypt=false;trustServerCertificate=true
+  # datasource 的 url 不用在這裡重寫三份 —— 只要換 host 就好，
+  # databaseName 與連線參數都沿用 default profile。
   rabbitmq:
     host: rabbitmq
   data:
     redis:
       host: redis
 
+
+bpm:
+  datasource:
+    # docker profile 唯一需要換的東西：MSSQL 的位置。
+    host: mssql:1433

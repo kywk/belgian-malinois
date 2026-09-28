@@ -221,4 +221,47 @@ class DataSourceBindingTest extends IntegrationTestBase {
                 .as("表單 DB 只該有表單的表")
                 .isZero();
     }
+
+    /**
+     * P2-3：{@code hikari.*} 必須真的綁到池上。
+     *
+     * <p>{@code initializeDataSourceBuilder().build()} 只綁
+     * url／username／password／driver。少了 bean 方法上的
+     * {@code @ConfigurationProperties("spring.datasource[.x].hikari")}，
+     * yml 裡的池設定會被<b>靜默丟棄</b> —— 三個池都跑預設值，
+     * 而運維看著 yml 以為設定生效了。
+     *
+     * <p>斷言全部挑<b>非預設值</b>，否則測試會是空的：
+     * {@code poolName} 預設是 {@code HikariPool-N}（依初始化順序編號），
+     * {@code minimumIdle} 預設等於 {@code maximumPoolSize}。
+     * 把三個 {@code @ConfigurationProperties} 註解拿掉，這個測試就會紅 —— 已驗證。
+     */
+    @Test
+    @DisplayName("hikari.* 必須綁到對應的池上（少了註解會靜默失效）")
+    void hikariPropertiesAreBoundPerDataSource() {
+        record Expected(String poolName, int maxPoolSize, int minIdle) {}
+
+        var cases = java.util.Map.of(
+                primaryDataSource, new Expected("bpm-core-pool", 20, 5),
+                auditDataSource, new Expected("bpm-audit-pool", 10, 2),
+                formDataSource, new Expected("bpm-form-pool", 10, 2));
+
+        assertThat(cases).hasSize(3); // 三個 DataSource 必須是不同實例
+
+        cases.forEach((ds, expected) -> {
+            assertThat(ds)
+                    .as("DataSource 必須是 HikariDataSource，否則 hikari.* 無從綁定")
+                    .isInstanceOf(com.zaxxer.hikari.HikariDataSource.class);
+            var hikari = (com.zaxxer.hikari.HikariDataSource) ds;
+            assertThat(hikari.getPoolName())
+                    .as("pool-name 未綁上 —— @ConfigurationProperties 遺漏")
+                    .isEqualTo(expected.poolName());
+            assertThat(hikari.getMaximumPoolSize())
+                    .as("%s 的 maximum-pool-size", expected.poolName())
+                    .isEqualTo(expected.maxPoolSize());
+            assertThat(hikari.getMinimumIdle())
+                    .as("%s 的 minimum-idle（預設會等於 maximumPoolSize）", expected.poolName())
+                    .isEqualTo(expected.minIdle());
+        });
+    }
 }
