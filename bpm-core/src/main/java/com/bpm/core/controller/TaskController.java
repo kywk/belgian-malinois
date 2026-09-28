@@ -3,6 +3,7 @@ package com.bpm.core.controller;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.dto.CommentRequest;
+import org.flowable.common.engine.impl.identity.Authentication;
 import com.bpm.core.dto.TaskActionRequest;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
@@ -133,14 +134,51 @@ public class TaskController {
         return Map.of("taskId", id, "status", "ok");
     }
 
+    /**
+     * 新增批註。
+     *
+     * <p>⚠️ 必須設定 Flowable 的 {@code Authentication} —— 這是 TC-A02
+     * （多人批註）驗收不過的根因。{@code taskService.addComment} 的作者
+     * 取自 {@code Authentication.getAuthenticatedUserId()}，本專案先前
+     * 從未設定過，因此每一筆批註的 userId 都是 null，API 一律回空字串。
+     * 單人批註看起來正常（訊息有寫入），所以缺陷只在多人情境顯現 ——
+     * 而「分辨誰說了什麼」正是多方意見的全部意義。
+     *
+     * <p>身分優先取 {@code X-User-Id} 標頭（前端共用 axios instance 一律
+     *附上，acceptance 腳本也用它），退回 body 的 {@code userId}。
+     * 兩者皆無時<b>仍然接受</b>批註：acceptance-test.sh 的 TC-L04 就是
+     * 只帶標頭、body 無 userId 的形狀，若改成必填會讓原本通過的案例退步。
+     */
     @PostMapping("/{id}/comments")
-    public Map<String, String> addComment(@PathVariable String id, @RequestBody CommentRequest req) {
+    public Map<String, String> addComment(@PathVariable String id,
+                                          @RequestBody CommentRequest req,
+                                          @RequestHeader(value = "X-User-Id", required = false)
+                                          String headerUserId) {
         Task task = taskService.createTaskQuery().taskId(id).singleResult();
         String processInstanceId = task != null ? task.getProcessInstanceId() : null;
-        taskService.addComment(id, processInstanceId, req.message());
-        auditPublisher.publish(new AuditEvent("TASK_COMMENT", req.userId(),
+
+        String author = firstNonBlank(headerUserId, req.userId());
+
+        // 用 try/finally 還原原值：Authentication 存放在 ThreadLocal，
+        // 而 servlet 容器的執行緒是重複使用的 —— 不還原會讓下一個請求
+        // 沿用上一個使用者的身分。
+        String previous = Authentication.getAuthenticatedUserId();
+        try {
+            Authentication.setAuthenticatedUserId(author);
+            taskService.addComment(id, processInstanceId, req.message());
+        } finally {
+            Authentication.setAuthenticatedUserId(previous);
+        }
+
+        auditPublisher.publish(new AuditEvent("TASK_COMMENT", author,
                 processInstanceId, id, Map.of("message", req.message())));
         return Map.of("status", "ok");
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        if (a != null && !a.isBlank()) return a;
+        if (b != null && !b.isBlank()) return b;
+        return null;
     }
 
     @GetMapping("/{id}/comments")
