@@ -32,16 +32,21 @@ class FormSeedEncodingTest extends FormServiceIntegrationTestBase {
     void seededFormNamesKeepChinese() {
         List<String> names = new ArrayList<>();
         withConnection(c -> {
+            // 只查這 4 個 seed formKey，不查全表。
+            // 容器是 static 且由所有測試共用（見 FormServiceIntegrationTestBase），
+            // 其他測試會新增表單 —— 對全表計數會讓本測試隨執行順序而壞掉。
             try (Statement st = c.createStatement();
                  ResultSet rs = st.executeQuery(
-                         "SELECT form_key, name FROM bpm_form_definition ORDER BY form_key")) {
+                         "SELECT form_key, name FROM bpm_form_definition "
+                         + "WHERE form_key IN ('leave-request','leave-review',"
+                         + "'purchase-request','purchase-review') ORDER BY form_key")) {
                 while (rs.next()) {
                     names.add(rs.getString("form_key") + "=" + rs.getString("name"));
                 }
             }
         });
 
-        assertThat(names).as("seed 應建立 4 個表單定義").hasSize(4);
+        assertThat(names).as("seed 應建立這 4 個表單定義").hasSize(4);
         assertThat(names)
                 .as("表單名稱不得含問號 —— 出現問號就是 data.sql 少了 N 前綴")
                 .noneMatch(n -> n.contains("?"))

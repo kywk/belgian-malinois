@@ -5,6 +5,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.MSSQLServerContainer;
+import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.utility.DockerImageName;
 
 import java.sql.Connection;
@@ -30,8 +31,17 @@ public abstract class FormServiceIntegrationTestBase {
             new MSSQLServerContainer<>(DockerImageName.parse("mcr.microsoft.com/mssql/server:2022-latest"))
                     .acceptLicense();
 
+    /**
+     * form-service 送出表單資料時會發布稽核事件到 RabbitMQ，而發布失敗會讓
+     * 整個請求變成 500（資料已寫入卻回報失敗）。因此測試必須有真的 broker，
+     * 否則測到的是「AMQP 連不上」而不是待測行為。
+     */
+    private static final RabbitMQContainer RABBIT =
+            new RabbitMQContainer(DockerImageName.parse("rabbitmq:3-management"));
+
     static {
         MSSQL.start();
+        RABBIT.start();
         createDatabase();
     }
 
@@ -56,6 +66,11 @@ public abstract class FormServiceIntegrationTestBase {
         r.add("spring.datasource.url", FormServiceIntegrationTestBase::jdbcUrl);
         r.add("spring.datasource.username", MSSQL::getUsername);
         r.add("spring.datasource.password", MSSQL::getPassword);
+
+        r.add("spring.rabbitmq.host", RABBIT::getHost);
+        r.add("spring.rabbitmq.port", RABBIT::getAmqpPort);
+        r.add("spring.rabbitmq.username", RABBIT::getAdminUsername);
+        r.add("spring.rabbitmq.password", RABBIT::getAdminPassword);
     }
 
     /** 直接對 DB 查詢（要驗證的是「真的存成什麼」，不能只信 API 回傳）。 */

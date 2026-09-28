@@ -24,7 +24,12 @@ public class NotifyAdminController {
 
     // Templates
     @PostMapping("/notify-templates")
-    public NotifyTemplate createTemplate(@RequestBody NotifyTemplate t) { return templateRepo.save(t); }
+    public NotifyTemplate createTemplate(@RequestBody NotifyTemplate t) {
+        // 必定新增。夾帶 id 的話 save() 會走 merge → 覆寫既有模板
+        // （可植入釣魚連結），而本 controller 零稽核 → 無人知道被改過。
+        t.setId(null);
+        return templateRepo.save(t);
+    }
 
     @GetMapping("/notify-templates")
     public List<NotifyTemplate> listTemplates() { return templateRepo.findAll(); }
@@ -50,7 +55,10 @@ public class NotifyAdminController {
 
     // Configs
     @PostMapping("/notify-configs")
-    public NotifyConfig createConfig(@RequestBody NotifyConfig c) { return configRepo.save(c); }
+    public NotifyConfig createConfig(@RequestBody NotifyConfig c) {
+        c.setId(null);
+        return configRepo.save(c);
+    }
 
     @GetMapping("/notify-configs")
     public List<NotifyConfig> listConfigs(@RequestParam(required = false) String processDefinitionKey) {

@@ -34,6 +34,10 @@ public class DocumentController {
 
     @PostMapping
     public DocumentRequest create(@RequestBody DocumentRequest req) {
+        // 必定新增。夾帶 id 會讓 save() 走 merge → 改寫他人公文的
+        // documentNumber / title。
+        req.setId(null);
+
         // Generate document number: DOC-{year}-{deptCode}-{seq}
         String deptCode = orgService.getDeptId(req.getCreatedBy());
         if (deptCode == null) deptCode = "GEN";

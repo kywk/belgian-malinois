@@ -72,6 +72,13 @@
             <artifactId>mssqlserver</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- 送出表單資料會發布稽核事件到 RabbitMQ，且發布失敗會讓請求變成 500
+             → 整合測試需要真的 broker，否則測到的是「AMQP 連不上」。 -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>rabbitmq</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

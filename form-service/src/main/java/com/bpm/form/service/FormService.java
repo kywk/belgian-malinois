@@ -24,6 +24,10 @@ public class FormService {
     }
 
     public FormDefinition create(FormDefinition def) {
+        // 第二層防線。entity 的 id 已標 READ_ONLY（Jackson 不會反序列化它），
+        // 但 create 的語意就是「必定新增」，因此在此顯式歸零 ——
+        // 這同時涵蓋非 HTTP 的呼叫路徑，而且不依賴序列化層的設定。
+        def.setId(null);
         def.setVersion(1);
         def.setStatus("draft");
         return defRepo.save(def);
@@ -93,6 +97,9 @@ public class FormService {
 
     // FormData operations
     public FormData submitData(FormData data) {
+        // 同 create()：送出表單資料必定是新增，不可因 body 夾帶 id
+        // 而變成覆寫他人已送出的資料（submittedAt 不可更新 → 篡改無跡）。
+        data.setId(null);
         return dataRepo.save(data);
     }
 

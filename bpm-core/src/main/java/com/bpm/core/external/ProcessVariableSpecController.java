@@ -28,7 +28,12 @@ public class ProcessVariableSpecController {
     public List<ProcessVariableSpec> batchSave(@PathVariable String key,
                                                 @RequestBody List<ProcessVariableSpec> specs) {
         repo.deleteByProcessDefinitionKey(key);
-        specs.forEach(s -> s.setProcessDefinitionKey(key));
+        // 這個端點不在 security-audit 的 P0-4 清單內，但問題完全相同：
+        // 以 entity 當 @RequestBody，夾帶 id 就會讓 saveAll 走 merge。
+        specs.forEach(s -> {
+            s.setId(null);
+            s.setProcessDefinitionKey(key);
+        });
         return repo.saveAll(specs);
     }
 
