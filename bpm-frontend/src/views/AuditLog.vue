@@ -64,6 +64,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
+import { formatDateTime } from '../utils/datetime.js'
 import { searchAuditLogs, integrityCheck } from '../services/auditLogApi.js'
 
 const operationTypes = [
@@ -91,7 +92,7 @@ function tagType(op) {
 }
 
 function formatTime(t) {
-  return t ? new Date(t).toLocaleString('zh-TW') : ''
+  return formatDateTime(t)
 }
 
 async function doSearch() {

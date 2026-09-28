@@ -56,6 +56,7 @@
 
 <script setup>
 import { ref, reactive } from 'vue'
+import { formatDate } from '../utils/datetime.js'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import http from '../services/http'
@@ -107,5 +108,5 @@ async function submit() {
   }
 }
 
-const fmt = (d) => new Date(d).toISOString().slice(0, 10)
+const fmt = (d) => formatDate(d)
 </script>

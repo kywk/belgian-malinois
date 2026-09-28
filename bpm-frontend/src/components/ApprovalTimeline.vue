@@ -26,11 +26,12 @@
 
 <script setup>
 import { ref, watch } from 'vue'
+import { formatDateTime } from '../utils/datetime.js'
 import { getHistoricTasks, getHistoricTaskComments } from '../services/flowableApi.js'
 
 const props = defineProps({ processInstanceId: { type: String, default: null } })
 const items = ref([])
-const fmt = (t) => t ? new Date(t).toLocaleString('zh-TW') : ''
+const fmt = (t) => formatDateTime(t)
 
 const timelineType = (item) => item.endTime ? 'success' : 'primary'
 const tagType = (item) => item.endTime ? 'success' : ''

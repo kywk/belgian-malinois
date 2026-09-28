@@ -40,6 +40,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
+import { formatDateTime, toEpochMillis } from '../utils/datetime.js'
 import { useAuthStore } from '../stores/auth'
 import { getTasks, getHistoricTasks } from '../services/flowableApi.js'
 
@@ -50,14 +51,14 @@ const urgentTasks = ref([])
 
 const THREE_DAYS = 3 * 24 * 60 * 60 * 1000
 
-function formatTime(t) { return t ? new Date(t).toLocaleString('zh-TW') : '' }
+function formatTime(t) { return formatDateTime(t) }
 
 onMounted(async () => {
   const tasks = await getTasks({ assignee: userId.value })
   stats.pending = tasks.length
 
   const now = Date.now()
-  const urgent = tasks.filter(t => now - new Date(t.createTime).getTime() > THREE_DAYS)
+  const urgent = tasks.filter(t => now - toEpochMillis(t.createTime) > THREE_DAYS)
   stats.urgent = urgent.length
   urgentTasks.value = urgent.slice(0, 5)
 
@@ -65,6 +66,6 @@ onMounted(async () => {
   weekStart.setDate(weekStart.getDate() - weekStart.getDay())
   weekStart.setHours(0, 0, 0, 0)
   const history = await getHistoricTasks({ assignee: userId.value })
-  stats.completedThisWeek = history.filter(t => new Date(t.endTime) >= weekStart).length
+  stats.completedThisWeek = history.filter(t => toEpochMillis(t.endTime) >= weekStart.getTime()).length
 })
 </script>

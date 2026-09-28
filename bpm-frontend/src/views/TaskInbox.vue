@@ -20,6 +20,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { formatDateTime, toEpochMillis } from '../utils/datetime.js'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { getTasks } from '../services/flowableApi.js'
@@ -28,7 +29,7 @@ const router = useRouter()
 const auth = useAuthStore()
 const userId = auth.userId
 const tasks = ref([])
-const fmt = (t) => t ? new Date(t).toLocaleString('zh-TW') : ''
+const fmt = (t) => formatDateTime(t)
 
 const goDetail = (row) => router.push(`/tasks/${row.taskId}`)
 
@@ -40,6 +41,6 @@ onMounted(async () => {
   ])
   const map = new Map()
   ;[...assigned, ...candidate].forEach(t => map.set(t.taskId, t))
-  tasks.value = [...map.values()].sort((a, b) => new Date(b.createTime) - new Date(a.createTime))
+  tasks.value = [...map.values()].sort((a, b) => toEpochMillis(b.createTime) - toEpochMillis(a.createTime))
 })
 </script>
