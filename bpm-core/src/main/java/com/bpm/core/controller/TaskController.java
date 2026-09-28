@@ -2,7 +2,9 @@ package com.bpm.core.controller;
 
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
+import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.dto.CommentRequest;
+import org.flowable.common.engine.api.FlowableTaskAlreadyClaimedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import org.flowable.common.engine.impl.identity.Authentication;
@@ -117,78 +119,140 @@ public class TaskController {
                 .map(this::toMap).toList();
     }
 
+    /**
+     * 任務動作。
+     *
+     * <p>改動前這裡有三個問題（security-audit P1-1／P1-3／P1-4），
+     * 三者互相牽動因此一併處理：
+     *
+     * <p><b>P1-1 稽核查不出是誰核准的。</b>operatorId 一律取
+     * {@code req.assignee()}，但前端主要簽核入口的 payload 只有 action 與
+     * variables → TASK_APPROVE／TASK_RETURN／TASK_REJECT 的 operatorId 全是
+     * null。現在改為：X-User-Id 標頭 → 任務目前的 assignee → body 的 assignee。
+     *
+     * <p><b>P1-3 守門回 HTTP 200。</b>有未完成加簽時回
+     * {@code {"status":"error"}} 卻是 200，前端只看 axios 是否 throw →
+     * 顯示「操作成功」並導航離開，而 comment 在 complete 之前就已寫入 →
+     * DB 留下一筆「核准意見」而核准從未發生。改為 409 CONFLICT，
+     * 與本檔其他錯誤路徑一致。
+     *
+     * <p><b>P1-4 未知 action 靜默改派。</b>改為顯式 switch：未知或缺少
+     * action 一律 400。改派必須明確指定 {@code action=reassign}，
+     * 不再是「有 assignee 就改派」—— 後者讓 typo 把核准變成改派且回報成功。
+     */
     @PutMapping("/{id}")
-    public Map<String, Object> updateTask(@PathVariable String id, @RequestBody TaskActionRequest req) {
+    public Map<String, Object> updateTask(@PathVariable String id,
+                                          @RequestBody TaskActionRequest req,
+                                          @RequestHeader(value = "X-User-Id", required = false)
+                                          String headerUserId) {
         Task task = taskService.createTaskQuery().taskId(id).singleResult();
-        String processInstanceId = task != null ? task.getProcessInstanceId() : null;
+        if (task == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "任務不存在: " + id);
+        }
+        String processInstanceId = task.getProcessInstanceId();
         String action = req.action();
-        String auditType;
 
-        if ("claim".equals(action)) {
-            taskService.claim(id, req.assignee());
-            auditType = "TASK_CLAIM";
-        } else if ("complete".equals(action)) {
-            // Block complete if there are pending subtasks (countersign)
-            if (!taskService.getSubTasks(id).isEmpty()) {
-                return Map.of("taskId", id, "status", "error", "message", "有未完成的加簽子任務");
+        // 操作者：標頭優先（前端共用 axios instance 一律附上），
+        // 退回任務現有的 assignee，最後才是 body 的 assignee。
+        String operatorId = firstNonBlank(headerUserId,
+                firstNonBlank(task.getAssignee(), req.assignee()));
+
+        OperationType auditType;
+
+        if (action == null || action.isBlank()) {
+            // 改動前：沒有 action 但有 assignee 就直接改派 ——
+            // 任何人都能用 {"assignee":"自己"} 無條件奪取他人任務。
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "缺少 action（可用：claim, complete, delegate, resolve, reassign）");
+        }
+
+        switch (action) {
+            case "claim" -> {
+                // claim(taskId, null) 的語意是「取消認領」，而且會跳過
+                // 已認領檢查 → 空 body 可強制釋放他人任務。因此 assignee
+                // 必須有值；acceptance 腳本只帶標頭不帶 body assignee，
+                // 所以這裡用解析後的 operatorId。
+                String claimant = firstNonBlank(headerUserId, req.assignee());
+                if (claimant == null) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "claim 必須指定認領者（X-User-Id 標頭或 body 的 assignee）");
+                }
+                try {
+                    taskService.claim(id, claimant);
+                } catch (FlowableTaskAlreadyClaimedException e) {
+                    // 改動前這個例外變成裸 500；語意上它是衝突。
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "任務已被他人認領", e);
+                }
+                operatorId = claimant;
+                auditType = OperationType.TASK_CLAIM;
             }
-            Map<String, Object> vars = new HashMap<>();
-            if (req.variables() != null) {
-                // 拒絕而非靜默丟棄：靜默丟棄會讓攻擊嘗試無跡可循，
-                // 也會讓正常使用者以為自己送出的值生效了。
-                req.variables().stream()
-                        .filter(v -> isProtectedVariable(v.name()))
-                        .findFirst()
-                        .ifPresent(v -> {
-                            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                                    "不允許以任務變數改寫受保護的變數: " + v.name());
-                        });
-                req.variables().forEach(v -> vars.put(v.name(), v.value()));
+            case "complete" -> {
+                if (!taskService.getSubTasks(id).isEmpty()) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "有未完成的加簽子任務");
+                }
+                Map<String, Object> vars = new HashMap<>();
+                if (req.variables() != null) {
+                    // 拒絕而非靜默丟棄：靜默丟棄會讓攻擊嘗試無跡可循，
+                    // 也會讓正常使用者以為自己送出的值生效了。
+                    req.variables().stream()
+                            .filter(v -> isProtectedVariable(v.name()))
+                            .findFirst()
+                            .ifPresent(v -> {
+                                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                        "不允許以任務變數改寫受保護的變數: " + v.name());
+                            });
+                    req.variables().forEach(v -> vars.put(v.name(), v.value()));
+                }
+                // Ensure gateway variables are always set to avoid EL PropertyNotFoundException
+                vars.putIfAbsent("rejected", false);
+                vars.putIfAbsent("approved", false);
+                taskService.complete(id, vars);
+                auditType = task.getName() != null && task.getName().contains("補件")
+                        ? OperationType.TASK_RESUBMIT : resolveCompleteAuditType(vars);
             }
-            // Ensure gateway variables are always set to avoid EL PropertyNotFoundException
-            vars.putIfAbsent("rejected", false);
-            vars.putIfAbsent("approved", false);
-            taskService.complete(id, vars);
-            auditType = task != null && task.getName() != null && task.getName().contains("補件")
-                    ? "TASK_RESUBMIT" : resolveCompleteAuditType(vars);
-        } else if ("delegate".equals(action)) {
-            taskService.delegateTask(id, req.delegateUser());
-            auditType = "TASK_DELEGATE";
-        } else if ("resolve".equals(action)) {
-            taskService.resolveTask(id);
-            auditType = "TASK_RESOLVE";
-        } else if (req.assignee() != null) {
-            taskService.setAssignee(id, req.assignee());
-            auditType = "TASK_REASSIGN";
-        } else {
-            auditType = "TASK_UPDATE";
+            case "delegate" -> {
+                if (req.delegateUser() == null || req.delegateUser().isBlank()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "delegate 必須指定 delegateUser");
+                }
+                taskService.delegateTask(id, req.delegateUser());
+                auditType = OperationType.TASK_DELEGATE;
+            }
+            case "resolve" -> {
+                taskService.resolveTask(id);
+                auditType = OperationType.TASK_RESOLVE;
+            }
+            case "reassign" -> {
+                // 改派現在必須明確指定 action。
+                // ⚠️ 仍未檢查新 assignee 是否為該任務的候選人 —— 那需要
+                // 身分與授權模型（R-01），見 security-audit P1-4。
+                if (req.assignee() == null || req.assignee().isBlank()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "reassign 必須指定 assignee");
+                }
+                taskService.setAssignee(id, req.assignee());
+                auditType = OperationType.TASK_REASSIGN;
+            }
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "未知的 action: " + action
+                            + "（可用：claim, complete, delegate, resolve, reassign）");
         }
 
         Map<String, Object> detail = new HashMap<>();
-        detail.put("action", action != null ? action : "reassign");
+        detail.put("action", action);
         if (req.variables() != null) {
             req.variables().forEach(v -> detail.put(v.name(), v.value()));
         }
 
-        auditPublisher.publish(new AuditEvent(auditType, req.assignee(), processInstanceId, id, detail));
+        // operationType 改傳 enum 的 name()：編譯期就綁定，
+        // 不會再出現「字串不在 enum 裡 → valueOf 拋例外 → 稽核靜默遺失」。
+        auditPublisher.publish(new AuditEvent(auditType.name(), operatorId,
+                processInstanceId, id, detail));
         return Map.of("taskId", id, "status", "ok");
     }
 
-    /**
-     * 新增批註。
-     *
-     * <p>⚠️ 必須設定 Flowable 的 {@code Authentication} —— 這是 TC-A02
-     * （多人批註）驗收不過的根因。{@code taskService.addComment} 的作者
-     * 取自 {@code Authentication.getAuthenticatedUserId()}，本專案先前
-     * 從未設定過，因此每一筆批註的 userId 都是 null，API 一律回空字串。
-     * 單人批註看起來正常（訊息有寫入），所以缺陷只在多人情境顯現 ——
-     * 而「分辨誰說了什麼」正是多方意見的全部意義。
-     *
-     * <p>身分優先取 {@code X-User-Id} 標頭（前端共用 axios instance 一律
-     *附上，acceptance 腳本也用它），退回 body 的 {@code userId}。
-     * 兩者皆無時<b>仍然接受</b>批註：acceptance-test.sh 的 TC-L04 就是
-     * 只帶標頭、body 無 userId 的形狀，若改成必填會讓原本通過的案例退步。
-     */
     @PostMapping("/{id}/comments")
     public Map<String, String> addComment(@PathVariable String id,
                                           @RequestBody CommentRequest req,
@@ -226,11 +290,11 @@ public class TaskController {
         return mapComments(taskService.getTaskComments(id));
     }
 
-    private String resolveCompleteAuditType(Map<String, Object> vars) {
-        if (Boolean.TRUE.equals(vars.get("rejected"))) return "TASK_REJECT";
-        if (Boolean.FALSE.equals(vars.get("approved"))) return "TASK_RETURN";
-        if (Boolean.TRUE.equals(vars.get("approved"))) return "TASK_APPROVE";
-        return "TASK_APPROVE";
+    private OperationType resolveCompleteAuditType(Map<String, Object> vars) {
+        if (Boolean.TRUE.equals(vars.get("rejected"))) return OperationType.TASK_REJECT;
+        if (Boolean.FALSE.equals(vars.get("approved"))) return OperationType.TASK_RETURN;
+        if (Boolean.TRUE.equals(vars.get("approved"))) return OperationType.TASK_APPROVE;
+        return OperationType.TASK_APPROVE;
     }
 
     @SuppressWarnings("unchecked")
