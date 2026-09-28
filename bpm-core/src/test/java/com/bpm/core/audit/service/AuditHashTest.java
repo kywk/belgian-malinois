@@ -42,11 +42,25 @@ class AuditHashTest {
     }
 
     @Test
-    @DisplayName("hash 必須是 64 字元的十六進位（SHA-256）")
-    void shapeIsSha256Hex() {
+    @DisplayName("hash 必須是 'v2:' + 64 字元十六進位")
+    void shapeIsVersionedSha256Hex() {
+        // 版本前綴的用途見 AuditLogService.V2：換演算法時必須能區分新舊記錄，
+        // 否則 integrityCheck 會把所有歷史資料誤報為遭篡改。
         assertThat(AuditLogService.computeHash(sample(), "PREV"))
+                .startsWith("v2:")
+                .hasSize(67)
+                .matches("v2:[0-9a-f]{64}");
+    }
+
+    @Test
+    @DisplayName("v1（無前綴）的舊演算法必須保留，讓既有記錄仍可驗證")
+    void legacyAlgorithmStillAvailable() {
+        assertThat(AuditLogService.legacyHash(sample(), "PREV"))
+                .as("既有記錄是純 64 位十六進位、無版本前綴")
                 .hasSize(64)
                 .matches("[0-9a-f]{64}");
+        assertThat(AuditLogService.legacyHash(sample(), "PREV"))
+                .isNotEqualTo(AuditLogService.computeHash(sample(), "PREV"));
     }
 
     @Test
@@ -84,32 +98,61 @@ class AuditHashTest {
         AuditLog sparse = new AuditLog();
         sparse.setOperationType(OperationType.PROCESS_START);
         sparse.setCreatedAt(Instant.parse("2026-09-28T10:00:00Z"));
-        assertThat(AuditLogService.computeHash(sparse, "GENESIS")).hasSize(64);
+        assertThat(AuditLogService.computeHash(sparse, "GENESIS")).hasSize(67);
     }
 
     @Test
-    @DisplayName("⚠️ 已知缺陷（P0-3）：hash 未涵蓋全部欄位，這些欄位可被篡改而查不出來")
-    void hashDoesNotCoverAllFields() {
+    @DisplayName("欄位邊界不得有分隔符歧義（避免免費碰撞）")
+    void fieldBoundariesAreUnambiguous() {
+        // 單純以 | 串接時，("a|b", "c") 與 ("a", "b|c") 會產生相同字串 ——
+        // 等於送給篡改者一個免費的碰撞。v2 以「長度:內容」前綴消除此歧義。
+        AuditLog a = new AuditLog();
+        a.setOperationType(OperationType.TASK_APPROVE);
+        a.setCreatedAt(Instant.parse("2026-09-28T10:00:00Z"));
+        a.setOperatorId("a|b");
+        a.setOperatorName("c");
+
+        AuditLog b = new AuditLog();
+        b.setOperationType(OperationType.TASK_APPROVE);
+        b.setCreatedAt(Instant.parse("2026-09-28T10:00:00Z"));
+        b.setOperatorId("a");
+        b.setOperatorName("b|c");
+
+        assertThat(AuditLogService.computeHash(a, "PREV"))
+                .isNotEqualTo(AuditLogService.computeHash(b, "PREV"));
+    }
+
+    @Test
+    @DisplayName("P0-3 已修：hash 現在涵蓋全部內容欄位")
+    void hashNowCoversAllContentFields() {
+        // 這個測試原本斷言「這些欄位未被涵蓋」，作為 P0-3 修復後的
+        // 變更偵測點。v2 演算法已把涵蓋範圍擴到所有持久化的內容欄位，
+        // 因此斷言依當初註明的方式反轉。
         String base = AuditLogService.computeHash(sample(), "PREV");
 
-        // 這三個欄位都是稽核報告會顯示、也是調查時會採信的資訊，
-        // 但它們不在 hash 的計算範圍內 → 可以被改掉而 integrityCheck 仍回報 intact。
         AuditLog changedName = sample();
         changedName.setOperatorName("有人改了姓名");
         assertThat(AuditLogService.computeHash(changedName, "PREV"))
-                .as("operatorName 未被 hash 涵蓋（現況）").isEqualTo(base);
+                .as("operatorName 必須被涵蓋").isNotEqualTo(base);
 
         AuditLog changedIp = sample();
         changedIp.setIpAddress("1.2.3.4");
         assertThat(AuditLogService.computeHash(changedIp, "PREV"))
-                .as("ipAddress 未被 hash 涵蓋（現況）").isEqualTo(base);
+                .as("ipAddress 必須被涵蓋").isNotEqualTo(base);
 
         AuditLog changedBusinessKey = sample();
         changedBusinessKey.setBusinessKey("改成別的案件");
         assertThat(AuditLogService.computeHash(changedBusinessKey, "PREV"))
-                .as("businessKey 未被 hash 涵蓋（現況）").isEqualTo(base);
+                .as("businessKey 必須被涵蓋").isNotEqualTo(base);
 
-        // P0-3 修復（把 hash 涵蓋範圍擴到全部欄位）之後，
-        // 上面三個斷言都應改成 isNotEqualTo(base)。
+        AuditLog changedTrace = sample();
+        changedTrace.setTraceId("forged-trace");
+        assertThat(AuditLogService.computeHash(changedTrace, "PREV"))
+                .as("traceId 必須被涵蓋").isNotEqualTo(base);
+
+        AuditLog changedUa = sample();
+        changedUa.setUserAgent("curl/8");
+        assertThat(AuditLogService.computeHash(changedUa, "PREV"))
+                .as("userAgent 必須被涵蓋").isNotEqualTo(base);
     }
 }
