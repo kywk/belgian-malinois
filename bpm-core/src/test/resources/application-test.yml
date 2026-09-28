@@ -1,0 +1,32 @@
+# 整合測試的 profile。DataSource／RabbitMQ／Redis 位址由
+# IntegrationTestBase 的 @DynamicPropertySource 在執行期注入，此處只放靜態設定。
+spring:
+  jpa:
+    hibernate:
+      # 與 production 一致：schema 一律由 Flyway 建立。
+      # 若這裡放 update，測試就會驗不到 migration 的正確性 —— 那是本測試網的主要目的之一。
+      ddl-auto: none
+    show-sql: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration/core
+    baseline-on-migrate: true
+    baseline-version: 0
+  mail:
+    # 測試不驗證寄信，指向一個不存在的 port；EmailConsumer 的失敗不影響待測行為。
+    host: localhost
+    port: 65000
+
+flowable:
+  database-schema-update: true
+  # 測試中關掉 async executor：它會起背景執行緒輪詢 job，
+  # 讓測試的時序變成不確定（timer／async task 可能在斷言之後才跑）。
+  async-executor-activate: false
+
+bpm:
+  upload:
+    dir: ./target/test-uploads
+  external:
+    org-service-url: http://localhost:${local.server.port:8080}/mock/org
+    perm-service-url: http://localhost:${local.server.port:8080}/mock/perm
+
