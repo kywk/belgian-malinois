@@ -149,6 +149,20 @@
 
 ## P2 — 正確性
 
+### ✅ R-09 外部 API 授權改精確比對（已完成 2026-09-28，未經編譯驗證）
+
+> 已提交於 `feature/tech-debt-remediation`（commit `f12a8c2`）。修補了 7 項，
+> 並在審查後追加修掉 5 個新引入的問題。**但審查同時發現 8 個仍存在的漏洞，
+> 見上方 R-18 ~ R-25 —— 其中 R-18（admin API 無認證）會讓本項修補完全可繞過。**
+>
+> 驗收狀態：
+> - [x] `allowedActions = ["query_status_extended"]` 呼叫 `query_status` 被拒
+> - [x] `systemId="erp"` 無法存取 `initiator="erp-legacy"` 的實例
+> - [ ] 外部 API 壓測不再每請求一次 DB write → 移至 R-25
+> - [ ] **未經編譯與測試**（本次環境無 javac/maven/docker）
+
+原始問題記錄如下，保留供對照：
+
 ### R-09 外部 API 授權改精確比對（1 人日）
 
 **現況**：三處**靜默放寬權限**的字串子串比對（已逐一定位）：
@@ -181,6 +195,96 @@
 驗收：
 - [ ] 程式碼中無 `keys(` 呼叫
 - [ ] 10 萬筆 key 下的快取失效不造成 Redis 延遲尖峰
+
+---
+
+## P0 追加 — 2026-09-28 安全審查新發現
+
+> 來源：R-09 修補完成後，由兩個獨立 reviewer 對 `external/` 套件做的審查。
+> 這些是**修補後仍然存在**的問題，不是 R-09 的遺漏。
+
+### R-18 `/api/admin/**` 完全無認證 → 可繞過所有外部系統授權（0.5 人日止血）
+
+**這是目前最嚴重的單一問題，且它讓 R-09 的所有收緊都變成紙上防線。**
+
+`external/ExternalSystemAdminController.java` 全無認證，任何能連到 nginx :80 的人可以：
+
+1. `GET /api/admin/external-systems` 列舉所有 systemId 與其授權設定
+2. `POST /api/admin/external-systems/{id}/rotate-key` → **明文回傳新 API Key**（`:80`），完整接管該外部系統
+3. `PUT /api/admin/external-systems/{id}` 把 `allowedProcessKeys`、`ipWhitelist` 設成 null → R-09 的檢查與 IP 白名單一併歸零
+
+**止血選項（需 Bruce 決定，不要擅自施作）**：在 `infra/nginx/nginx.conf` 加 `location ^~ /api/admin/ { allow <內網 CIDR>; deny all; }`。
+⚠️ **但這會同時擋掉前端管理頁面**（表單編輯器、流程管理、外部系統管理都打 `/api/admin/*`）。所以這不是可直接套用的修補 —— 要嘛限制來源網段後確認管理者都在該網段內，要嘛直接做 R-01。
+
+### R-19 外部系統可自我核准（1 人日）
+
+`external/ExternalApiController.java` 的 `completeTask` 只檢查「流程實例屬於誰」，**不檢查「這個 task 該不該由外部系統做」**：沒有任何 assignee / candidate / taskDefinitionKey 限制。
+
+後果：系統 X 啟動 `leave-approval` → 該實例擁有者是 X → X 直接以 `PUT /api/external/tasks/{主管簽核的 taskId}` **自行完成人工主管簽核**。人工審批在自己送出的案件上等於不存在。
+
+同一處還有**內部變數注入**：`vars` 未過濾 `_` 前綴、未比對 `ProcessVariableSpec`（`validateVariables` 只在 startProcess 呼叫），因此可任意覆寫 `approved` / `rejected`（退回vs駁回的判定基礎）、`_formVersions`、`initiator`，甚至 `_externalSystemId` 自身。
+
+修法：(i) task 的 assignee/candidate 必須屬於該系統，或維護 `taskDefinitionKey` 白名單；(ii) `vars` 拒絕所有 `_` 前綴並只接受該流程宣告過的變數名；(iii) 補上 allowedProcessKeys 比對。
+
+### R-20 `initiator` 仍可任意偽造（1 人日）
+
+`ExternalApiController.java` 的 `startProcess` 仍允許呼叫端在 body 指定任意 `initiator`。擁有權判定已不依賴它，但 `initiator` 被下游廣泛信任：
+
+- **BPMN EL 路由**：`leave-approval.bpmn20.xml` 的 `${orgService.getDirectManager(initiator)}` → 外部系統可**偽造一張看似由特定員工提出的請假單**，路由到該員工的主管
+- **內部查詢**：`ProcessController` / `HistoryController` 以 `variableValueEquals("initiator", ...)` 篩選 → 偽造案件出現在受害者的「我的申請」
+- **通知信**：`EmailConsumer` 直接把 initiator 當申請人渲染
+- **Lint 防線失效**：`BpmnLintService` rule h（外部可發起流程的第一個 UserTask 不可用 initiator EL）severity 是 `warning`，而只有 `error` 會阻擋部署
+
+另有**驗證繞過**：「外部系統發起必須指定 firstTaskAssignee」只在 `initiator.startsWith("system:")` 時生效，傳不帶前綴的 initiator 即整條跳過。
+
+連帶項：`firstTaskAssignee` / `firstTaskCandidateGroups` 完全無驗證，可把審核任務指派給任意員工或丟進任意特權群組的待辦池；且 `setAssignee` 發生在流程啟動後，會**覆寫 BPMN EL 算出的合法簽核人**。
+
+修法：`initiator` 一律由 server 寫成 `system:<systemId>`；body 的欄位改名 `onBehalfOf` 並以 `orgService` 驗證帳號存在；`firstTaskAssignee` / `candidateGroups` 同樣驗證；`BpmnLintService` rule h 升為 `error`。
+
+### R-21 授權設定的驗證在讀取端而非寫入端（1 人日）
+
+`allowedProcessKeys` 空值 = 不限制，而 admin UI 該欄位是自由文字、無必填驗證、`resetForm()` 預設空字串 → **照 UI 正常流程建立的外部系統預設可啟動任何流程**，R-09 的檢查在預設路徑上是 no-op。
+
+反過來，若既有資料是 `[]` 或非 JSON，該系統所有 `start_process` 立即全滅，線索只有一行 WARN。
+
+同時 UI 兩個欄位的安全語意相反：`allowedActions` 由 checkbox 產生 `"[]"` → 全拒；`allowedProcessKeys` 清空 → `""` → 全開。管理畫面上兩者都是「沒填」。
+
+修法：`ExternalSystemAdminController` 的 create/update 對三個欄位做格式驗證（解析失敗直接 400）、強制 `allowedProcessKeys` 非空並比對已部署流程 key；前端改多選 + required。
+
+⚠️ **上線前必辦**：`bpm_external_system` 表沒有任何 seed SQL，資料只能來自 admin UI，因此正式/SIT 環境的實際內容無法從 repo 判定 —— **部署前必須撈一次 DB 盤點**，否則 R-09 的 fail-closed 可能造成服務中斷。
+
+### R-22 IP 白名單在容器部署下失效（0.5 人日）
+
+`ExternalApiAuthFilter` 用 `request.getRemoteAddr()`，在 nginx 後方取到的是 **nginx 容器位址**。`infra/nginx/nginx.conf` 有設 `X-Real-IP` / `X-Forwarded-For`，但 `application.yml` 沒有 `server.forward-headers-strategy`。兩種下場都不好：填真實 IP → 全擋；填 nginx IP → **對所有系統一律放行**。稽核記錄的 `ip` 同樣是 nginx IP，鑑識價值為零。
+
+R-09 修掉了白名單的兩個實作 bug（重複值 500、元素未 trim），但沒動到「比對來源不可信」這個根因。
+
+次要：error message 回顯 client IP，對外洩漏內部 proxy 位址。
+
+### R-23 `_externalSystemId` 可被任意寫入（依賴 R-01）
+
+擁有權標記是普通 Flowable 變數，在無認證的內部 API 下不是 server-only：`controller/TaskController.java` 的 `PUT /api/tasks/{id}`（action=complete）把 `req.variables()` 逐筆寫入後丟給 `taskService.complete` → 任何未認證呼叫者都能覆寫 `_externalSystemId`，把任一流程實例「過戶」給指定的外部系統。
+
+`_externalSystemId` 比 `initiator` 好，但要真正可信需寫在外部系統無法觸及的地方（獨立資料表），或在所有 variable 寫入路徑把 `_` 前綴列為保留字拒絕。
+
+### R-24 `queryByBusinessKey` 與新擁有權模型不一致（0.5 人日）
+
+`ExternalApiController.java` 的 `GET /api/external/process-instances` 仍以 `variableValueEquals("initiator", "system:" + systemId)` 篩選，未改用 `_externalSystemId`：
+
+- **漏查**：以自訂 initiator 啟動的案件，`/status` 查得到但列表查不到 —— 同一資源兩個端點兩種答案
+- **可注入他人列表**：惡意系統以 `initiator: "system:victim"` 啟動流程，該紀錄會出現在 victim 的 businessKey 查詢結果中
+
+刻意未在 R-09 一併修改：改為 `_externalSystemId` 篩選會讓既有實例查不到，需搭配 R-20 的 backfill 一起做。另外此端點目前是靠「篩選剛好也起到授權作用」撐住，沒有經過擁有權檢查函式 —— 若日後有人拿掉篩選條件會直接變成資料洩漏。
+
+### R-25 API Key 機制強化（1 人日）
+
+`external/ApiKeyUtil.java` 為無 salt 單輪 SHA-256。客觀評估：`UUID.randomUUID()` 走 `SecureRandom`（122 bits 熵），離線暴力破解不構成實際風險。真正的問題是：
+
+1. **無 salt → 相同金鑰產生相同 hash**，DB 外洩時可跨系統/跨環境比對出重用的金鑰。應改 HMAC-SHA256(server secret, key)，保留可查詢性同時讓 DB 外洩不足以偽造。
+2. **無金鑰有效期、無多金鑰並存**：`rotateKey` 一寫入舊金鑰立即失效，沒有 grace period → 每次輪替都是計畫性中斷，實務上導致「不敢輪替」。
+3. **無速率限制、無失敗鎖定**：驗證失敗只寫一筆稽核，無任何節流。
+
+連帶效能項（R-09 已留 TODO 但未解）：`lastUsedAt` 仍每請求一次 DB write；`ExternalSystemPolicy.parse()` 每請求做 3 次 Jackson 解析，無快取。
 
 ---
 
