@@ -38,7 +38,18 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * </ul>
  *
  * <p>本測試針對後端契約。前端的呼叫方式沒有自動化測試框架可驗
- * （前端無測試框架），該部分以修正 + 手動走查覆蓋。
+ * （前端無測試框架），該部分以修正 +  manual 走查覆蓋。
+ *
+ * <h2>⚠️ 2026-09-29 補上 {@code X-User-Id}（#77 延伸：加簽的持有者守衛）</h2>
+ *
+ * <p>本測試原本<b>全部沿用預設身分 {@code user001}</b>，而 user001 是
+ * 「送出這張單的申請人」，不是「持有主管審核任務的人」（assignee 是 mgr001）。
+ * 守衛加上之後這些請求本來會全部 404 —— 而且是<b>正確地</b> 404：
+ * 申請人沒有權力替主管決定找誰加簽，那筆子任務還會把主管的任務卡住。
+ *
+ * <p>所以這裡補上宣告的身分：<b>加簽由任務持有者（mgr001）發起、
+ * 加簽由被指派人（user003）完成</b>。補之後測試才真正在測它宣稱的東西 ——
+ * 補之前它測的是「任何登入者都能加簽」，而那正是缺陷本身。
  */
 class CountersignTcA01Test extends IntegrationTestBase {
 
@@ -64,6 +75,9 @@ class CountersignTcA01Test extends IntegrationTestBase {
         Task parent = startLeaveAndGetManagerTask();
 
         mockMvc.perform(post("/api/countersign/{taskId}", parent.getId())
+                        // 持有者才有權加簽（assignee = mgr001）；預設身分 user001
+                        // 是申請人，會被守衛擋下 —— 那正是它該被擋下的原因。
+                        .header("X-User-Id", "mgr001")
                         .contentType(MediaType.APPLICATION_JSON)
                         // 後端讀的是 countersignUserId／message，不是 assignee／description
                         .content("{\"countersignUserId\":\"user003\",\"message\":\"請協助確認\"}"))
@@ -85,6 +99,7 @@ class CountersignTcA01Test extends IntegrationTestBase {
 
         // 這正是前端目前會送出的形狀（欄位名錯 → 後端讀到 null）。
         mockMvc.perform(post("/api/countersign/{taskId}", parent.getId())
+                        .header("X-User-Id", "mgr001")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"assignee\":\"user003\",\"description\":\"欄位名錯\"}"))
                 .andExpect(result -> {
@@ -114,6 +129,7 @@ class CountersignTcA01Test extends IntegrationTestBase {
         Task parent = startLeaveAndGetManagerTask();
 
         mockMvc.perform(post("/api/countersign/{taskId}", parent.getId())
+                        .header("X-User-Id", "mgr001")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"countersignUserId\":\"user003\",\"message\":\"請確認\"}"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
@@ -136,8 +152,11 @@ class CountersignTcA01Test extends IntegrationTestBase {
                 .as("有未完成加簽子任務時，父任務不得被完成").isNotNull();
 
         // 完成子任務，意見應附加到父任務的 comments（spec §4.4.1）
+        // 身分必須是子任務的 assignee（user003）—— 守衛拒絕「配對正確但非本人」
+        // 帶著一組配對的 id 替別人簽加簽。
         mockMvc.perform(put("/api/countersign/{taskId}/{subtaskId}/complete",
                         parent.getId(), subtaskId)
+                        .header("X-User-Id", "user003")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"opinion\":\"同意加簽\"}"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
@@ -159,11 +178,15 @@ class CountersignTcA01Test extends IntegrationTestBase {
     @DisplayName("加簽：查詢子任務清單應回傳 assignee 與說明")
     void getSubtasksReturnsDetails() throws Exception {
         Task parent = startLeaveAndGetManagerTask();
+        // 查閱加簽鏈與建立加簽是同一個權限（持有者）——
+        // 回傳的 subtaskId 正是 complete 端點的輸入，讀端放寬等於把下一站送出去。
         mockMvc.perform(post("/api/countersign/{taskId}", parent.getId())
+                        .header("X-User-Id", "mgr001")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"countersignUserId\":\"user004\",\"message\":\"請看一下\"}"));
 
-        mockMvc.perform(get("/api/countersign/{taskId}", parent.getId()))
+        mockMvc.perform(get("/api/countersign/{taskId}", parent.getId())
+                        .header("X-User-Id", "mgr001"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers

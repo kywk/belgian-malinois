@@ -34,8 +34,26 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>（流程內的任務因為有 executionId 刪不掉，但加簽子任務是 standalone
  * task，可以。）
+ *
+ * <h2>⚠️ 2026-09-29 補上 {@code X-User-Id}（#77 延伸：加簽的持有者守衛）</h2>
+ *
+ * <p>本測試原本沿用預設身分 {@code user001}，也就是<b>申請人</b>，
+ * 而非持有主管審核任務的 mgr001。加簽守衛加上之後那樣的請求本來會被擋下，
+ * 而測試必須補上正確的身分才測得到它宣稱的東西：
+ * 加簽由持有者（mgr001）發起、<b>被加簽者（user003）本人</b>完成。
+ *
+ * <p>唯一刻意仍用「不屬於任何人」身分的地方是 {@code mismatchedParentIsRejected}
+ * 的<b>負向對照組</b>：那條要證明的是「即使持有者本人帶著不對的 parentTaskId
+ * 也會被擋」，所以身分必須是<b>應該通過子任務授權檢查的人</b>（user003 = 被指派人），
+ * 讓配對驗證成為唯一的拒絕原因。
  */
 class CountersignTamperTest extends IntegrationTestBase {
+
+    /** 持有主管審核任務的人（leave-approval 的 managerReview assignee）。 */
+    private static final String HOLDER = "mgr001";
+
+    /** 被加簽者（子任務的 assignee）—— 唯一有權完成那筆加簽的身分。 */
+    private static final String COUNTERSIGNED = "user003";
 
     @Autowired
     private RuntimeService runtimeService;
@@ -52,8 +70,10 @@ class CountersignTamperTest extends IntegrationTestBase {
         return taskService.createTaskQuery().processInstanceId(pi.getId()).list().get(0);
     }
 
+    /** 由任務持有者（mgr001）建立一筆加簽。 */
     private String addCountersign(String parentId, String assignee) throws Exception {
         mockMvc.perform(post("/api/countersign/{taskId}", parentId)
+                        .header("X-User-Id", HOLDER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"countersignUserId\":\"" + assignee + "\",\"message\":\"請確認\"}"))
                 .andExpect(status().isOk());
@@ -64,13 +84,18 @@ class CountersignTamperTest extends IntegrationTestBase {
     @DisplayName("不得用不相符的 parentTaskId 完成／刪除他人的加簽子任務")
     void mismatchedParentIsRejected() throws Exception {
         Task victimParent = startAndGetManagerTask();
-        String victimSub = addCountersign(victimParent.getId(), "user003");
+        String victimSub = addCountersign(victimParent.getId(), COUNTERSIGNED);
 
         // 另一個案件的父任務 —— 攻擊者自己有權限操作的那個
         Task attackerParent = startAndGetManagerTask();
 
         mockMvc.perform(put("/api/countersign/{taskId}/{subtaskId}/complete",
                         attackerParent.getId(), victimSub)
+                        // 負向對照組：身分是「有權完成 victimSub 的人」（被指派人 user003），
+                        // 因此唯一的拒絕原因是 parentTaskId 不符。
+                        // 若這裡改用無權身分，測試會因為授權守衛而通過 ——
+                        // 配對驗證壞掉時它就不會紅了。
+                        .header("X-User-Id", COUNTERSIGNED)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"opinion\":\"skip\"}"))
                 .andExpect(result -> assertThat(result.getResponse().getStatus())
@@ -86,17 +111,18 @@ class CountersignTamperTest extends IntegrationTestBase {
     @DisplayName("父任務的守門在加簽被跳過後不得放行")
     void gateStillBlocksAfterFailedTamper() throws Exception {
         Task parent = startAndGetManagerTask();
-        addCountersign(parent.getId(), "user003");
+        addCountersign(parent.getId(), COUNTERSIGNED);
         Task other = startAndGetManagerTask();
 
         mockMvc.perform(put("/api/countersign/{taskId}/{subtaskId}/complete",
                         other.getId(), taskService.getSubTasks(parent.getId()).get(0).getId())
+                        .header("X-User-Id", COUNTERSIGNED)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"));
 
         // 守門必須仍然攔住父任務
         mockMvc.perform(put("/api/tasks/{id}", parent.getId())
-                        .header("X-User-Id", "mgr001")
+                        .header("X-User-Id", HOLDER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"action\":\"complete\",\"variables\":"
                                 + "[{\"name\":\"approved\",\"value\":true}]}"));
@@ -108,11 +134,11 @@ class CountersignTamperTest extends IntegrationTestBase {
     @DisplayName("正常完成加簽必須保留歷史（不得 cascade 刪除）")
     void completingCountersignKeepsHistory() throws Exception {
         Task parent = startAndGetManagerTask();
-        String sub = addCountersign(parent.getId(), "user003");
+        String sub = addCountersign(parent.getId(), COUNTERSIGNED);
 
         mockMvc.perform(put("/api/countersign/{taskId}/{subtaskId}/complete",
                         parent.getId(), sub)
-                        .header("X-User-Id", "user003")
+                        .header("X-User-Id", COUNTERSIGNED)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"opinion\":\"同意加簽\"}"))
                 .andExpect(status().isOk());
@@ -132,11 +158,11 @@ class CountersignTamperTest extends IntegrationTestBase {
     void completingCountersignIsAudited() throws Exception {
         truncateAuditLog();
         Task parent = startAndGetManagerTask();
-        String sub = addCountersign(parent.getId(), "user003");
+        String sub = addCountersign(parent.getId(), COUNTERSIGNED);
 
         mockMvc.perform(put("/api/countersign/{taskId}/{subtaskId}/complete",
                         parent.getId(), sub)
-                        .header("X-User-Id", "user003")
+                        .header("X-User-Id", COUNTERSIGNED)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"opinion\":\"同意\"}"))
                 .andExpect(status().isOk());
