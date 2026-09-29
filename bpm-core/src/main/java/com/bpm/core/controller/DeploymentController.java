@@ -2,6 +2,7 @@ package com.bpm.core.controller;
 
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
+import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.lint.BpmnLintService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.repository.Deployment;
@@ -64,9 +65,24 @@ public class DeploymentController {
         return name.isBlank() ? "process.bpmn20.xml" : name;
     }
 
+    /** 部署內容的指紋。讓稽核紀錄能獨立驗證「當時上線的是哪一份」。 */
+    private static String sha256(String s) {
+        try {
+            var md = java.security.MessageDigest.getInstance("SHA-256");
+            var d = md.digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            var sb = new StringBuilder(d.length * 2);
+            for (byte b : d) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 必須存在", e);
+        }
+    }
+
     @PostMapping
     public Object deploy(@RequestParam("file") MultipartFile file,
-                         @RequestParam(defaultValue = "") String name) throws IOException {
+                         @RequestParam(defaultValue = "") String name,
+                         @RequestHeader(value = "X-User-Id", required = false)
+                         String operatorId) throws IOException {
         String xml = new String(file.getBytes());
         String deployName = name.isEmpty() ? file.getOriginalFilename() : name;
 
@@ -97,8 +113,23 @@ public class DeploymentController {
                 .addString(deployName != null ? deployName : "process.bpmn20.xml", xml)
                 .deploy();
 
-        auditPublisher.publish(new AuditEvent("BPMN_DEPLOY", null, null, null,
-                Map.of("deploymentId", deployment.getId(), "name", deployment.getName())));
+        // ⚠️ operatorId 原本寫死 null（security-audit P2-4）。
+        //
+        // 部署 BPMN 是這個平台上最有後果的單一操作：它決定所有後續案件的
+        // 簽核路徑要送給誰。而那筆稽核紀錄是<b>匿名</b>的 ——
+        // 事後可以看到「某時有人部署了流程定義」，但查不出是誰。
+        //
+        // 而且部署是覆寫式的：新版本一上線，之後啟動的案件全部照新規則走。
+        // 這正是最需要問責的地方。
+        auditPublisher.publish(new AuditEvent(OperationType.BPMN_DEPLOY.name(),
+                operatorId != null && !operatorId.isBlank() ? operatorId : "unknown",
+                null, null,
+                Map.of("deploymentId", deployment.getId(),
+                        "name", deployment.getName(),
+                        // 部署的內容摘要：事後可據此確認當時上線的是哪一份 XML，
+                        // 而不必依賴 deploymentId 仍存在。
+                        "xmlSha256", sha256(xml),
+                        "xmlBytes", xml.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)));
 
         return Map.of("deploymentId", deployment.getId(), "name", deployment.getName(),
                 "lint", lintResult);

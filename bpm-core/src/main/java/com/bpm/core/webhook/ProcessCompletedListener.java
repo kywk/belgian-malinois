@@ -47,12 +47,16 @@ public class ProcessCompletedListener implements FlowableEventListener {
      * {@code Requested bean is currently in creation: Is there an unresolvable
      * circular reference?}（Boot 3 預設禁止循環參照）。
      */
+    private final com.bpm.core.audit.AuditEventPublisher auditPublisher;
+
     public ProcessCompletedListener(RabbitTemplate rabbitTemplate,
                                     @Lazy RuntimeService runtimeService,
-                                    @Lazy HistoryService historyService) {
+                                    @Lazy HistoryService historyService,
+                                    com.bpm.core.audit.AuditEventPublisher auditPublisher) {
         this.rabbitTemplate = rabbitTemplate;
         this.runtimeService = runtimeService;
         this.historyService = historyService;
+        this.auditPublisher = auditPublisher;
     }
 
     @Override
@@ -81,6 +85,35 @@ public class ProcessCompletedListener implements FlowableEventListener {
 
             // 取不到變數時不再猜「approved」——「不知道」就說不知道。
             String result = resolveResult(vars);
+
+            // 稽核：結案本身必須在軌跡上（security-audit P2-4）。
+            //
+            // 改動前這個 listener 只送 webhook，不寫稽核。於是稽核鏈看得到
+            // 每一次 TASK_APPROVE / TASK_REJECT，卻看不到「這張單結案了、
+            // 最終結果是什麼」—— 而結案是外部系統與帳務系統唯一在意的事實。
+            //
+            // 少了它，要重建案件的最終狀態只能推論：看最後一個任務動作，
+            // 再假設流程沒有其他分支。那個假設在有閘道與退回重送的流程上不成立。
+            //
+            // 寫在 webhook 之前：webhook 可能失敗（外部 URL 不通、被
+            // WebhookUrlPolicy 拒絕），而稽核不該取決於外部系統是否可達。
+            auditPublisher.publish(new com.bpm.core.dto.AuditEvent(
+                    com.bpm.core.audit.model.OperationType.PROCESS_COMPLETE.name(),
+                    // 結案由引擎觸發，沒有人類操作者。記 "system" 而非 null ——
+                    // null 在查詢時容易被誤讀成「不知道是誰」，
+                    // 而這裡是「確定不是人」。兩者意思不同。
+                    "system",
+                    "engine",
+                    processDefKey,
+                    processInstanceId,
+                    null,
+                    exec.getBusinessKey(),
+                    Map.of("result", result,
+                            // 變數取不到時 result 會是 unknown（P2-1）。
+                            // 記下變數是否取得到，才能分辨「確實不知道」
+                            // 與「歷史資料被清掉了」。
+                            "finalVariablesResolved", !vars.isEmpty()),
+                    Instant.now()));
 
             Map<String, Object> payload = new HashMap<>();
             payload.put("event", "process.completed");
