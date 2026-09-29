@@ -53,7 +53,7 @@ public class BpmnLintService {
      * —— 列在這裡是為了不誤擋刻意這樣寫的 BPMN，不代表推薦這種寫法。
      */
     static final Set<String> PLATFORM_VARIABLES = Set.of(
-            "initiator", "effectiveInitiator", "firstTaskAssignee", "firstTaskCandidateGroups");
+            "initiator", "effectiveInitiator", "onBehalfOf", "firstTaskAssignee", "firstTaskCandidateGroups");
 
     private final FormService formService;
     private final com.bpm.core.repository.ProcessVariableSpecRepository specRepo;

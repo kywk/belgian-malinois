@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import com.bpm.core.service.InitialAssigneeResolver;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.history.HistoricProcessInstance;
@@ -43,10 +44,26 @@ public class HistoryController {
             @RequestParam(required = false) String initiator,
             @RequestParam(required = false, defaultValue = "false") boolean finished) {
         var query = historyService.createHistoricProcessInstanceQuery();
-        if (initiator != null) query.variableValueEquals("initiator", initiator);
+        // 代員工發起的案件（R-20）：initiator 是 system:<id>，員工記在 onBehalfOf。
+        // 兩者都要比對，否則代發的單不會出現在那位員工的「我的申請」。
+        // 回應以 onBehalf=true 標示，讓前端能顯示「由外部系統代為提出」——
+        // 使用者看到一張自己沒送過的單，必須知道它是怎麼來的。
+        java.util.Set<String> onBehalf = java.util.Set.of();
+        if (initiator != null) {
+            query.or().variableValueEquals("initiator", initiator)
+                    .variableValueEquals(InitialAssigneeResolver.ON_BEHALF_OF_VAR, initiator).endOr();
+            onBehalf = historyService.createHistoricProcessInstanceQuery()
+                    .variableValueEquals(InitialAssigneeResolver.ON_BEHALF_OF_VAR, initiator).list()
+                    .stream().map(HistoricProcessInstance::getId).collect(java.util.stream.Collectors.toSet());
+        }
         if (finished) query.finished();
+        final java.util.Set<String> delegated = onBehalf;
         return query.orderByProcessInstanceStartTime().desc().list().stream()
-                .map(this::processToMap).toList();
+                .map(p -> {
+                    Map<String, Object> m = processToMap(p);
+                    m.put("onBehalf", delegated.contains(p.getId()));
+                    return m;
+                }).toList();
     }
 
     private Map<String, Object> taskToMap(HistoricTaskInstance t) {

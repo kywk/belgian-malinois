@@ -64,7 +64,22 @@ public class ExternalApiController {
                                              @RequestAttribute("externalSystem") ExternalSystem sys) {
         String processDefKey = (String) body.get("processDefinitionKey");
         String businessKey = (String) body.get("businessKey");
-        String initiator = (String) body.getOrDefault("initiator", "system:" + systemId);
+        // ⚠️ initiator 一律由 server 決定（R-20）。
+        //
+        // 改動前 body 可指定任意 initiator，而下游廣泛信任它：主管路由、
+        // 「我的申請」、通知信的申請人。任何持有 API key 的系統都能偽造一張
+        // 「看似由某位員工提出」的單，並送到那位員工的主管。
+        //
+        // 帶了 initiator 就明確拒絕，而不是靜默忽略：靜默忽略會讓呼叫端以為
+        // 案件是以那位員工的名義發起的。
+        if (body.containsKey("initiator")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "initiator 由伺服器決定（system:" + systemId + "），不可由呼叫端指定。"
+                            + "代員工發起請改用 onBehalfOf（需管理員為此系統開啟授權）。");
+        }
+        String initiator = "system:" + systemId;
+        String onBehalfOf = (String) body.get("onBehalfOf");
+        if (onBehalfOf != null && onBehalfOf.isBlank()) onBehalfOf = null;
         String firstAssignee = (String) body.get("firstTaskAssignee");
         String firstGroups = (String) body.get("firstTaskCandidateGroups");
         String callbackUrl = (String) body.get("callbackUrl");
@@ -84,30 +99,28 @@ public class ExternalApiController {
                     "此系統未被授權啟動流程: " + processDefKey);
         }
 
-        // 沒有指定受理人也沒有候選群組 → 流程會走組織查詢（initiator 的直屬主管）。
-        //
-        // ⚠️ 原本的條件是 initiator.startsWith("system:")，而 initiator 完全由
-        // 呼叫端指定（R-20）—— 送一個不以 system: 開頭的值就能整個跳過這個檢查。
-        // 改動前的後果不是「檢查被跳過」而已：組織 mock 對未知 userId 一律回
-        // mgr001，所以案件會<b>啟動成功並派給 mgr001</b>，看起來毫無異常。
-        //
-        // 現在判斷的依據換成「流程接下來需不需要查組織」這個客觀事實，
-        // 不再依賴呼叫端可任意指定的字串。system:<id> 一定查不到（不是人），
-        // 偽造的員工編號也一樣 —— 兩者都會在這裡拿到明確的 400，
-        // 而不是流程啟動時 JUEL 求值失敗的 500。
-        if (firstAssignee == null && firstGroups == null) {
-            if (initiator.startsWith("system:")) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "外部系統發起流程必須指定 firstTaskAssignee 或 firstTaskCandidateGroups"
-                                + "（initiator=" + initiator + " 不是組織系統中的人員，無法推導簽核主管）");
+        // 代員工發起（2026-09-29 決策：依系統授權，預設不允許）。
+        if (onBehalfOf != null) {
+            if (!Boolean.TRUE.equals(sys.getAllowOnBehalfOf())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "此系統未被授權代員工發起（onBehalfOf）");
             }
+            // 必須是組織系統認得的人。查不到主管就無法路由 —— 而且一個不存在的
+            // 員工編號出現在「我的申請」或通知信上，只會製造混亂。
             try {
-                orgService.getDirectManager(initiator);
+                orgService.getDirectManager(onBehalfOf);
             } catch (Exception e) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "initiator=" + initiator + " 不是組織系統認識的人員，"
-                                + "無法推導簽核主管。請指定 firstTaskAssignee 或 firstTaskCandidateGroups。", e);
+                        "onBehalfOf=" + onBehalfOf + " 不是組織系統認識的人員", e);
             }
+        }
+
+        // 沒有受理人、沒有候選群組、也不是代員工發起 → 無從推導簽核人。
+        // initiator 是 system:<id>，不是人，組織系統查不到它的主管。
+        if (firstAssignee == null && firstGroups == null && onBehalfOf == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "外部系統發起流程必須指定 firstTaskAssignee、firstTaskCandidateGroups，"
+                            + "或（已授權時）onBehalfOf");
         }
 
         // Validate variables against ProcessVariableSpec
@@ -118,7 +131,14 @@ public class ExternalApiController {
         // 擁有者由 server 決定，覆寫呼叫端可能夾帶的同名變數（body 的 variables
         // 是自由 map，必須在這裡最後寫入才不會被蓋掉）。
         variables.put(OWNER_VAR, systemId);
-        if (initiator.startsWith("system:") && firstAssignee != null) {
+        // 與 OWNER_VAR 相同：最後寫入，呼叫端的 variables 蓋不掉它。
+        // 沒有代發時明確移除，避免呼叫端藉 variables 夾帶。
+        if (onBehalfOf != null) {
+            variables.put(com.bpm.core.service.InitialAssigneeResolver.ON_BEHALF_OF_VAR, onBehalfOf);
+        } else {
+            variables.remove(com.bpm.core.service.InitialAssigneeResolver.ON_BEHALF_OF_VAR);
+        }
+        if (firstAssignee != null) {
             variables.put("effectiveInitiator", firstAssignee);
         }
         // ⚠️ 必須在 startProcessInstanceByKey 之前放進變數（P2-7）。
@@ -158,7 +178,8 @@ public class ExternalApiController {
 
         auditPublisher.publish(new AuditEvent("EXTERNAL_API_CALL", "system:" + systemId,
                 "external_api", processDefKey, pi.getProcessInstanceId(), null, businessKey,
-                Map.of("action", "start_process", "processDefinitionKey", processDefKey),
+                Map.of("action", "start_process", "processDefinitionKey", processDefKey,
+                        "onBehalfOf", onBehalfOf != null ? onBehalfOf : ""),
                 java.time.Instant.now()));
 
         Map<String, Object> result = new HashMap<>();

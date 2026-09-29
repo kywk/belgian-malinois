@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import com.bpm.core.service.InitialAssigneeResolver;
 import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
@@ -78,10 +79,23 @@ public class ProcessController {
     @GetMapping
     public List<Map<String, Object>> getProcessInstances(@RequestParam(required = false) String initiator) {
         var query = runtimeService.createProcessInstanceQuery();
-        if (initiator != null) query.variableValueEquals("initiator", initiator);
+        // 代員工發起的案件（R-20）：initiator 是 system:<id>，員工記在 onBehalfOf。
+        // 兩者都要比對，否則代發的單不會出現在那位員工的「我的申請」。
+        // 回應以 onBehalf=true 標示，讓前端能顯示「由外部系統代為提出」——
+        // 使用者看到一張自己沒送過的單，必須知道它是怎麼來的。
+        java.util.Set<String> onBehalf = java.util.Set.of();
+        if (initiator != null) {
+            query.or().variableValueEquals("initiator", initiator)
+                    .variableValueEquals(InitialAssigneeResolver.ON_BEHALF_OF_VAR, initiator).endOr();
+            onBehalf = runtimeService.createProcessInstanceQuery()
+                    .variableValueEquals(InitialAssigneeResolver.ON_BEHALF_OF_VAR, initiator).list()
+                    .stream().map(ProcessInstance::getProcessInstanceId).collect(java.util.stream.Collectors.toSet());
+        }
+        final java.util.Set<String> delegated = onBehalf;
         return query.orderByProcessInstanceId().desc().list().stream()
                 .map(pi -> {
                     Map<String, Object> m = new HashMap<>();
+                    m.put("onBehalf", delegated.contains(pi.getProcessInstanceId()));
                     m.put("processInstanceId", pi.getProcessInstanceId());
                     m.put("processDefinitionKey", pi.getProcessDefinitionKey());
                     m.put("businessKey", pi.getBusinessKey() != null ? pi.getBusinessKey() : "");

@@ -39,6 +39,8 @@ public class InitialAssigneeResolver {
     /** 流程變數名稱。三個啟動路徑都必須設定，否則 JUEL 會拋 PropertyNotFound。 */
     public static final String FIRST_ASSIGNEE_VAR = "firstTaskAssignee";
     public static final String FIRST_GROUPS_VAR = "firstTaskCandidateGroups";
+    /** 外部系統代員工發起時的員工（R-20）。只有被授權的系統能設定，見 ExternalApiController。 */
+    public static final String ON_BEHALF_OF_VAR = "onBehalfOf";
 
     private final OrgService orgService;
 
@@ -87,7 +89,9 @@ public class InitialAssigneeResolver {
         if (isSet(firstTaskCandidateGroups)) {
             return null;
         }
-        return orgService.getDirectManager(initiator);
+        // 代員工發起：路由到那位員工的主管。initiator 此時是 system:<id>，不是人。
+        String onBehalfOf = str(execution.getVariable(ON_BEHALF_OF_VAR));
+        return orgService.getDirectManager(isSet(onBehalfOf) ? onBehalfOf : initiator);
     }
 
     private static boolean isSet(String v) {

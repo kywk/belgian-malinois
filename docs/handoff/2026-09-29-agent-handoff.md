@@ -306,7 +306,7 @@ Boot 3.5 已於 2026-06-30 EOL，之後沒有 OSS CVE 修補。計畫在
 | `actuator` 只開 health/info | 池飽和無法觀測。開放 metrics 有安全面，建議限內網或加認證 |
 | lint 白名單 vs `setBeans()` | 兩份清單。已加測試守「白名單有、執行期沒有」這個危險方向；反方向（`notifyTaskListener` 在 `setBeans` 卻不在白名單）未動 —— 那會讓部署被自己的 lint 擋下，是安全的那邊 |
 | 手動瀏覽器走查 | 一直沒做。browser 工具不可用（使用者婉拒擴充套件）。`http.spec.js` 與 `guard.spec.js` 已涵蓋大部分它會驗的東西 |
-| R-20 本體 | 外部 API 的 initiator 仍由呼叫端指定，可冒用**真實存在**的員工編號。本次只拿掉「用不存在的身分繞過必填檢查」。徹底修法是讓 initiator 由 server 依 API key 決定 |
+| ~~R-20 本體~~ | **2026-09-29 已完成**：initiator 一律 `system:<id>`（body 帶 initiator 回 400）；代員工發起改用 `onBehalfOf`，需外部系統 `allowOnBehalfOf=true`（預設關、V3 migration），並驗證員工存在。**未做**：admin UI 的開關、前端「代發」標示（API 已回 `onBehalf`）、補件關卡仍派給 `${initiator}`（= system）、`firstTaskAssignee`／群組的存在性驗證、lint rule h 升 error |
 
 ---
 

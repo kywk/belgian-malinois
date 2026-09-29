@@ -62,6 +62,13 @@ public class ExternalSystem {
     @Column(nullable = false)
     private Boolean enabled = true;
 
+    /**
+     * 是否可代員工發起（body 的 {@code onBehalfOf}）。預設不允許（R-20）。
+     * 見 V3__external_system_allow_on_behalf_of.sql。
+     */
+    @Column(nullable = false)
+    private Boolean allowOnBehalfOf = false;
+
     @Column(updatable = false)
     private Instant createdAt;
 
@@ -90,6 +97,8 @@ public class ExternalSystem {
     public void setIpWhitelist(String ipWhitelist) { this.ipWhitelist = ipWhitelist; }
     public Boolean getEnabled() { return enabled; }
     public void setEnabled(Boolean enabled) { this.enabled = enabled; }
+    public Boolean getAllowOnBehalfOf() { return allowOnBehalfOf; }
+    public void setAllowOnBehalfOf(Boolean allowOnBehalfOf) { this.allowOnBehalfOf = allowOnBehalfOf; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getLastUsedAt() { return lastUsedAt; }

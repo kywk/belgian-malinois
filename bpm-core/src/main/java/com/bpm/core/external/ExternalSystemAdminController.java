@@ -49,7 +49,9 @@ public class ExternalSystemAdminController {
     /** 授權相關欄位。update 時逐一比對前後值寫進稽核。 */
     private static final List<String> AUDITED_FIELDS =
             List.of("systemName", "contactEmail", "allowedProcessKeys", "allowedActions",
-                    "callbackUrl", "ipWhitelist", "enabled");
+                    "callbackUrl", "ipWhitelist", "enabled",
+                    // 授權變更：漏列的話，只改這一欄的 PUT 會被判定為「沒有變更」而不留痕。
+                    "allowOnBehalfOf");
 
     private final ExternalSystemRepository repo;
     private final AuditEventPublisher auditPublisher;
@@ -79,12 +81,15 @@ public class ExternalSystemAdminController {
         String plainKey = ApiKeyUtil.generateKey();
         sys.setApiKey(ApiKeyUtil.hash(plainKey));
         sys.setEnabled(true);
+        // null（沒帶）視為不允許：代發是需要明確授予的能力（R-20）。
+        sys.setAllowOnBehalfOf(Boolean.TRUE.equals(sys.getAllowOnBehalfOf()));
         ExternalSystem saved = repo.save(sys);
 
         audit(operatorId, "create", saved.getSystemId(), Map.of(
                 "allowedProcessKeys", nullSafe(saved.getAllowedProcessKeys()),
                 "allowedActions", nullSafe(saved.getAllowedActions()),
-                "ipWhitelist", nullSafe(saved.getIpWhitelist())));
+                "ipWhitelist", nullSafe(saved.getIpWhitelist()),
+                "allowOnBehalfOf", String.valueOf(saved.getAllowOnBehalfOf())));
 
         Map<String, Object> result = new HashMap<>();
         result.put("id", saved.getId());
@@ -122,6 +127,8 @@ public class ExternalSystemAdminController {
         sys.setCallbackUrl(req.getCallbackUrl());
         sys.setIpWhitelist(req.getIpWhitelist());
         sys.setEnabled(req.getEnabled());
+        // PUT 沒帶這個欄位時關閉 —— 錯誤的方向必須是「失去能力」而非「意外取得」。
+        sys.setAllowOnBehalfOf(Boolean.TRUE.equals(req.getAllowOnBehalfOf()));
         ExternalSystem saved = repo.save(sys);
 
         Map<String, Object> changes = diff(before, snapshot(saved));
@@ -214,6 +221,7 @@ public class ExternalSystemAdminController {
         m.setCallbackUrl(s.getCallbackUrl());
         m.setIpWhitelist(s.getIpWhitelist());
         m.setEnabled(s.getEnabled());
+        m.setAllowOnBehalfOf(s.getAllowOnBehalfOf());
         m.setCreatedAt(s.getCreatedAt());
         m.setLastUsedAt(s.getLastUsedAt());
         return m;
@@ -228,6 +236,7 @@ public class ExternalSystemAdminController {
         m.put("callbackUrl", nullSafe(s.getCallbackUrl()));
         m.put("ipWhitelist", nullSafe(s.getIpWhitelist()));
         m.put("enabled", String.valueOf(s.getEnabled()));
+        m.put("allowOnBehalfOf", String.valueOf(s.getAllowOnBehalfOf()));
         return m;
     }
 

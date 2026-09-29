@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -38,6 +39,9 @@ class ExternalApiTcA04Test extends IntegrationTestBase {
 
     @Autowired
     private ExternalSystemRepository repo;
+
+    @Autowired
+    private org.flowable.engine.RuntimeService runtimeService;
 
     private static final String PLAIN_KEY = "sk-tca04-testkey";
 
@@ -195,23 +199,14 @@ class ExternalApiTcA04Test extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("擁有權由 server 寫入，不依賴可偽造的 initiator")
+    @DisplayName("擁有權由 server 寫入，不依賴呼叫端提供的任何身分")
     void ownershipIsRecordedByServer() throws Exception {
         given("erp", "[\"start_process\"]", "[\"leave-approval\"]");
 
-        String body = "{\"processDefinitionKey\":\"leave-approval\","
+        var res = start("{\"processDefinitionKey\":\"leave-approval\","
                 + "\"businessKey\":\"TCA04-own\","
                 + "\"firstTaskAssignee\":\"mgr001\","
-                // 刻意偽造 initiator：擁有權判定不得採信它（R-09 已改為
-                // 依 server 寫入的 _externalSystemId 判定）
-                + "\"initiator\":\"erp-legacy\","
-                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}";
-
-        var res = mockMvc.perform(post("/api/external/process-instances")
-                        .header("X-API-Key", PLAIN_KEY)
-                        .header("X-System-Id", "erp")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(body))
+                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}")
                 .andExpect(status().isOk())
                 .andReturn();
 
@@ -220,75 +215,108 @@ class ExternalApiTcA04Test extends IntegrationTestBase {
                 .contains("processInstanceId");
     }
 
-    /**
-     * 偽造 initiator 不再能繞過受理人的必填要求（P2-7 修復）。
-     *
-     * <h2>改動前為什麼會通過</h2>
-     *
-     * <p>必填檢查原本寫成 {@code initiator.startsWith("system:")} 才要求
-     * {@code firstTaskAssignee}。而 initiator 完全由呼叫端指定（R-20），
-     * 送一個不以 {@code system:} 開頭的值就整個跳過檢查。
-     *
-     * <p>後果不只是「檢查被跳過」：BPMN 接著算
-     * {@code orgService.getDirectManager("not-a-system-prefix")}，
-     * 而組織 mock 對未知 userId 一律回 {@code mgr001} ——
-     * 案件<b>啟動成功並派給 mgr001</b>，外部系統收到 200，看起來毫無異常。
-     *
-     * <h2>現在的行為</h2>
-     *
-     * <p>檢查的依據換成「流程接下來需不需要查組織」這個客觀事實，
-     * 不再依賴呼叫端可任意指定的字串。所以 system 帳號與偽造的員工編號
-     * 都會拿到 400。
-     *
-     * <h2>R-20 仍未完全修復</h2>
-     *
-     * <p>呼叫端仍可冒用<b>真實存在</b>的員工編號當 initiator ——
-     * 那會通過這裡的檢查，案件派給那個人的主管。要徹底修掉必須讓 initiator
-     * 由 server 依 API key 決定，那是 R-20 的本體，尚未施作。
-     * 這次只拿掉了「用一個不存在的身分繞過必填檢查」這條路。
-     */
+    // ── R-20：initiator 由 server 決定；代員工發起需系統授權 ──────────────
+    //
+    // 改動前 body 可指定任意 initiator，而下游廣泛信任它（主管路由、我的申請、
+    // 通知信）→ 任何持有 API key 的系統都能偽造一張「看似由某位員工提出」的單。
+    // 2026-09-29 決策：initiator 一律為 system:<id>；代發改用 onBehalfOf，
+    // 且只有 allowOnBehalfOf=true 的系統能用。
+
+    private org.springframework.test.web.servlet.ResultActions start(String body) throws Exception {
+        return mockMvc.perform(post("/api/external/process-instances")
+                .header("X-API-Key", PLAIN_KEY)
+                .header("X-System-Id", "erp")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body));
+    }
+
+    private void allowOnBehalfOf(ExternalSystem sys) {
+        sys.setAllowOnBehalfOf(true);
+        repo.save(sys);
+    }
+
+    private String pidOf(org.springframework.test.web.servlet.MvcResult res) throws Exception {
+        return res.getResponse().getContentAsString()
+                .replaceAll(".*\"processInstanceId\":\"([^\"]*)\".*", "$1");
+    }
+
     @Test
-    @DisplayName("R-20（部分修復）：偽造 initiator 不得繞過受理人的必填要求")
-    void forgedInitiatorCannotBypassAssigneeRequirement() throws Exception {
+    @DisplayName("R-20：body 帶 initiator 一律 400（不靜默忽略）")
+    void initiatorInBodyIsRejected() throws Exception {
         given("erp", "[\"start_process\"]", "[\"leave-approval\"]");
-
-        String body = "{\"processDefinitionKey\":\"leave-approval\","
-                + "\"businessKey\":\"TCA04-bypass\","
-                + "\"initiator\":\"not-a-system-prefix\","
-                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}";
-
-        mockMvc.perform(post("/api/external/process-instances")
-                        .header("X-API-Key", PLAIN_KEY)
-                        .header("X-System-Id", "erp")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(body))
+        start("{\"processDefinitionKey\":\"leave-approval\","
+                + "\"firstTaskAssignee\":\"mgr001\","
+                + "\"initiator\":\"user001\","
+                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}")
                 .andExpect(status().isBadRequest());
     }
 
     @Test
-    @DisplayName("代真實員工發起時不需指定受理人 —— 主管路由仍須可用")
-    void onBehalfOfRealEmployeeStillRoutesToManager() throws Exception {
-        // 上一個測試不能是靠「一律要求 firstTaskAssignee」達成的 ——
-        // 那會擋掉「外部系統代員工送件」這個正當用途。
-        // 這裡確認 initiator 是組織系統認識的人時，仍可省略受理人並走主管路由。
+    @DisplayName("R-20：沒有受理人、候選群組、也沒有代發 → 400")
+    void assigneeRequiredWithoutOnBehalfOf() throws Exception {
         given("erp", "[\"start_process\"]", "[\"leave-approval\"]");
+        start("{\"processDefinitionKey\":\"leave-approval\","
+                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}")
+                .andExpect(status().isBadRequest());
+    }
 
-        String body = "{\"processDefinitionKey\":\"leave-approval\","
+    @Test
+    @DisplayName("R-20：未授權代發的系統帶 onBehalfOf → 403")
+    void onBehalfOfRequiresSystemAuthorization() throws Exception {
+        given("erp", "[\"start_process\"]", "[\"leave-approval\"]");  // 預設 allowOnBehalfOf=false
+        start("{\"processDefinitionKey\":\"leave-approval\","
+                + "\"onBehalfOf\":\"user001\","
+                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}")
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("R-20：已授權代發但員工不存在 → 400")
+    void onBehalfOfUnknownEmployeeIsRejected() throws Exception {
+        allowOnBehalfOf(given("erp", "[\"start_process\"]", "[\"leave-approval\"]"));
+        start("{\"processDefinitionKey\":\"leave-approval\","
+                + "\"onBehalfOf\":\"nobody-" + UUID.randomUUID() + "\","
+                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}")
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("R-20：已授權代發 → 走該員工的主管、initiator 仍是 system、出現在員工的「我的申請」並標示代發")
+    void authorizedOnBehalfOfRoutesToEmployeesManager() throws Exception {
+        allowOnBehalfOf(given("erp", "[\"start_process\"]", "[\"leave-approval\"]"));
+
+        var res = start("{\"processDefinitionKey\":\"leave-approval\","
                 + "\"businessKey\":\"TCA04-onbehalf-" + UUID.randomUUID() + "\","
-                + "\"initiator\":\"user001\","
-                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}";
+                + "\"onBehalfOf\":\"user001\","
+                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}")
+                .andExpect(status().isOk()).andReturn();
+        String pid = pidOf(res);
 
-        mockMvc.perform(post("/api/external/process-instances")
-                        .header("X-API-Key", PLAIN_KEY)
-                        .header("X-System-Id", "erp")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(body))
-                .andExpect(status().isOk());
+        var task = taskService.createTaskQuery().processInstanceId(pid).singleResult();
+        assertThat(task.getAssignee()).as("應落在 user001 的主管").isEqualTo("mgr001");
+        assertThat(runtimeService.getVariable(pid, "initiator"))
+                .as("initiator 是 server 決定的系統身分，不是員工").isEqualTo("system:erp");
 
-        // 第一個任務應落在 user001 的主管身上，而不是任何捏造的預設值。
-        var task = taskService.createTaskQuery()
-                .processVariableValueEquals("initiator", "user001")
-                .orderByTaskCreateTime().desc().list().get(0);
-        org.assertj.core.api.Assertions.assertThat(task.getAssignee()).isEqualTo("mgr001");
+        String mine = mockMvc.perform(get("/api/process-instances").param("initiator", "user001"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(mine).as("代發的單必須出現在員工的「我的申請」").contains(pid);
+        var row = new com.fasterxml.jackson.databind.ObjectMapper().readTree(mine).findParents("processInstanceId")
+                .stream().filter(n -> pid.equals(n.get("processInstanceId").asText())).findFirst().orElseThrow();
+        assertThat(row.get("onBehalf").asBoolean())
+                .as("而且必須標示為代發，否則員工會看到一張自己沒送過的單")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("R-20：不能藉 variables 夾帶 onBehalfOf 繞過系統授權")
+    void onBehalfOfCannotBeSmuggledThroughVariables() throws Exception {
+        given("erp", "[\"start_process\"]", "[\"leave-approval\"]");  // 未授權代發
+        var res = start("{\"processDefinitionKey\":\"leave-approval\","
+                + "\"firstTaskAssignee\":\"mgr001\","
+                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1,\"onBehalfOf\":\"user001\"}}")
+                .andExpect(status().isOk()).andReturn();
+        assertThat(runtimeService.getVariable(pidOf(res), "onBehalfOf"))
+                .as("variables 是自由 map；server 必須移除它，否則等於繞過授權")
+                .isNull();
     }
 }

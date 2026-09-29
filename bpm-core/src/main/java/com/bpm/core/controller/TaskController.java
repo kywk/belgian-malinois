@@ -47,7 +47,7 @@ public class TaskController {
      * 「改寫引擎與身分語意」的變數，而一般業務欄位照常放行。
      */
     private static final java.util.Set<String> PROTECTED_VARIABLES =
-            java.util.Set.of("initiator", "effectiveInitiator");
+            java.util.Set.of("initiator", "effectiveInitiator", "onBehalfOf");
 
     private static boolean isProtectedVariable(String name) {
         if (name == null || name.isBlank()) return true;

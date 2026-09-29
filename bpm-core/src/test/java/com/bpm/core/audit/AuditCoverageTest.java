@@ -90,6 +90,46 @@ class AuditCoverageTest extends IntegrationTestBase {
     // ── CONFIG_CHANGE：外部系統（授權設定）────────────────────────
 
     @Test
+    @DisplayName("更新外部系統不得破壞它的 API key；只改代發授權的 PUT 也必須留痕")
+    void updateKeepsApiKeyAndAuditsOnBehalfOfToggle() throws Exception {
+        // 兩個都是 R-20 線上實測才發現的缺陷：
+        // 1. update() 加上 @Transactional（P1-14）後，回應前的 setApiKey("***")
+        //    被 flush 進 DB → 該系統的 key 立即失效。MockMvc 測試只看回應，看不到。
+        // 2. allowOnBehalfOf 不在 AUDITED_FIELDS → 只改它的 PUT 判定為「沒有變更」、不寫稽核。
+        String sid = "audit-key-" + UUID.randomUUID().toString().substring(0, 8);
+        createdSystems.add(sid);
+        String created = mockMvc.perform(post("/api/admin/external-systems")
+                        .header("X-User-Id", "admin001")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"systemId\":\"" + sid + "\",\"systemName\":\"測試\","
+                                + "\"allowedProcessKeys\":\"[\\\"leave-approval\\\"]\","
+                                + "\"allowedActions\":\"[\\\"start_process\\\"]\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String plainKey = created.replaceAll(".*\"apiKey\":\"([^\"]*)\".*", "$1");
+        truncateAuditLog();
+
+        mockMvc.perform(put("/api/admin/external-systems/" + sid)
+                        .header("X-User-Id", "admin001")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"systemName\":\"測試\","
+                                + "\"allowedProcessKeys\":\"[\\\"leave-approval\\\"]\","
+                                + "\"allowedActions\":\"[\\\"start_process\\\"]\",\"enabled\":true,"
+                                + "\"allowOnBehalfOf\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.apiKey").value("***"));
+
+        assertThat(externalSystemRepo.findBySystemId(sid).orElseThrow().getApiKey())
+                .as("回應遮蔽 apiKey 不得寫回 DB —— 否則外部系統立即全部 401")
+                .isEqualTo(com.bpm.core.external.ApiKeyUtil.hash(plainKey));
+
+        var details = awaitAuditDetails(OperationType.CONFIG_CHANGE, 1);
+        assertThat(String.join("\n", details))
+                .as("代發授權是授權變更，必須留下前後值")
+                .contains("update").contains("allowOnBehalfOf").contains("false → true");
+    }
+
+    @Test
     @DisplayName("外部系統的建立與授權變更必須留下軌跡與前後值")
     void externalSystemChangesAreAudited() throws Exception {
         // 這個 controller 原本有四個變更端點、零個稽核呼叫。它管的是
