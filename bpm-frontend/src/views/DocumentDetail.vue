@@ -65,7 +65,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import axios from 'axios'
+import http from '../services/http'
 import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
 import { getTasks, getSubtasks, updateTask } from '../services/flowableApi.js'
@@ -112,7 +112,7 @@ async function handleRevisionSubmit() {
       return { name, value }
     })
   try {
-    await updateTask(taskId, { action: 'complete', assignee: auth.token, variables: vars })
+    await updateTask(taskId, { action: 'complete', assignee: auth.userId, variables: vars })
     ElMessage.success('補件重送成功')
     router.push('/tasks')
   } catch (e) {
@@ -126,8 +126,8 @@ async function loadSubtasks() {
 
 onMounted(async () => {
   const [assigned, candidate] = await Promise.all([
-    getTasks({ assignee: auth.token }),
-    getTasks({ candidateUser: auth.token })
+    getTasks({ assignee: auth.userId }),
+    getTasks({ candidateUser: auth.userId })
   ])
   const map = new Map()
   ;[...assigned, ...candidate].forEach(t => map.set(t.taskId, t))
@@ -135,7 +135,7 @@ onMounted(async () => {
 
   if (task.value?.processInstanceId) {
     try {
-      const { data } = await axios.get(`/api/process-instances/${task.value.processInstanceId}/variables`)
+      const { data } = await http.get(`/api/process-instances/${task.value.processInstanceId}/variables`)
       variables.value = data
     } catch { /* ignore */ }
   }

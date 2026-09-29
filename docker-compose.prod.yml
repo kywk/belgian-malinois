@@ -1,5 +1,25 @@
-version: '3.8'
-
+# 正式環境部署。必要的環境變數（未設定都會讓啟動失敗，不會靜默降級）：
+#
+#   MSSQL_SA_PASSWORD      MSSQL sa 密碼。infra/mssql/entrypoint.sh 也讀它。
+#   BPM_DATASOURCE_PASSWORD  應用端連線密碼，一個變數覆蓋 core/audit/form 三個池。
+#                            ⚠️ 不是 SPRING_DATASOURCE_PASSWORD —— 那只蓋得到
+#                            primary，audit 與 form 會沿用 dev 密碼（P2-3）。
+#   RABBITMQ_USER / RABBITMQ_PASS
+#   REDIS_PASSWORD
+#   WEBHOOK_HMAC_SECRET    webhook 簽章密鑰。
+#   ORG_SERVICE_URL        真實組織系統。未設定即啟動失敗（P2-7）。
+#   PERM_SERVICE_URL       真實權限系統。同上。
+#   OIDC_ISSUER_URI        企業 IdP 的位置。本服務只驗證 JWT，不簽發也不處理
+#                          OIDC 流程（那由另一個服務負責）。
+#                          prod 未設定即啟動失敗（JwtSecurityValidator）。
+#   GATEWAY_AUTH_ENABLED   是否啟用 server 之間的閘道認證（預設 false）。
+#   GATEWAY_SHARED_SECRET  啟用閘道時必填。沒有密鑰的話任何能連到應用 port
+#                          的人都能用 X-User-Id 偽造身分。
+#   GATEWAY_TRUSTED_PROXIES 選用的來源位址白名單（逗號分隔）。
+#   GITHUB_REPO / IMAGE_TAG  映像來源。
+#
+# 啟動：docker compose -f docker-compose.prod.yml up -d
+# （這是獨立檔案，不要疊在 docker-compose.yml 上 —— base 的 profile 沒有 prod。）
 services:
   mssql:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -52,24 +72,45 @@ services:
       rabbitmq: { condition: service_healthy }
       redis: { condition: service_healthy }
     environment:
-      SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATASOURCE_PASSWORD: "${MSSQL_SA_PASSWORD}"
+      # ⚠️ 必須包含 prod（security-audit P2-7）。
+      #
+      # 改動前這裡只有 docker —— 和 base／dev 完全相同，所以 profile
+      # 不區分 dev 與 prod，「正式環境關掉開發 mock」無處可設。
+      # 後果：正式環境的組織架構與權限判定全部來自寫死的 9 人開發 fixture，
+      # 而且不會報錯 —— 流程跑得動，只是任務都派給 mgr001。
+      #
+      # docker 提供容器內的 host 覆蓋；prod 疊上 mock-enabled=false
+      # 與「org/perm URL 必須由環境提供」。
+      SPRING_PROFILES_ACTIVE: docker,prod
+      # 真實組織／權限系統的位置。未設定會讓啟動失敗
+      # （ExternalSystemUrlValidator）—— 這是刻意的：設錯的授權來源
+      # 不該啟動成功，它能提供服務就代表它正在做錯誤的授權決定。
+      ORG_SERVICE_URL: "${ORG_SERVICE_URL}"
+      PERM_SERVICE_URL: "${PERM_SERVICE_URL}"
+      # 身分來源（R-01）。未設定會讓啟動失敗 —— 身分設錯的服務
+      # 能提供服務，就代表它正在接受偽造的身分，而且看起來一切正常。
+      OIDC_ISSUER_URI: "${OIDC_ISSUER_URI}"
+      GATEWAY_AUTH_ENABLED: "${GATEWAY_AUTH_ENABLED:-false}"
+      GATEWAY_SHARED_SECRET: "${GATEWAY_SHARED_SECRET:-}"
+      GATEWAY_TRUSTED_PROXIES: "${GATEWAY_TRUSTED_PROXIES:-}"
+      # ⚠️ 這一個變數覆蓋全部三個 DataSource（core／audit／form）。
+      #
+      # 原本這裡寫的是 SPRING_DATASOURCE_PASSWORD，那只蓋得到 primary ——
+      # audit 與 form 會沿用 application.yml 裡的 dev 密碼去連正式資料庫
+      # （security-audit P2-3）。改成 bpm.datasource.password 這個單一來源後，
+      # 「漏蓋其中一個池」在結構上就不可能發生。
+      #
+      # 新增 DataSource 時不需要回來加環境變數；但如果新的 DB 用不同帳號，
+      # 就必須明確地在這裡多注入一組，不要偷用共用的那組。
+      BPM_DATASOURCE_PASSWORD: "${MSSQL_SA_PASSWORD}"
       SPRING_RABBITMQ_USERNAME: "${RABBITMQ_USER}"
       SPRING_RABBITMQ_PASSWORD: "${RABBITMQ_PASS}"
       SPRING_DATA_REDIS_PASSWORD: "${REDIS_PASSWORD}"
       BPM_WEBHOOK_HMAC_SECRET: "${WEBHOOK_HMAC_SECRET}"
-    restart: unless-stopped
-
-  form-service:
-    image: ghcr.io/${GITHUB_REPO}/form-service:${IMAGE_TAG:-latest}
-    depends_on:
-      mssql: { condition: service_healthy }
-      rabbitmq: { condition: service_healthy }
-    environment:
-      SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATASOURCE_PASSWORD: "${MSSQL_SA_PASSWORD}"
-      SPRING_RABBITMQ_USERNAME: "${RABBITMQ_USER}"
-      SPRING_RABBITMQ_PASSWORD: "${RABBITMQ_PASS}"
+    volumes:
+      # 見 docker-compose.yml 同段註解（security-audit P1-6）。
+      # prod 尤其不能少：附件是簽核案件的證據，容器重建就遺失等於紀錄消失。
+      - bpm-uploads:/app/uploads
     restart: unless-stopped
 
   nginx:
@@ -81,10 +122,10 @@ services:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - bpm-core
-      - form-service
     restart: unless-stopped
 
 volumes:
   mssql-data:
   rabbitmq-data:
   redis-data:
+  bpm-uploads:

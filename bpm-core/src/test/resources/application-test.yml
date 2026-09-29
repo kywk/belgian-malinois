@@ -1,0 +1,58 @@
+# 整合測試的 profile。DataSource／RabbitMQ／Redis 位址由
+# IntegrationTestBase 的 @DynamicPropertySource 在執行期注入，此處只放靜態設定。
+spring:
+  jpa:
+    hibernate:
+      # 與 production 一致：schema 一律由 Flyway 建立。
+      # 若這裡放 update，測試就會驗不到 migration 的正確性 —— 那是本測試網的主要目的之一。
+      ddl-auto: none
+    show-sql: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration/core
+    baseline-on-migrate: true
+    baseline-version: 0
+  mail:
+    # 測試不驗證寄信，指向一個不存在的 port；EmailConsumer 的失敗不影響待測行為。
+    host: localhost
+    port: 65000
+
+flowable:
+  database-schema-update: true
+  # 測試中關掉 async executor：它會起背景執行緒輪詢 job，
+  # 讓測試的時序變成不確定（timer／async task 可能在斷言之後才跑）。
+  async-executor-activate: false
+
+bpm:
+  security:
+    jwt:
+      # 測試用對稱密鑰。JwtSecurityValidator 要求 issuer-uri 或 dev-secret
+      # 至少有一個 —— 測試不接真實 IdP，所以用 dev-secret。
+      # JwtAuthenticationTest 會用同一組密鑰簽出 token 測真正的驗證路徑。
+      dev-secret: test-only-jwt-secret-at-least-32-bytes-long
+    gateway:
+      # ⚠️ 測試扮演「信任閘道」，而不是為測試開一條後門。
+      #
+      # 68 處測試用 X-User-Id 宣告身分。若為此加一個 test-only 的標頭認證，
+      # 那就是一條可能誤上 prod 的旁路（P2-7 的教訓）。改為讓測試走
+      # 使用者指定的正式機制之一：閘道認證。IntegrationTestBase 以
+      # defaultRequest 附上密鑰，所以每個測試的 X-User-Id 原樣生效，
+      # 而且走的是與 production 完全相同的過濾器。
+      enabled: true
+      shared-secret: test-only-gateway-secret
+      # MockMvc 的 remoteAddr 預設是 127.0.0.1
+      trusted-proxies: 127.0.0.1
+  upload:
+    dir: ./target/test-uploads
+  external:
+    # ⚠️ org/perm 的 URL 刻意<b>不在這裡</b>設定。
+    #
+    # 這裡原本寫的是 http://localhost:${local.server.port:8080}/mock/org。
+    # webEnvironment=MOCK 下沒有 local.server.port，於是退回 8080 ——
+    # 也就是 docker-compose 上 bpm-core 容器的 port。整合測試因此打的是
+    # 另外部署的容器，測試結果不再反映原始碼。詳見 IntegrationTestBase 的註解。
+    #
+    # 現在由 IntegrationTestBase 的 @DynamicPropertySource 注入實際 port。
+    # 不留預設值：漏設就要大聲失敗，不要靜默打到別的服務。
+    mock-enabled: true
+

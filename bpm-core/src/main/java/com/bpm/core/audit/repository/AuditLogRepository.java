@@ -17,6 +17,9 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
     @Query("SELECT a FROM AuditLog a ORDER BY a.id DESC LIMIT 1")
     Optional<AuditLog> findLastRecord();
 
+    /** 幂等檢查用（security-audit P1-14）。 */
+    boolean existsByEventId(String eventId);
+
     @Query("SELECT a FROM AuditLog a WHERE " +
             "(:processInstanceId IS NULL OR a.processInstanceId = :processInstanceId) AND " +
             "(:operatorId IS NULL OR a.operatorId = :operatorId) AND " +

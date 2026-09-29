@@ -1,0 +1,28 @@
+-- 修復：表單名稱無法儲存中文。
+--
+-- 症狀：4 個 seed 表單的 name 在 DB 裡全都是 '?????'。
+--
+-- 根因有兩層，兩層都必須修，只修一層沒有效果：
+--
+-- 1. 欄位型別。FormDefinition.name 是沒有 columnDefinition 的 String，
+--    Hibernate 的 SQLServerDialect 因此建成 VARCHAR(255)。三個 DB 的定序都是
+--    SQL_Latin1_General_CP1_CI_AS，VARCHAR 在此定序下無法表示中文
+--    —— 寫入時直接換成問號，不會有任何錯誤。
+--    （同一個 entity 的 schemaJson 有明確的 NVARCHAR(MAX)，所以欄位 label
+--      一直正常；這是本 bug 長期沒被發現的原因：表單畫面看起來完全正常，
+--      只有表單「名稱」是問號。）
+--
+-- 2. data.sql 的字面值缺 N 前綴（已於同一個 commit 修正）。
+--    沒有 N 前綴時字面值先被當成 Latin1 的 VARCHAR 解析，
+--    非 ASCII 在「指派給欄位之前」就已經變成問號 —— 因此即使欄位改成
+--    NVARCHAR 也救不回來。
+--
+-- name 不屬於任何唯一約束（uk 建在 form_key + version 上），
+-- 因此可以直接 ALTER，不需要先卸除索引。
+--
+-- ⚠️ 這個 migration 只修這一個欄位。整個 schema 還有數十個會存中文的
+--    VARCHAR 欄位（bpm_document_request.title、bpm_file_attachment.file_name、
+--    bpm_notify_template.subject_template、bpm_audit_log.operator_name…），
+--    屬同一個系統性問題，範圍待決策後另案處理。
+
+ALTER TABLE bpm_form_definition ALTER COLUMN name NVARCHAR(255) NOT NULL;

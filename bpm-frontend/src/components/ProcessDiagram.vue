@@ -8,7 +8,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
-import axios from 'axios'
+import http from '../services/http'
 
 const props = defineProps({ processInstanceId: { type: String, required: true } })
 const container = ref(null)
@@ -19,7 +19,7 @@ async function load() {
   if (!container.value) return
   error.value = null
   try {
-    const { data } = await axios.get(`/api/process-instances/${props.processInstanceId}/bpmn-xml`)
+    const { data } = await http.get(`/api/process-instances/${props.processInstanceId}/bpmn-xml`)
     if (!data.xml) { error.value = '無流程圖資料'; return }
 
     const { default: BpmnViewer } = await import('bpmn-js/lib/NavigatedViewer')

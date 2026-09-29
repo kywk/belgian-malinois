@@ -81,6 +81,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
+import { formatDateTime } from '../utils/datetime.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getExternalSystems, createExternalSystem, updateExternalSystem, deleteExternalSystem, rotateKey } from '../services/externalApi.js'
 
@@ -92,7 +93,7 @@ const editingId = ref(null)
 const actions = ref([])
 const form = reactive({ systemId: '', systemName: '', contactEmail: '', allowedProcessKeys: '', ipWhitelist: '', callbackUrl: '' })
 
-const fmt = (t) => t ? new Date(t).toLocaleString('zh-TW') : '-'
+const fmt = (t) => formatDateTime(t, '-')
 const parseJson = (s) => { try { return JSON.parse(s || '[]') } catch { return [] } }
 
 async function load() { systems.value = await getExternalSystems() }

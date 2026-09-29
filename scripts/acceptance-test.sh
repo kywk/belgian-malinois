@@ -3,7 +3,9 @@
 # 使用方式：./scripts/acceptance-test.sh [BPM_URL] [FORM_URL]
 
 BPM_URL="${1:-http://localhost:8080}"
-FORM_URL="${2:-http://localhost:8081}"
+# Stage 3（ADR-001）：form-service 已併入 bpm-core，
+# 表單 API 由同一個服務提供，因此預設與 BPM_URL 相同。
+FORM_URL="${2:-http://localhost:8080}"
 
 PASS=0; FAIL=0
 GREEN='\033[0;32m'; RED='\033[0;31m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -13,9 +15,30 @@ fail() { echo -e "${RED}[FAIL]${NC} $1: $2"; FAIL=$((FAIL+1)); }
 info() { echo -e "${YELLOW}[INFO]${NC} $1"; }
 
 # ── 工具函數 ──────────────────────────────────────────────────
-bpm_post() { curl -s -X POST "$BPM_URL$1" -H "Content-Type: application/json" -H "X-User-Id: $2" -d "$3"; }
-bpm_put()  { curl -s -X PUT  "$BPM_URL$1" -H "Content-Type: application/json" -H "X-User-Id: $2" -d "$3"; }
-bpm_get()  { curl -s         "$BPM_URL$1" -H "X-User-Id: $2"; }
+
+# ── 身分（R-01：平台已啟用認證）────────────────────────────────────
+#
+# 改動前這些呼叫靠 X-User-Id 標頭自報身分。現在後端要求 JWT
+# （使用者路徑）或閘道密鑰（server 之間）。
+#
+# 這裡走 JWT，因為驗收測試模擬的是「使用者操作」—— 走閘道會繞過
+# 真正的驗證路徑，那就驗不到 R-01 實際保護了什麼。
+#
+# token 由 scripts/dev-token.sh 簽發（應用只驗證、不簽發）。
+# 同一個身分只簽一次，避免每個請求都 fork 一次 python。
+declare -A _TOKEN_CACHE
+dev_token() {
+  local user="$1"
+  if [[ -z "${_TOKEN_CACHE[$user]:-}" ]]; then
+    _TOKEN_CACHE[$user]=$("$(dirname "${BASH_SOURCE[0]}")/dev-token.sh" "$user")
+  fi
+  printf '%s' "${_TOKEN_CACHE[$user]}"
+}
+auth_header() { printf 'Authorization: Bearer %s' "$(dev_token "$1")"; }
+
+bpm_post() { curl -s -X POST "$BPM_URL$1" -H "Content-Type: application/json" -H "$(auth_header "$2")" -d "$3"; }
+bpm_put()  { curl -s -X PUT  "$BPM_URL$1" -H "Content-Type: application/json" -H "$(auth_header "$2")" -d "$3"; }
+bpm_get()  { curl -s         "$BPM_URL$1" -H "$(auth_header "$2")"; }
 
 start_process() {
   local processKey="$1" initiator="$2" vars="$3"

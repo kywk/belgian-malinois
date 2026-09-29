@@ -34,15 +34,16 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { formatDateTime } from '../utils/datetime.js'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
 import { getProcessInstances, getHistoricProcessInstances } from '../services/flowableApi.js'
 
 const auth = useAuthStore()
-const userId = computed(() => auth.token)
+const userId = computed(() => auth.userId)
 const activeTab = ref('running')
 const list = ref([])
-const fmt = (t) => t ? new Date(t).toLocaleString('zh-TW') : ''
+const fmt = (t) => formatDateTime(t)
 
 const statusType = (s) => ({ running: '', completed: 'success', rejected: 'danger', cancelled: 'info' }[s] || '')
 const statusLabel = (s) => ({ running: '進行中', completed: '已完成', rejected: '已拒絕', cancelled: '已取消' }[s] || s)

@@ -5,22 +5,77 @@ spring:
   application:
     name: bpm-core
   datasource:
-    url: jdbc:sqlserver://localhost:1433;databaseName=bpm_core_db;encrypt=false;trustServerCertificate=true
-    username: sa
-    password: BpmDev@2026!
+    # 三個 DataSource 的 host／帳密都指向 bpm.datasource.*（見檔案末端），
+    # 因為它們是同一個 MSSQL 實例上的同一個帳號。
+    #
+    # ⚠️ 不要把帳密展開回這裡各寫一份（security-audit P2-3）。
+    # 原本三處各自寫死 password，而 prod compose 只注入
+    # SPRING_DATASOURCE_PASSWORD —— 只蓋掉 primary，audit 與 form
+    # 會拿 dev 密碼去連 production DB。收斂成單一來源之後，
+    # 「漏蓋其中一個」這個失誤就不可能發生了。
+    url: jdbc:sqlserver://${bpm.datasource.host};databaseName=bpm_core_db;encrypt=false;trustServerCertificate=true
+    username: ${bpm.datasource.username}
+    password: ${bpm.datasource.password}
     driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    # ⚠️ hikari.* 只有在 DataSource bean 上標了
+    # @ConfigurationProperties("spring.datasource.hikari") 才會生效；
+    # initializeDataSourceBuilder().build() 本身只綁 url/username/password/driver。
+    # 見 PrimaryDataSourceConfig#primaryDataSource 的註解。
+    hikari:
+      # primary 池同時餵 web 執行緒和 Flowable async executor，
+      # 所以比另外兩個大。pool-name 是為了讓三個池在 log 裡可辨識
+      # —— 預設的 HikariPool-1/2/3 編號依初始化順序而定，排查時分不出誰是誰。
+      pool-name: bpm-core-pool
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 10000
     audit:
-      url: jdbc:sqlserver://localhost:1433;databaseName=bpm_audit_db;encrypt=false;trustServerCertificate=true
-      username: sa
-      password: BpmDev@2026!
+      url: jdbc:sqlserver://${bpm.datasource.host};databaseName=bpm_audit_db;encrypt=false;trustServerCertificate=true
+      username: ${bpm.datasource.username}
+      password: ${bpm.datasource.password}
       driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+      hikari:
+        # 稽核是 write-only 且交易極短（append 一列就提交），不需要大池。
+        pool-name: bpm-audit-pool
+        maximum-pool-size: 10
+        minimum-idle: 2
+        connection-timeout: 10000
+    # 第三個 DataSource（Stage 3 / ADR-001）。form-service 併入 bpm-core，
+    # 但資料模型保持分離 —— bpm_form_db 仍是獨立的資料庫。
+    form:
+      url: jdbc:sqlserver://${bpm.datasource.host};databaseName=bpm_form_db;encrypt=false;trustServerCertificate=true
+      username: ${bpm.datasource.username}
+      password: ${bpm.datasource.password}
+      driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+      hikari:
+        # 表單定義讀多寫少且有快取。
+        pool-name: bpm-form-pool
+        maximum-pool-size: 10
+        minimum-idle: 2
+        connection-timeout: 10000
   jpa:
     hibernate:
-      ddl-auto: update
+      # Flyway 接手 schema 之後這裡必須是 none。
+      # 留著 update 會讓 Hibernate 在 Flyway 之外偷偷改 schema，
+      # 於是 migration 不再是唯一事實來源，兩邊漂移後無從判斷哪個才對。
+      # 不用 validate：Hibernate 對 datetimeoffset／NVARCHAR(MAX) 的型別比對
+      # 會誤報，改由 Testcontainers 整合測試守住 schema 與 entity 的一致性。
+      ddl-auto: none
     show-sql: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.SQLServerDialect
+        # 讓 Hibernate 預設把 String 對映到 NVARCHAR 而非 VARCHAR。
+        #
+        # 這是「不要再發生一次」的那道防線。DB 定序是
+        # SQL_Latin1_General_CP1_CI_AS，VARCHAR 存不了中文且寫入時靜默換成
+        # 問號 —— 表單名稱、通知主旨、稽核操作者姓名都曾因此損壞，
+        # 其中稽核那筆還讓完整性檢查全面誤報。
+        #
+        # 沒有這個設定時，任何人新增一個 String 欄位就會再製造一個
+        # 會吃掉中文的 VARCHAR 欄位，而且不會有任何錯誤提示。
+        # 對應的既有欄位轉型見 db/migration 的 nvarchar_all_text_columns。
+        use_nationalized_character_data: true
   rabbitmq:
     host: localhost
     port: 5672
@@ -43,24 +98,94 @@ spring:
     properties:
       mail.smtp.auth: false
       mail.smtp.starttls.enable: false
+  flyway:
+    # 只給主 DataSource（bpm_core_db）。稽核 DB 的 migration 由
+    # config/AuditFlywayConfig.java 手動驅動 —— Boot 的自動配置只認主 DataSource。
+    enabled: true
+    locations: classpath:db/migration/core
+    # 既有 dev DB 的 schema 非空但沒有歷史表；baseline-version: 0 讓 V1 仍會執行，
+    # 搭配 V1 的幂等寫法。理由詳見 migration 檔內的註解。
+    baseline-on-migrate: true
+    baseline-version: 0
   servlet:
     multipart:
       max-file-size: 50MB
       max-request-size: 50MB
 
+# Flowable 自己的 ACT_*（39 張）與 FLW_*（8 張，事件註冊表用它自己的 Liquibase）
+# 仍由 Flowable 管理，刻意不納入 Flyway —— 納入會在 Flowable 6→7 升級時
+# 與它的 changelog 互相打架。見 docs/plan/2026-09-28-springboot4-upgrade.md Stage 2。
 flowable:
   database-schema-update: true
   async-executor-activate: true
 
 bpm:
+  # 三個 DataSource 共用的連線來源（security-audit P2-3）。
+  # 三個 DB 在同一個 MSSQL 實例上、用同一個帳號，所以收斂成一組屬性；
+  # prod 只要注入 BPM_DATASOURCE_PASSWORD 一個環境變數就全部覆蓋到，
+  # 不會再出現「漏蓋 audit／form」的部署缺陷。
+  datasource:
+    host: localhost:1433
+    username: sa
+    # dev 預設值。prod 由 BPM_DATASOURCE_PASSWORD 覆蓋（見 docker-compose.prod.yml）。
+    password: BpmDev@2026!
   upload:
     dir: ./uploads
   bpmn-definitions-dir: ./bpmn-definitions
+  security:
+    jwt:
+      # 本服務<b>只驗證</b> JWT，不簽發、不處理 OIDC 流程 —— 那由另一個服務負責。
+      #
+      # prod：指向企業 IdP，Spring Security 會抓它的 JWKS 驗簽章與 issuer。
+      # 由 ${OIDC_ISSUER_URI} 提供，未設定即啟動失敗（JwtSecurityValidator）。
+      issuer-uri: ${OIDC_ISSUER_URI:}
+      # dev：對稱密鑰。沒有 IdP 也能開發，token 由 scripts/dev-token.sh
+      # 用同一組密鑰產生 —— 那個腳本在應用之外，所以「只驗證不簽發」仍成立。
+      #
+      # ⚠️ prod profile 下設定這個值會讓啟動失敗：任何知道它的人都能簽發
+      # 有效身分。HS256 要求至少 32 bytes。
+      dev-secret: bpm-dev-jwt-secret-do-not-use-in-production
+    gateway:
+      # Server 之間呼叫的認證。預設關閉 —— 漏設的結果是「那條路徑不可用」
+      # 而非「任何人都能偽造身分」。
+      enabled: true
+      # 啟用時必填。沒有密鑰的話任何能連到應用 port 的人都能用 X-User-Id
+      # 偽造身分，那正是本次要修掉的狀態。
+      shared-secret: bpm-dev-gateway-secret-do-not-use-in-production
+      # 選用的來源位址白名單（完整位址，或以 . 結尾的前綴）。
+      # 留空代表不限制來源 —— 密鑰仍是必要條件。
+      # 容器環境的 IP 是動態的，所以不建議只靠這個。
+      trusted-proxies:
+  lint:
+    # /api/bpmn/lint 接受的 XML 上限（bytes）。這是一個無認證的 XML 解析入口，
+    # 而 @RequestBody String 會把整份內容讀進記憶體（security-audit P2-5）。
+    # 真實的流程定義是幾十 KB 量級，2 MB 已遠高於實際需求。
+    max-xml-bytes: 2097152
   webhook:
     hmac-secret: bpm-webhook-secret
   external:
+    # 開發用 mock 的總開關（security-audit P2-7）。
+    #
+    # 這裡設 true 是因為<b>預設文件就是本機開發設定</b>（DB 也指向 localhost）。
+    # 正式環境走 prod profile，那裡明確設回 false —— 見本檔末端。
+    #
+    # ⚠️ 不要把這個值改成靠 profile 繼承來關掉。ExternalSystemUrlValidator
+    # 會在啟動時檢查「開關」與「URL」是否一致，兩者對不上就拒絕啟動。
+    mock-enabled: true
+    # ⚠️ 這兩個 URL 指向 bpm-core 自己（MockOrgController / MockPermController）。
+    # 也就是容器內 bpm-core 會對自己發同步 HTTP，而且是在 taskService.complete()
+    # 的 DB 交易之內 —— 每次任務建立占用 2 個 Tomcat 執行緒。
+    # 執行緒池飽和時會自我死鎖（security-audit P1-10）。
+    #
+    # 逾時讓死鎖至少會自行解開，但不能消除它。真正的解法是讓 OrgService／
+    # BpmPermissionService 在 mock 階段直接呼叫 in-process 的 bean，
+    # 而不是繞一圈 HTTP —— 那是獨立的重構，尚未施作。
     org-service-url: http://localhost:8080/mock/org
     perm-service-url: http://localhost:8080/mock/perm
+    # 刻意設得短：這些呼叫在簽核的同步路徑上，使用者正在等待。
+    # 寧可快速失敗也不要把執行緒與 DB 交易一起卡住。
+    connect-timeout-ms: 2000
+    read-timeout-ms: 3000
 
 management:
   endpoints:
@@ -76,15 +201,50 @@ spring:
   config:
     activate:
       on-profile: docker
-  datasource:
-    url: jdbc:sqlserver://mssql:1433;databaseName=bpm_core_db;encrypt=false;trustServerCertificate=true
-    audit:
-      url: jdbc:sqlserver://mssql:1433;databaseName=bpm_audit_db;encrypt=false;trustServerCertificate=true
+  # datasource 的 url 不用在這裡重寫三份 —— 只要換 host 就好，
+  # databaseName 與連線參數都沿用 default profile。
   rabbitmq:
     host: rabbitmq
   data:
     redis:
       host: redis
 
+
 bpm:
-  form-service-url: http://form-service:8081
+  datasource:
+    # docker profile 唯一需要換的東西：MSSQL 的位置。
+    host: mssql:1433
+
+---
+# 正式環境 profile（security-audit P2-7）。
+#
+# 為什麼需要它：改動前 base／dev／prod 三個 compose 檔都用
+# SPRING_PROFILES_ACTIVE: docker，所以 profile 完全不區分 dev 與 prod。
+# 於是「正式環境要關掉 mock」沒有任何地方可以表達。
+#
+# 用法：SPRING_PROFILES_ACTIVE: docker,prod
+# —— docker 提供容器內的 host 覆蓋，prod 疊上正式環境該有的限制。
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+bpm:
+  security:
+    jwt:
+      # prod 不可有 dev 密鑰（JwtSecurityValidator 會拒絕啟動）。
+      dev-secret:
+    gateway:
+      # server 之間的路徑由部署環境決定要不要開。開了就必須給密鑰。
+      enabled: ${GATEWAY_AUTH_ENABLED:false}
+      shared-secret: ${GATEWAY_SHARED_SECRET:}
+      trusted-proxies: ${GATEWAY_TRUSTED_PROXIES:}
+  external:
+    # 關掉開發 fixture。組織與權限是授權的事實來源，
+    # 正式環境用寫死的 9 人 fixture 做授權判定是不可接受的。
+    mock-enabled: false
+    # 沒有預設值，必須由部署環境提供。
+    # 猜一個位置的後果是錯誤的授權決定，所以這裡刻意讓它在未設定時啟動失敗
+    # （ExternalSystemUrlValidator 會擋）。
+    org-service-url: ${ORG_SERVICE_URL:}
+    perm-service-url: ${PERM_SERVICE_URL:}

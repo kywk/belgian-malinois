@@ -6,7 +6,9 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.5.13</version>
+        <!-- 3.5.16 是 3.5 線最後一個 OSS 版本（2026-06-25）；3.5 已於 2026-06-30 結束 OSS 支援。
+             升級路徑見 docs/plan/2026-09-28-springboot4-upgrade.md（不要直接跳 4.x，Flowable 需經 7.x 中繼）。 -->
+        <version>3.5.16</version>
     </parent>
     <groupId>com.bpm</groupId>
     <artifactId>bpm-core</artifactId>
@@ -15,7 +17,11 @@
 
     <properties>
         <java.version>21</java.version>
-        <flowable.version>6.8.1</flowable.version>
+        <!-- Stage 4（docs/plan/2026-09-28-springboot4-upgrade.md）：
+             6.8.1 → 7.2.x，Spring Boot 版本刻意不動（留在 3.5.16）。
+             單獨變更 Flowable 主版本，出問題就能確定來源是 Flowable 而非 Boot。
+             ⚠️ 不要在這裡直接跳 8.x —— Flowable 8 不支援 Boot 3。 -->
+        <flowable.version>7.2.0</flowable.version>
     </properties>
 
     <dependencies>
@@ -39,6 +45,30 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
+        <!-- 認證與授權（security-audit：平台層原本完全沒有 Spring Security，
+             身分靠呼叫端自帶的 X-User-Id 標頭，可隨意填寫）。
+
+             oauth2-resource-server 提供 JWT 驗證：應用只驗簽章與 claims，
+             永不經手密碼。dev 用本地產生的 RSA 金鑰自行簽發，
+             prod 由企業 IdP 的 issuer-uri 提供 JWKS。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+        <!-- nimbus-jose-jwt（dev 簽發 token 用）不需要顯式宣告：
+             它由 oauth2-resource-server → spring-security-oauth2-jose
+             遞移帶入，且不在 Boot 的 BOM 管理範圍內，
+             寫死版本反而會與 Spring Security 期望的版本漂移。 -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-mail</artifactId>
@@ -53,6 +83,16 @@
             <artifactId>flowable-bpmn-layout</artifactId>
             <version>${flowable.version}</version>
         </dependency>
+        <!-- Flyway 接手應用表的 schema（Flowable 的 ACT_*／FLW_* 仍由 flowable.database-schema-update 管理）。
+             flyway-sqlserver 是 MSSQL 的方言模組，缺了它 flyway-core 無法處理 SQL Server。 -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-sqlserver</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.microsoft.sqlserver</groupId>
             <artifactId>mssql-jdbc</artifactId>
@@ -61,6 +101,29 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 整合測試以 Testcontainers 起真實 MSSQL／RabbitMQ／Redis。
+             不用 H2：MSSQL 的 datetimeoffset、NVARCHAR(MAX)、MERGE 與識別欄位行為都無法在 H2 上重現，
+             而稽核 hash chain 與表單版本鎖定正是依賴這些行為。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>mssqlserver</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>rabbitmq</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

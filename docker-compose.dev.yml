@@ -1,7 +1,8 @@
-version: '3.8'
-
-# 開發環境：在 docker-compose.yml 基礎上加入 MailHog
+# 開發環境：在 docker-compose.yml 基礎上加入 MailHog + 前端 dev server
 # 使用方式：docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# 也可以只啟動後端服務，前端用本機 npm run dev：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --scale bpm-frontend=0
 
 services:
   mailhog:
@@ -9,7 +10,6 @@ services:
     ports:
       - "1025:1025"   # SMTP
       - "8025:8025"   # Web UI: http://localhost:8025
-    restart: unless-stopped
 
   bpm-core:
     environment:
@@ -18,3 +18,18 @@ services:
       SPRING_MAIL_PORT: 1025
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: "false"
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: "false"
+
+  bpm-frontend:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./bpm-frontend:/app
+      - frontend-node-modules:/app/node_modules
+    depends_on:
+      - nginx
+
+volumes:
+  frontend-node-modules:

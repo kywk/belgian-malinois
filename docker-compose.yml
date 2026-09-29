@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mssql:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -60,18 +58,14 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: docker
-
-  form-service:
-    build: ./form-service
-    ports:
-      - "8081:8081"
-    depends_on:
-      mssql:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    environment:
-      SPRING_PROFILES_ACTIVE: docker
+    volumes:
+      # 附件必須落在 volume 上（security-audit P1-6）。
+      # bpm.upload.dir 預設是 ./uploads → 容器內的 /app/uploads，
+      # 而 bpm-core 先前沒有任何 volumes（mssql/rabbitmq/redis 都有）。
+      # 後果：容器重建後附件永久消失，但 bpm_file_attachment 的資料列仍在
+      # → 下載端點回 200，串流時才 FileNotFoundException。
+      # 對 ISO 27001 的紀錄保存是直接違反。
+      - bpm-uploads:/app/uploads
 
   nginx:
     image: nginx:alpine
@@ -82,9 +76,9 @@ services:
       - ./bpm-frontend/dist:/usr/share/nginx/html:ro
     depends_on:
       - bpm-core
-      - form-service
 
 volumes:
   mssql-data:
   rabbitmq-data:
   redis-data:
+  bpm-uploads:

@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @Component
 public class EmailConsumer {
@@ -32,11 +33,14 @@ public class EmailConsumer {
     @RabbitListener(queues = "bpm.notify.queue")
     public void handle(Map<String, Object> msg) {
         String event = str(msg, "event");
-        String assignee = str(msg, "assignee");
         String processDefKey = str(msg, "processDefinitionKey");
 
-        if (assignee == null || assignee.isBlank()) {
-            log.debug("No assignee, skipping");
+        // 收件人：優先 assignee；候選人任務沒有 assignee，改送給候選人。
+        // 改動前只看 assignee，為 null 就 return → 群組待辦完全不發通知
+        // （security-audit P1-13）。
+        List<String> recipients = resolveRecipients(msg);
+        if (recipients.isEmpty()) {
+            log.debug("No assignee or candidate users, skipping notification");
             return;
         }
 
@@ -46,11 +50,23 @@ public class EmailConsumer {
                     .findByProcessDefinitionKeyAndEventTypeAndEnabledTrue(processDefKey, event);
             for (NotifyConfig cfg : configs) {
                 if (!"email".equals(cfg.getChannel())) continue;
-                var tmpl = templateRepo.findById(cfg.getTemplateId()).orElse(null);
-                if (tmpl != null) {
-                    sendWithTemplate(tmpl, msg, assignee);
-                    return;
+                // ⚠️ templateId 可能為 null（NotifyConfig 沒有 nullable=false，
+                // 而 create 端點先前也不驗證）。findById(null) 會拋
+                // IllegalArgumentException → retry 3 次後進 dlq.bpm →
+                // 該通知永久遺失，而且同一 config 之後每則通知都重踩。
+                if (cfg.getTemplateId() == null || cfg.getTemplateId().isBlank()) {
+                    log.warn("通知設定 {} 的 templateId 為空，改用預設模板（流程 {}／事件 {}）",
+                            cfg.getId(), cfg.getProcessDefinitionKey(), cfg.getEventType());
+                    continue;
                 }
+                var tmpl = templateRepo.findById(cfg.getTemplateId()).orElse(null);
+                if (tmpl == null) {
+                    log.warn("通知設定 {} 指向不存在的模板 {}，改用預設模板",
+                            cfg.getId(), cfg.getTemplateId());
+                    continue;
+                }
+                recipients.forEach(to -> sendWithTemplate(tmpl, msg, to));
+                return;
             }
         }
 
@@ -78,7 +94,26 @@ public class EmailConsumer {
             }
             default -> { return; }
         }
-        sendEmail(assignee, subject, body);
+        final String s = subject, b = body;
+        recipients.forEach(to -> sendEmail(to, s, b));
+    }
+
+    /**
+     * 解析收件人。
+     *
+     * <p>assignee 優先；候選人任務（candidateUsers／candidateGroups）沒有
+     * assignee，此時改送給 NotifyTaskListener 帶過來的候選人清單。
+     */
+    @SuppressWarnings("unchecked")
+    private static List<String> resolveRecipients(Map<String, Object> msg) {
+        String assignee = str(msg, "assignee");
+        if (!assignee.isBlank()) return List.of(assignee);
+        Object candidates = msg.get("candidateUsers");
+        if (candidates instanceof List<?> list) {
+            return list.stream().filter(Objects::nonNull)
+                    .map(Object::toString).filter(v -> !v.isBlank()).distinct().toList();
+        }
+        return List.of();
     }
 
     private void sendWithTemplate(NotifyTemplate tmpl, Map<String, Object> vars, String to) {

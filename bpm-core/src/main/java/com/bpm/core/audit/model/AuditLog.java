@@ -17,11 +17,31 @@ public class AuditLog {
 
     private String traceId;
 
+    /**
+     * 投遞層的幂等鍵（僅經 MQ 進來的事件會有值）。
+     *
+     * <p>RabbitMQ 是 at-least-once，broker 重投會讓同一筆稽核被 append 兩次，
+     * 而重複 append 產生的 hash chain 在數學上完全合法 → integrityCheck
+     * 察覺不到（security-audit P1-14）。
+     *
+     * <p>⚠️ 刻意不納入 hash：它是去重用的中介資料而非稽核內容，
+     * 納入會讓所有既有 v2 記錄的 hash 失效。
+     */
+    @Column(length = 64)
+    private String eventId;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private OperationType operationType;
 
     private String operatorId;
+
+    // ⚠️ NVARCHAR 不可省略：預設的 String 對映是 VARCHAR，而 DB 定序為
+    // SQL_Latin1_General_CP1_CI_AS —— 中文姓名會被靜默換成問號。
+    // 這個欄位已被 v2 的 hash 涵蓋，一旦寫入值與讀回值不同，
+    // integrityCheck 會把每一筆都誤報為遭篡改。
+    // 見 db/migration/audit/V4__nvarchar_for_audit_text_columns.sql。
+    @Column(columnDefinition = "NVARCHAR(255)")
     private String operatorName;
 
     @Column(length = 20)
@@ -30,6 +50,9 @@ public class AuditLog {
     private String processDefinitionKey;
     private String processInstanceId;
     private String taskId;
+
+    // 同 operatorName：businessKey 可能含中文（案件標題型的業務鍵）。
+    @Column(columnDefinition = "NVARCHAR(255)")
     private String businessKey;
 
     @Column(columnDefinition = "NVARCHAR(MAX)")
@@ -44,10 +67,13 @@ public class AuditLog {
     private String ipAddress;
     private String userAgent;
 
-    @Column(nullable = false, length = 64)
+    // 80 而非 64：v2 的 hash 帶 'v2:' 版本前綴（見 AuditLogService.V2）。
+    // 對應 migration audit/V3__widen_hash_value_for_version_prefix.sql。
+    @Column(nullable = false, length = 80)
     private String hashValue;
 
-    @Column(length = 64)
+    // 與 hashValue 同寬：previousHash 存放的就是前一筆的 hashValue。
+    @Column(length = 80)
     private String previousHash;
 
     @Column(nullable = false, updatable = false)
@@ -92,6 +118,9 @@ public class AuditLog {
     public void setHashValue(String hashValue) { this.hashValue = hashValue; }
     public String getPreviousHash() { return previousHash; }
     public void setPreviousHash(String previousHash) { this.previousHash = previousHash; }
+    public String getEventId() { return eventId; }
+    public void setEventId(String eventId) { this.eventId = eventId; }
+
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 }
