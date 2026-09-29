@@ -152,7 +152,15 @@ class AuditFailClosedTest extends IntegrationTestBase {
 
         mockMvc.perform(post("/api/process-instances")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"processDefinitionKey\":\"" + KEY + "\",\"initiator\":\"user001\"}"))
+                        // ⚠️ 不可帶 initiator（#66）：body 帶 initiator 會在進入
+                        // 稽核之前就被明確拒絕成 400。斷言 503 就會失敗，
+                        // 而失敗訊息會指向「狀態碼不符」——把排查方向帶到
+                        // 完全無關的地方。
+                        //
+                        // 所以移除該欄位而不是改預期值：預設身分是 user001，
+                        // server 寫入的 initiator 與原本送的值相同，
+                        // 測的仍然是同一件事（稽核寫不進去 → 不得留下流程實例）。
+                        .content("{\"processDefinitionKey\":\"" + KEY + "\"}"))
                 .andExpect(status().isServiceUnavailable());
 
         assertThat(runtimeService.createProcessInstanceQuery().processDefinitionKey(KEY).count())
@@ -162,13 +170,21 @@ class AuditFailClosedTest extends IntegrationTestBase {
     @Test
     @DisplayName("表單送出（bpm_form_db）時稽核失敗 → 503，且表單資料沒有落地")
     void formSubmitRollsBackWhenAuditFails() throws Exception {
-        String pid = "fail-closed-" + UUID.randomUUID();
+        // ⚠️ 必須是真實的流程實例（#72）：FormDataController 的 POST 現在要求
+        // 呼叫者是該 processInstanceId 的參與者。改動前這裡用隨機字串
+        // 「fail-closed-<uuid>」是可行的（當時沒有任何檢查），現在會先被守衛
+        // 以 404 擋下 —— 而那個 404 與「守衛壞掉」的 404 無法分辨，
+        // 斷言 503 會失敗，失敗訊息會把排查方向帶到完全無關的地方。
+        //
+        // 所以改成真實實例而不是放寬預期值：這條測試要驗的是
+        // 「稽核寫不進去 → 表單資料不得落地」，與守衛無關。
+        String pid = startDirectly();
         auditAlwaysFails();
 
         mockMvc.perform(post("/api/form-data")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"formDefinitionId\":\"x\",\"processInstanceId\":\"" + pid
-                                + "\",\"submittedBy\":\"user001\",\"dataJson\":\"{}\"}"))
+                                + "\",\"dataJson\":\"{}\"}"))
                 .andExpect(status().isServiceUnavailable());
 
         int[] rows = {-1};
@@ -189,7 +205,14 @@ class AuditFailClosedTest extends IntegrationTestBase {
     @DisplayName("查詢稽核（唯讀 DATA_ACCESS）時稽核失敗 → 503，不回傳資料")
     void readAuditFailureWithholdsData() throws Exception {
         auditAlwaysFails();
-        mockMvc.perform(get("/api/audit-logs/integrity-check").header("X-User-Id", "admin001")
+        // ⚠️ 身分用 dir001 而不是 admin001：2026-09-29 起 /api/audit-logs/**
+        // 只接受 audit:log:read，刻意不接受 ROLE_ADMIN（稽核紀錄含全公司薪資，
+        // 而 ProcessAccessGuard 早已拒絕 ROLE_ADMIN 讀案件流程變數）。
+        // 用 admin001 會在授權層就被擋下（403），於是這個測試驗的
+        // 就不再是「稽核寫失敗時不洩漏資料」，而變成「管理員讀不到稽核」——
+        // 而且 503 與 403 都在這個方法裡，斷言會以為 fail-closed 機制有效。
+        // 授權那一層由 AuditReadAuthorityTest 驗。
+        mockMvc.perform(get("/api/audit-logs/integrity-check").header("X-User-Id", "dir001")
                         .param("startDate", "2026-01-01T00:00:00Z").param("endDate", "2027-01-01T00:00:00Z"))
                 .andExpect(status().isServiceUnavailable());
     }

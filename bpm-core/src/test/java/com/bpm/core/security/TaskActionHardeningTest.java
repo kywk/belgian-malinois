@@ -139,7 +139,11 @@ class TaskActionHardeningTest extends IntegrationTestBase {
     @DisplayName("P1-3：有未完成加簽時必須回 409，不得回 200 讓前端誤判為成功")
     void pendingCountersignReturnsConflict() throws Exception {
         Task task = startAndGetManagerTask();
+        // 加簽由任務持有者發起（assignee = mgr001）。2026-09-29 之前這裡沒有宣告
+        // 身分，預設的 user001 是「申請人」—— 加簽守衛加上之後那樣的請求會被
+        // 正確地擋下，而那正是它該被擋下的原因（申請人沒有權力替主管加簽）。
         mockMvc.perform(post("/api/countersign/{taskId}", task.getId())
+                        .header("X-User-Id", "mgr001")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"countersignUserId\":\"user003\",\"message\":\"請確認\"}"))
                 .andExpect(status().isOk());

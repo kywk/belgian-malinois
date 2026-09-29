@@ -164,11 +164,14 @@
 
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
-| 66 | 內部發起流程的 initiator 改由 JWT 決定 | `POST /api/process-instances` 仍直接採用 body 的 `initiator`，未與已認證的呼叫者比對 —— 登入的使用者可以用別人的名義送單。外部 API 那條路已由 R-20 修好，這條還沒有 | 1d | ⬜ |
-| 67 | Webhook 投遞接線 | 沒有任何程式碼設定 `__webhookUrl`，`WebhookConsumer` 收到即返回；`WebhookTaskListener` 未被 BPMN 引用、也不在 `setBeans()`。#25～#27 的程式碼因此全部不會觸發 | 2d | ⬜ |
-| 68 | R-20 剩餘項 | admin UI 的 `allowOnBehalfOf` 開關、前端「代發」標示（API 已回 `onBehalf`）、代發案件補件仍派給 `system:<id>`（需決定 BPMN 語意）、lint rule h 升為 error | 2d | ⬜ |
-| 69 | 不存在的流程 key 回 500 | 應回 404 | 0.5d | ⬜ |
-| 70 | Spring Boot 4 + Flowable 8 升級 | Boot 3.5 已於 2026-06-30 EOL；兩者必須同步跳。計畫見 `docs/plan/2026-09-28-springboot4-upgrade.md` Stage 5～6 | 22d | ⬜ |
+| 66 | 內部發起流程的 initiator 改由 JWT 決定 |**2026-09-29 完成**（`0b3e7d8`／`4d6dd98`）。`@CallerId` 決定 initiator 與稽核 operatorId；body 帶 initiator 明確 400（對齊 R-20）；`variables` 套用 `TaskController` 的 deny-list，擋掉夾帶 `onBehalfOf`（繞過 R-20 授權）與 `_externalSystemId`（繞過 R-09）；`DocumentController.createdBy` 同步修 | ~~1d~~ || ✅
+| 67 | Webhook 投遞接線 |**三段各自獨立斷線**（非一段）：(A) 沒有任何程式碼設定 `__webhookUrl`（自 2026-04-17 起從未存在過設定端）；(B) `WebhookTaskListener` 未被 BPMN 引用、也不在 `setBeans()`；(C) 前端 `WebhookProps.js` 寫進 BPMN `documentation`，後端零讀取。⚠️ 三種格式互不相通：spec 說 `extensionElements`、前端寫 `documentation`、consumer 期待 Rabbit payload 欄位。#25 缺 `task.timeout` 與候選人/operatorName/comment 欄位。規模 8～12 檔案，原估 2d 偏低。**已決策：仍是需求；設定來源待定（建議 `extensionElements`）** | 2d→4d || ⬜
+| 68 | R-20 剩餘項 |拆四小項：<br>**a** admin UI 開關（`ExternalSystemAdmin.vue` 缺 `allowOnBehalfOf`；⚠️ `resetForm()` 用 `Object.assign` 不刪鍵，編輯過 true 的系統後按新建會繼承該授權）<br>**b** 前端代發標示（⚠️ `onBehalf` 只在 2 個申請人端 API 有，審核人端 `/api/tasks`、`/api/history/tasks` 沒有；前端 `grep 申請人` 零命中，審核人目前不知道單是誰送的）<br>**c** 補件關卡派給誰（2 支 BPMN 共 3 個 UserTask 仍是 `${initiator}`；`UnreachableTaskListener` 只擋 null/blank，`assignee="system:erp"` 繞過告警靜默卡死）**已決策：新增 `applicantResolver` bean**<br>**d** lint rule h 升 error（**已驗證安全**：`bpm_external_system` 無 seed SQL、兩支 BPMN 首個 UserTask 都是 `assigneeResolver`、無測試斷言 severity） | 2d || ⬜
+| 69 | 不存在的流程 key 回 500 |**2026-09-29 完成**（`0b3e7d8`）。key 為 null/空 → 400；查不到定義 → 404（並 catch `FlowableObjectNotFoundException` 補 race window）。⚠️ 範圍比原描述廣：key 缺席與空字串原本也全是 500。`ExternalApiController` 的同一個洞未修（見 #71） | ~~0.5d~~ || ✅
+| 70 | Spring Boot 4 + Flowable 8 升級 |Boot 3.5 已於 2026-06-30 EOL；兩者必須同步跳。計畫見 `docs/plan/2026-09-28-springboot4-upgrade.md` Stage 5～6 | 22d || ⬜
+| 71 | 讀端授權：可列任何人的案件、可讀任何案件的變數 |**2026-09-29 查證新發現，範圍遠大於預期**。所有下列端點的 `?` 篩選參數皆 `required=false` 且**不檢查是否等於呼叫者** → 不帶參數即回傳全部：<br>🔴 `GET /api/process-instances`（實測回 107 件全公司執行中案件，含 businessKey 與當前審核人）<br>🔴 `GET /api/tasks`（回傳全公司待辦，洩漏「誰在審什麼」）<br>🔴 `GET /api/process-instances/{id}/variables`（零檢查；欄位 id == 變數名 → **薪資等敏感表單資料全可讀**；`catch → Map.of()` 還把「沒權／不存在／引擎錯誤」三種語意塌成空物件 200）<br>🔴 `GET /api/history/process-instances`、🔴 `GET /api/documents`（不帶參數即 `findAll()`）<br>🟠 `GET /api/tasks/{id}/comments`、`GET /api/history/tasks/{taskId}/comments`（簽核意見）、`GET /api/history/tasks`（`ApprovalTimeline` 刻意不傳 assignee → 任何登入者可看任何案件的完整簽核時間軸）、`GET /api/documents/{id}`、`GET /api/form-data/{pid}`（與 variables 同一批敏感資料的另一條路徑）、`GET /api/process-instances/{id}/bpmn-xml`（`activeIds` 暴露卡在哪一關）<br>✅ 已正確保護：`/api/audit-logs/**`（URL 層 `audit:log:read`）、`/api/attachments*`（`requireReadAccess`）、`/api/external/**`（`verifyOwnership`）<br>**已決策：支援「只看自己」與「看自己參與的」兩種視角，拆不同 API。`isParticipant`（`AttachmentController:209-223`）涵蓋 initiator／assignee／owner／candidateUsers，但**不涵蓋 candidateGroups**（Flowable 的 `taskInvolvedUser` SQL 只比對 `LINK.USER_ID_`），而設計器產生的流程有用 candidateGroups** | 2d || 🔴
+| 72 | `FormDataController.submittedBy` 可冒用 |與 #66 同一型缺陷，整個 class 沒有 `@CallerId`。`POST`／`PUT /api/form-data` 的 `submittedBy` 來自 request body，同時被當作稽核 `operatorId`（`FORM_SUBMIT`／`FORM_UPDATE`）。修法與 `DocumentController` 完全相同。⚠️ 前端有 `getFormData` 但沒有 view 呼叫它（死碼，但 API 開放） | 0.5d || 🟠
+| 73 | 錯誤回應看不到訊息 |本 repo 未設 `server.error.include-message`（Spring Boot 3 預設 `never`），所以 `ResponseStatusException` 精心寫的訊息只存在於伺服器端日誌，呼叫端只看到 `"error":"Bad Request"`。這讓 #66 選定的「明確 400 拒絕」政策在實務上失去意義 —— 呼叫端無從得知要改什麼。前端 `http.js:65-66` 有 `detail` fallback，但拿不到 `message`。⚠️ 全 repo 所有端點的錯誤訊息都受影響，非本次引入 | 0.5d || 🟡
 
 ---
 
@@ -190,10 +193,14 @@
 | 基礎設施 | 4 | 0 | 2 | 2 | 3.5d |
 | Form Service | 6 | 2 | 2 | 2 | 6d |
 | 跨服務整合 | 6 | 1 | 4 | 1 | 17d |
-| 2026-09-29 新增 | 5 | 0 | 0 | 5 | 27.5d |
-| **合計** | **70** | **22** | **21** | **27** | **~114 人天** |
+| 2026-09-29 新增 | 8 | 2 | 0 | 6 | 30.5d |
+| **合計** | **73** | **24** | **21** | **28** | **~117 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
+
+> 2026-09-29 晚間更新：#66、#69 完成（+3 項新發現 #71～#73）。
+> #67 的估時由 2d 上修為 4d（三段斷線、8～12 檔案、三種格式互不相通）。
+> #71 讀端授權的實際範圍遠大於原先預期的 3 個端點，估時 2d 仍可能偏低。
 
 ---
 
@@ -202,6 +209,14 @@
 > 2026-09-29 註：P0 中 #62 認證（後端）與 #54 表單版本管理已完成；#1、#2 退回／駁回的主幹可用，
 > 缺的是退到任意節點與駁回通知；#8～#12 的快取、失效與組合查詢已完成，剩下去 mock（等權限中心）。
 > 新增的 #66（內部 initiator）與 #70（Boot 4 升級）建議列為 P0：前者是身分冒用，後者是 EOL 後無安全修補。
+
+> 2026-09-29 晚間追加：**#66、#69 已完成**。新增的 **#71（讀端授權）建議升為 P0** ——
+> 實測 `GET /api/process-instances` 不帶參數回 107 件全公司執行中案件，
+> `GET /api/tasks` 不帶參數回傳全公司待辦，`GET /api/process-instances/{id}/variables`
+> 可讀任何案件的表單資料（薪資等敏感欄位）。這是寫入端 #66 的對稱缺口，
+> 寫入端已關而讀取端全開，實際風險沒有降低。
+> **#73（錯誤訊息不可見）建議併入 #71 一起做**：它是 #66「明確 400 拒絕」政策
+> 能否生效的前提。
 
 ### P0 — 核心流程可用（必須先完成）
 - #1~#2 退件/拒絕機制

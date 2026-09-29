@@ -57,15 +57,38 @@ public class MockPermController {
         PERM_USERS.put("purchase:self:approve",   List.of("dir001"));
         // 稽核檢視權。政策決策（2026-09-29）：由權限中心指派，
         // 不用寫死的使用者清單也不收斂成「只有管理員」。
-        // dir001 代表稽核職能；admin001 持有通配權限 * 因而自動涵蓋。
-        PERM_USERS.put("audit:log:read",          List.of("dir001", "admin001"));
+        // dir001 代表稽核職能。
+        //
+        // ⚠️ 這張表回答的是「誰該被指派這個權限所守的任務」
+        // （解析型端點，BPMN 的 candidateUsers 會查它），
+        // **不是**「誰能讀 /api/audit-logs」—— 後者是 SecurityConfig 的規則，
+        // 而且刻意不接受 ROLE_ADMIN。
+        //
+        // 所以這裡<b>刻意不含 admin001</b>：政策決定「* 不等於 audit:log:read」，
+        // 若解析型清單仍把通配持有者算進去，就會出現一種荒謬的狀況 ——
+        // 管理員被指派了一個他打不開的任務。兩張表必須回答同一個政策問題，
+        // 否則只是把拒絕從一處搬到另一處。
+        // （實務上沒有任何 BPMN 引用這個權限碼，因此改動不影響既有流程。）
+        PERM_USERS.put("audit:log:read",          List.of("dir001"));
 
-        USER_PERMS.put("mgr001", List.of("hr:leave:approve", "finance:payment:approve", "purchase:order:approve"));
+        // 表單設計權。mgr001 是部門主管 —— 這個專案的產品目標是
+        // 「業務人員自行設計、部署、維運流程與表單」，所以 dev fixture 裡
+        // 必須存在一個<b>不是</b>管理員、卻能設計表單的帳號，
+        // 否則那條規則的價值在開發時完全看不出來
+        // （每個人都會用 admin001 測，然後以為權限碼沒生效）。
+        PERM_USERS.put("bpm:form:design",         List.of("mgr001"));
+
+        USER_PERMS.put("mgr001", List.of("hr:leave:approve", "finance:payment:approve", "purchase:order:approve",
+                                          // 表單設計權，見上方 PERM_USERS 的說明
+                                          "bpm:form:design"));
         USER_PERMS.put("mgr002", List.of("hr:leave:approve", "purchase:order:approve"));
         USER_PERMS.put("dir001", List.of("hr:leave:approve", "finance:payment:approve", "purchase:order:approve",
                                           "legal:contract:review", "purchase:self:approve",
                                           // 稽核檢視權，見上方 PERM_USERS 的說明
                                           "audit:log:read"));
+        // admin001 刻意只有通配權限 *，不逐一列出 —— 這樣「* 不等於具名權限碼」
+        // 這件事在 fixture 裡就成立。SecurityConfig 的稽核規則因此不接受
+        // ROLE_ADMIN；要讀稽核必須由權限中心明確指派 audit:log:read。
         USER_PERMS.put("admin001", List.of("*"));
     }
 

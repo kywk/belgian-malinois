@@ -239,6 +239,26 @@ public class FormService {
         return dataRepo.findByProcessInstanceIdOrderBySubmittedAtDesc(processInstanceId);
     }
 
+    /**
+     * 依 id 取得一筆表單資料。
+     *
+     * <p>存在的原因不只是「給 delete 記錄內容用」（那是 {@link #getById} 的用途），
+     * 而是<b>物件層授權需要知道這筆資料掛在哪個案件上</b>：
+     * {@code PUT /api/form-data/{id}} 的路徑參數只有 {@code id}，而
+     * {@code processInstanceId} 在 DB 裡 —— 守衛要拿它去問
+     * {@code ProcessAccessGuard.requireParticipant}。
+     *
+     * <p>⚠️ 不可改成「把守衛塞進 {@link #updateData}」：授權判斷必須留在 controller，
+     * 否則 service 會同時被 HTTP 與非 HTTP 的呼叫路徑共用，卻只有其中一條
+     * 有辦法做「呼叫者是誰」的判斷。{@link FormDefinitionController#delete}
+     * 也是同樣的形狀：先 {@code getById} 取得內容，再執行變更。
+     */
+    @Transactional(value = "formTransactionManager", readOnly = true)
+    public FormData getDataById(String id) {
+        return dataRepo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+    }
+
     @Transactional("formTransactionManager")
     public FormData updateData(String id, FormData updated) {
         FormData existing = dataRepo.findById(id)

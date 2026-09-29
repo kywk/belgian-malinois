@@ -107,8 +107,14 @@ class ConcurrentTaskListingTest extends IntegrationTestBase {
                         .post("/api/process-instances")
                         .header("X-User-Id", "user001")
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                        .content("{\"processDefinitionKey\":\"" + KEY + "\","
-                                + "\"initiator\":\"user001\"}"))
+                        // ⚠️ 不可帶 initiator（#66）：initiator 一律由登入身分決定，
+                        // body 帶了會被明確拒絕成 400。
+                        //
+                        // 這個測試要驗的是「流程已啟動之後，組回應不得拋例外」，
+                        // 不是冒用防線，所以不能為了配合新政策而弱化斷言 ——
+                        // 正確做法是移除該欄位：送 user001 與不送的結果完全相同
+                        // （server 寫入的就是 user001，見 TestGatewayMockMvcCustomizer）。
+                        .content("{\"processDefinitionKey\":\"" + KEY + "\"}"))
                 .andExpect(status().isOk());
 
         // 改動前：流程已啟動，但組回應時 singleResult 拋例外 → 500

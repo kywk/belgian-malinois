@@ -73,7 +73,6 @@ const purchaseForm = reactive({ itemName: '', quantity: 1, amount: 0, reason: ''
 function onProcessChange() { result.value = null }
 
 async function submit() {
-  const userId = auth.userId
   let variables = {}
 
   if (processKey.value === 'leave-approval') {
@@ -94,9 +93,13 @@ async function submit() {
 
   submitting.value = true
   try {
+    // ⚠️ 不可送 initiator（#66）：發起人一律由登入身分決定。
+    // 後端對帶了 initiator 的請求回 400 —— 靜默忽略會讓這裡以為
+    // 「單子是以我名義送出的」而實際上後端寫的是 JWT 的 sub，
+    // 兩者在代發（onBehalfOf）情境下會是不同的人。
+    // http.js 的 interceptor 會自動附上 Authorization: Bearer。
     const { data } = await http.post('/api/process-instances', {
       processDefinitionKey: processKey.value,
-      initiator: userId,
       variables
     })
     result.value = { type: 'success', msg: `申請已送出，流程 ID：${data.processInstanceId}，目前審核人：${data.currentTask?.assignee || '-'}` }

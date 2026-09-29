@@ -2,8 +2,99 @@
 
 **建立日期**：2026-09-28
 **狀態**：Stage 0 ✅ / 1 ✅ / 2 ✅ / 3 ✅ / 4 ✅ 已完成（2026-09-28）；**Stage 5 起待開工**
+**前置調查**：✅ 2026-09-29 完成（見下方「前置調查結論」，該節修正了本文 4 處事實錯誤）
 **優先級**：P0（安全性阻斷項）
 **預估**：22 人日（含前置安全網，含 form-service 整併）
+
+---
+
+## ⚠️ 前置調查結論（2026-09-29）—— 開工前必讀
+
+第 8 節列的 6 項「撰寫時未能查證」已全部查證（實際下載 jar 驗證，非文件推論）。
+**結論：可以開工，但本文有 4 處事實錯誤，其中 2 處會導致開工第一天就卡住。**
+
+### ① 「把 Jackson 議題完全隔離到 Stage 6」做不到
+
+Stage 5 第 1 項的隔離策略**不成立**。本專案有 **5 個類別**在建構式注入 Jackson 2 的
+`com.fasterxml.jackson.databind.ObjectMapper`（`WebhookConsumer`、`AuditEventPublisher`、
+`AuditEventConsumer`、`ExternalApiAuthFilter`、`ExternalSystemPolicy`），且**沒有自訂
+`ObjectMapper` bean**，全部吃 Boot 自動配置。Boot 4 自動配置的是 **Jackson 3 的 `JsonMapper`**
+→ 這 5 個注入點在 Stage 5 就會啟動失敗。
+
+解法（純 pom 改動，Jackson 2 與 3 可並存）：
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-jackson2</artifactId>   <!-- 4.1.1 已驗證存在 -->
+</dependency>
+```
+
+⚠️ 這是「補回 Jackson 2 依賴」，**不是** Jackson 3 遷移。Stage 6 才移除。
+
+### ② `ExecutionEntity` 不是最高風險單點 —— 實測零風險
+
+第 8 節第 3 項把它列為「整個升級最高風險」，實際驗證結果是**簽章 byte-identical**：
+7.2.0 與 8.0.0 的 `javap` 輸出**逐行相同**，`ExecutionEntity extends … ProcessInstance …`
+的父型別關係也未變動。全專案 4 處 `.impl.` internal API **全部確認存在、0 個需改**：
+
+| 檔案:行 | 類別 | 8.0.0 狀態 |
+|---|---|---|
+| `webhook/ProcessCompletedListener.java:9` | `engine.impl.persistence.entity.ExecutionEntity` | ✅ javap 與 7.2.0 逐行相同 |
+| `webhook/ProcessCompletedListener.java:8` | `engine.delegate.event.impl.FlowableEntityEventImpl` | ✅ 存在 |
+| `controller/TaskController.java:12` | `common.engine.impl.identity.Authentication` | ✅ 存在 |
+| `engine/UnreachableTaskListener.java:10` | `common.engine.impl.cfg.TransactionState` | ✅ 存在 |
+
+**真正的頭號風險是上面的 Jackson 注入點，不是 `ExecutionEntity`。**
+⚠️ 結構驗證不等於行為驗證 —— S5-6 前先跑 `ProcessResultReportingTest`，那是 `ExecutionEntity`
+行為面的唯一防線。
+
+### 其他已查證事項
+
+| 項目 | 結論 |
+|---|---|
+| Flowable 8 版本 | **8.0.0 是唯一版本，沒有 8.0.1**（2026-02-27 發布後 7 個月無更新）。本文寫的 `8.0.x` 請改成 `8.0.0` |
+| `flowable-bpmn-layout` | 仍獨立、**未更名**、8.0.0 存在。`BpmnAutoLayout` 不需改 |
+| Jackson 3 AMQP converter | `JacksonJsonMessageConverter`（在 `spring-amqp` jar，非 `spring-rabbit`） |
+| `DataSourceProperties.ignoreUnknownFields` | Boot 4.1.1 **仍預設 true** → 第 5 節第 5 項的條件性風險**不成立**，備案不需執行。（⚠️ 該項對 `ignoreUnknownFields` 的描述本身有誤：它是 `@ConfigurationProperties` **annotation** 的屬性，不是 `DataSourceProperties` 的欄位。結論巧合正確，理由要改） |
+| `flowable.variable-json-mapper=jackson2` | 屬性仍存在、值仍有效。但 metadata 明確標 **`jackson2 is deprecated for removal`** → Stage 6 是有退場時程的技術債，不只是可延後的選配 |
+| Flowable 8 日期改 ISO 8601 UTC | **確認存在**（`2025-09-24T09:58:12.609+02:00` → `2025-09-24T07:58:12.609Z`）。但前端已在 `utils/datetime.js` 集中成 3 個函式並有 `datetime.spec.js` → 前端風險**遠低於**本文描述。⚠️ 本文第 5 節第 4 項**漏了 `Dashboard.vue`**，且它有日期**運算**（逾期判定），比純顯示更敏感 |
+| Liquibase 移除 | 無影響，但本文理由不精確：`flowable-engine` 以 compile scope 隱式帶入 `flowable-event-registry`、`flowable-idm-engine` 與 cmmn/dmn/form/content 的 **API jar**。專案**零 import** 所以無影響 |
+| Boot import 搬家 | 共 **10 處 / 5 檔**。⚠️ **本文漏了** `org.springframework.boot.orm.jpa.EntityManagerFactoryBuilder` → `org.springframework.boot.jpa.EntityManagerFactoryBuilder`（3 個 DataSource config 檔）、`@AutoConfigureMockMvc` 與 `MockMvcBuilderCustomizer` 搬家（需加 `spring-boot-webmvc-test` dependency） |
+| OpenRewrite 覆蓋率 | `MigrateAutoconfigurePackages` 只有 43 條映射，本專案 6 個 Boot import **只中 2 個**。價值在 pom/yml 而非 Java import。⚠️ **不要跑整個 composite**（會強行拉 JUnit 6／Hibernate 7.1／Spring Security 7，超出 Stage 5 範圍）。只挑 `SpringBootProperties_4_0` ＋ `AddSpringBootStarterFlyway` |
+| Stage 6 的 `catch (IOException)` 警告 | ⚠️ **不適用**。全專案 **0 個 `catch (IOException)`**，全部是 `catch (Exception)`。風險等級應從「高」降到「低」。⚠️ 本文說 `ObjectMapper` 4 處，實際 **6 處**（漏 `ExternalSystemPolicy` ＋ 測試 2 處）；`Jackson2JsonMessageConverter` 說 2 處，實際 **1 處**（Stage 3 已合併） |
+
+### 時程重新評估
+
+| Stage | 本文估計 | 重估 | 理由 |
+|---|---|---|---|
+| Stage 5 | 5d | **4~6d（中位 5）** | import 工作量比預期**小**（一半不用改），但**多出**本文沒算的：`EntityManagerFactoryBuilder` 搬遷、新增 `spring-boot-webmvc-test`、**Jackson 2 注入點解套**、AMQP retry 實測、Flowable 8 熱啟動 DB 驗證 |
+| Stage 6 | 3d | **1.5~2.5d** | 8 個 Java 檔、0 個 `catch (IOException)`、前端已集中化且有測試 |
+
+**5 人日落在重估區間中位數，維持不變 —— 但風險排序要整個重寫。**
+
+### 建議的開工順序
+
+先做**不動任何 Java 程式碼**的部分（單一 pom 檔可回退，資訊回報最快）：
+
+1. **S5-0a** `flowable.version` 註解鎖定 `8.0.0`
+2. **S5-0b** `flowable.variable-json-mapper: jackson2`（`application.yml` ＋ `application-test.yml`）
+3. **S5-0c** 加 `spring-boot-properties-migrator`（runtime scope）
+4. **S5-0d** 只跑 `SpringBootProperties_4_0` recipe 遷移 yml
+5. **S5-0e** pom 一次跳：Boot `3.5.16→4.1.1` ＋ Flowable `7.2.0→8.0.0` ＋ `spring-boot-starter-flyway` ＋ `spring-boot-properties-migrator` ＋ `spring-boot-jackson2`
+
+> **S5-0e 是決策點**：只改 pom 跑一次編譯，**編譯器會精確列出所有待修位置**（比任何靜態盤點都權威，包含繼承鏈與隱式參考）。
+> 若錯誤清單大致等於「5 檔 10 處 ＋ Jackson 注入點」，5 人日估算成立，繼續。若遠多於此，**暫停重新評估**。
+
+⚠️ **S5-0e 之後的機械式 import 修復必須與最後的「Boot 4 ＋ Flowable 8 同步跳」分成不同 commit** ——
+因為 Boot 4 ＋ Flowable 7.2.0 才是真正不相容的組合，合併會讓你分不清錯誤來自哪一邊。
+
+### 仍然無法事前查證（必須實測）
+
+1. **Flowable 8.0.0 在 Boot 4.1.1 上的執行期相容性** —— Flowable 是對 Boot 4.0.2 / Framework 7.0.3 建置的。已確認 **Maven 層無 BOM 衝突**（Flowable 不 import `spring-boot-dependencies`），**執行期未確認**。
+2. **Flowable 8 對既有 DB 的 schema 升級行為** —— Stage 4 的經驗（6.8.1→7.2.0 掉了 2 張 `FLW_EV_DATABASECHANGELOG*` 表）證明這條路**測試網測不到**，必須熱啟動實測。
+3. `ExecutionEntity` 的**行為**正確性（非結構）→ `ProcessResultReportingTest`
+4. AMQP retry 底層從 Spring Retry 換成 Spring Framework 後，DLQ 路由的實際行為 → `NotificationTemplateTest`
 
 ---
 
