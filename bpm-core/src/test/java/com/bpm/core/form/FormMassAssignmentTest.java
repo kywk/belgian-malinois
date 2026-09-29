@@ -8,7 +8,10 @@ import org.junit.jupiter.api.DisplayName;
 import com.bpm.core.support.IntegrationTestBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.flowable.engine.RuntimeService;
 import org.springframework.http.MediaType;
+
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -37,6 +40,9 @@ class FormMassAssignmentTest extends IntegrationTestBase {
 
     @Autowired
     private FormDataRepository dataRepo;
+
+    @Autowired
+    private RuntimeService runtimeService;
 
     @Test
     @DisplayName("POST /api/forms 不得以 body 的 id 覆寫既有（尤其是已發布的）表單")
@@ -71,10 +77,22 @@ class FormMassAssignmentTest extends IntegrationTestBase {
     @Test
     @DisplayName("POST /api/form-data 不得以 body 的 id 覆寫他人已送出的表單資料")
     void submitFormDataCannotOverwriteExisting() throws Exception {
+        // ⚠️ victim 與攻擊者必須掛在「攻擊者自己是參與者」的案件上（#72）。
+        //
+        // 改動前這裡用字面值 "proc-victim"（不存在的流程實例）是可行的 ——
+        // 當時 POST 完全沒有授權檢查。#72 之後守衛會先擋下，
+        // 資料「沒有被改動」這個斷言就會在守衛生效的情況下也成立，
+        // 測試變成對缺陷無感的空斷言（vacuous）。
+        //
+        // 所以改用真實實例：守住「即使攻擊者對這個案件有合法權限，
+        // 也不能靠 body 的 id 覆寫別人的資料列」這個真正的主張。
+        String pid = runtimeService.startProcessInstanceByKey("leave-approval",
+                Map.of("initiator", "user001", "leaveType", "annual", "days", 1)).getId();
+
         FormData victim = new FormData();
         victim.setFormDefinitionId("def-1");
-        victim.setProcessInstanceId("proc-victim");
-        victim.setSubmittedBy("user001");
+        victim.setProcessInstanceId(pid);
+        victim.setSubmittedBy("user002");
         victim.setDataJson("{\"amount\":100}");
         victim = dataRepo.save(victim);
         String victimId = victim.getId();
@@ -83,16 +101,16 @@ class FormMassAssignmentTest extends IntegrationTestBase {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"id\":\"" + victimId + "\","
                         + "\"formDefinitionId\":\"def-1\","
-                        + "\"processInstanceId\":\"proc-attacker\","
-                        + "\"submittedBy\":\"attacker\","
+                        + "\"processInstanceId\":\"" + pid + "\","
+                        + "\"submittedBy\":\"user001\","
                         + "\"dataJson\":\"{\\\"amount\\\":999999}\"}"));
 
         FormData after = dataRepo.findById(victimId).orElseThrow();
         assertThat(after.getDataJson())
                 .as("他人已送出的表單資料不得被建立請求覆寫（submittedAt 不可更新 → 篡改無跡）")
                 .contains("100").doesNotContain("999999");
-        assertThat(after.getSubmittedBy()).isEqualTo("user001");
-        assertThat(after.getProcessInstanceId()).isEqualTo("proc-victim");
+        assertThat(after.getSubmittedBy()).isEqualTo("user002");
+        assertThat(after.getProcessInstanceId()).isEqualTo(pid);
     }
 
     @Test

@@ -170,13 +170,21 @@ class AuditFailClosedTest extends IntegrationTestBase {
     @Test
     @DisplayName("表單送出（bpm_form_db）時稽核失敗 → 503，且表單資料沒有落地")
     void formSubmitRollsBackWhenAuditFails() throws Exception {
-        String pid = "fail-closed-" + UUID.randomUUID();
+        // ⚠️ 必須是真實的流程實例（#72）：FormDataController 的 POST 現在要求
+        // 呼叫者是該 processInstanceId 的參與者。改動前這裡用隨機字串
+        // 「fail-closed-<uuid>」是可行的（當時沒有任何檢查），現在會先被守衛
+        // 以 404 擋下 —— 而那個 404 與「守衛壞掉」的 404 無法分辨，
+        // 斷言 503 會失敗，失敗訊息會把排查方向帶到完全無關的地方。
+        //
+        // 所以改成真實實例而不是放寬預期值：這條測試要驗的是
+        // 「稽核寫不進去 → 表單資料不得落地」，與守衛無關。
+        String pid = startDirectly();
         auditAlwaysFails();
 
         mockMvc.perform(post("/api/form-data")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"formDefinitionId\":\"x\",\"processInstanceId\":\"" + pid
-                                + "\",\"submittedBy\":\"user001\",\"dataJson\":\"{}\"}"))
+                                + "\",\"dataJson\":\"{}\"}"))
                 .andExpect(status().isServiceUnavailable());
 
         int[] rows = {-1};
