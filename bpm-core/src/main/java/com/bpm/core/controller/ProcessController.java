@@ -3,10 +3,13 @@ package com.bpm.core.controller;
 import com.bpm.core.service.InitialAssigneeResolver;
 import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.audit.AuditEventPublisher;
+import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.dto.StartProcessRequest;
 import com.bpm.core.security.CallerId;
+import com.bpm.core.security.ProcessAccessGuard;
 import com.bpm.core.service.FormVersionLocker;
+import com.bpm.core.service.ProcessInvolvementService;
 import org.flowable.common.engine.api.FlowableObjectNotFoundException;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
@@ -74,15 +77,21 @@ public class ProcessController {
     private final TaskService taskService;
     private final AuditEventPublisher auditPublisher;
     private final FormVersionLocker formVersionLocker;
+    private final ProcessAccessGuard accessGuard;
+    private final ProcessInvolvementService involvementService;
 
     public ProcessController(RuntimeService runtimeService, RepositoryService repositoryService,
                              TaskService taskService, AuditEventPublisher auditPublisher,
-                             FormVersionLocker formVersionLocker) {
+                             FormVersionLocker formVersionLocker,
+                             ProcessAccessGuard accessGuard,
+                             ProcessInvolvementService involvementService) {
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
         this.taskService = taskService;
         this.auditPublisher = auditPublisher;
         this.formVersionLocker = formVersionLocker;
+        this.accessGuard = accessGuard;
+        this.involvementService = involvementService;
     }
 
     /**
@@ -220,21 +229,47 @@ public class ProcessController {
         return result;
     }
 
+    /**
+     * 我的申請（執行中）（#71：讀端授權）。
+     *
+     * <h2>改動前是什麼</h2>
+     *
+     * <p>{@code ?initiator=} 是 {@code required=false} 且<b>完全不檢查</b>是否
+     * 等於呼叫者 —— 不帶參數時 {@code query} 上沒有任何條件，於是回傳全公司
+     * <b>執行中</b>的案件（實測 107 件），包含 businessKey 與當前審核人。
+     * 那等於任何登入者都能列出全公司此刻在審什麼、卡在誰手上。
+     *
+     * <h2>三條規則（與 #66 同一組政策，不可改）</h2>
+     *
+     * <ol>
+     *   <li><b>帶了與自己不符的身分 → 明確 400。</b>不靜默忽略：靜默丟棄會讓
+     *       呼叫端以為它查得到對方的申請，而實際拿到的是自己的。</li>
+     *   <li><b>省略參數 → 預設為呼叫者</b>（不是「全部」）。</li>
+     *   <li><b>空白視同省略。</b>與 {@code DocumentController.createdBy} 的
+     *       判斷一致（那是 JPA entity 欄位，同樣無法分辨「沒送」與送了 null）。
+     *       空白不可能指向別人，因此不需要 400。</li>
+     * </ol>
+     *
+     * <p>⚠️ 這裡<b>不</b>套用稽核旁路：本端點回傳的永遠是「呼叫者自己的申請」，
+     * 稽核人員要查<b>別人</b>的案件請走 {@code /involved}（仍限於他自己參與的）
+     * 或稽核 API。附件那條旁路是因為「調查者不會是該案的參與者」，
+     * 這個端點沒有同樣的需求。
+     */
     @GetMapping
-    public List<Map<String, Object>> getProcessInstances(@RequestParam(required = false) String initiator) {
+    public List<Map<String, Object>> getProcessInstances(
+            @RequestParam(required = false) String initiator,
+            @CallerId String callerId) {
+        String self = accessGuard.requireSelf(initiator, callerId, "initiator");
         var query = runtimeService.createProcessInstanceQuery();
         // 代員工發起的案件（R-20）：initiator 是 system:<id>，員工記在 onBehalfOf。
         // 兩者都要比對，否則代發的單不會出現在那位員工的「我的申請」。
         // 回應以 onBehalf=true 標示，讓前端能顯示「由外部系統代為提出」——
         // 使用者看到一張自己沒送過的單，必須知道它是怎麼來的。
-        java.util.Set<String> onBehalf = java.util.Set.of();
-        if (initiator != null) {
-            query.or().variableValueEquals("initiator", initiator)
-                    .variableValueEquals(InitialAssigneeResolver.ON_BEHALF_OF_VAR, initiator).endOr();
-            onBehalf = runtimeService.createProcessInstanceQuery()
-                    .variableValueEquals(InitialAssigneeResolver.ON_BEHALF_OF_VAR, initiator).list()
-                    .stream().map(ProcessInstance::getProcessInstanceId).collect(java.util.stream.Collectors.toSet());
-        }
+        query.or().variableValueEquals("initiator", self)
+                .variableValueEquals(InitialAssigneeResolver.ON_BEHALF_OF_VAR, self).endOr();
+        java.util.Set<String> onBehalf = runtimeService.createProcessInstanceQuery()
+                .variableValueEquals(InitialAssigneeResolver.ON_BEHALF_OF_VAR, self).list()
+                .stream().map(ProcessInstance::getProcessInstanceId).collect(java.util.stream.Collectors.toSet());
         final java.util.Set<String> delegated = onBehalf;
         return query.orderByProcessInstanceId().desc().list().stream()
                 .map(pi -> {
@@ -267,10 +302,131 @@ public class ProcessController {
                 }).toList();
     }
 
+    /**
+     * 我參與的案件（執行中）—— 申請人的單不算，審過／正在審的才算。
+     *
+     * <h2>為什麼需要這個端點</h2>
+     *
+     * <p>{@code GET /api/process-instances} 只回「我送出的單」，但實務上最常見的
+     * 情境是「我三個月前審過這張單，現在卡在別人的關卡」—— 那張單不是我的申請，
+     * 卻明確是我參與的。要求查詢端點同時回兩種視角會讓「我的申請」這個頁面
+     * 混入別人送來、也已經審完的案件，於是拆成不同 API。
+     *
+     * <h2>授權規則</h2>
+     *
+     * <p>不帶任何參數，範圍就是「{@code isParticipant} 為真的案件」——
+     * 與 {@link ProcessAccessGuard#isParticipant} 的三個條件刻意一致
+     * （見 {@link ProcessInvolvementService}），否則會出現
+     * 「列表看得到、點進去 404」或反過來。
+     *
+     * <h2>⚠️ 效能</h2>
+     *
+     * <p>查詢次數固定為 4，與公司規模無關；<b>不可</b>改成
+     * 「列出所有案件再逐案跑 isParticipant」（那是 N+1 × 4，見該類別）。
+     * 其中 {@code taskInvolvedUser} 本身是全表掃描，那是這個端點的主要成本來源。
+     *
+     * <p>currentTask 一次撈回（而非逐案查詢）：我們已經知道所有 id 了，
+     * 而 {@code getProcessInstances} 的逐案查詢是既有端點的 N+1，不在本次範圍。
+     */
+    @GetMapping("/involved")
+    public List<Map<String, Object>> getInvolvedProcessInstances(@CallerId String callerId) {
+        if (callerId == null || callerId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "無法確認身分，請先登入");
+        }
+        java.util.Set<String> ids = involvementService.involvedRunningInstanceIds(callerId);
+        if (ids.isEmpty()) return List.of();
+
+        // ⚠️ 絕對不可用 singleResult()：見上面 getProcessInstances 內的註解。
+        // 平行閘道或 multi-instance 會簽會產生併發任務，那會讓整個端點 500。
+        java.util.Map<String, List<Task>> tasksByInstance = new java.util.HashMap<>();
+        for (Task t : involvementService.findOpenTasks(ids)) {
+            tasksByInstance.computeIfAbsent(t.getProcessInstanceId(), k -> new java.util.ArrayList<>()).add(t);
+        }
+        return involvementService.findRunning(ids).stream()
+                .map(pi -> {
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("involved", true);
+                    m.put("processInstanceId", pi.getProcessInstanceId());
+                    m.put("processDefinitionKey", pi.getProcessDefinitionKey());
+                    m.put("businessKey", pi.getBusinessKey() != null ? pi.getBusinessKey() : "");
+                    m.put("startTime", pi.getStartTime());
+                    m.put("status", "running");
+                    List<Task> tasks = tasksByInstance.getOrDefault(pi.getProcessInstanceId(), List.of());
+                    if (!tasks.isEmpty()) {
+                        Task task = tasks.get(0);
+                        m.put("currentTask", Map.of(
+                                "taskName", task.getName() != null ? task.getName() : "",
+                                "assignee", task.getAssignee() != null ? task.getAssignee() : ""));
+                        // 併發時只顯示其中一個會讓使用者以為案件只等一個人，
+                        // 把數量一併帶出來（與 GET /api/process-instances 同一理由）。
+                        m.put("currentTaskCount", tasks.size());
+                    }
+                    return m;
+                }).toList();
+    }
+
+    /**
+     * 案件變數 —— 表單資料（欄位 id == 變數名，spec §8.5）。
+     *
+     * <h2>改動前是什麼</h2>
+     *
+     * <p>{@code try { return runtimeService.getVariables(id); }
+     * catch (Exception e) { return Map.of(); }} ——
+     * <b>零授權檢查</b>，而變數裡放的是薪資等敏感表單資料，任何登入者都能讀
+     * 任何案件的 id。而且那個 catch 把「你沒權」「案件不存在」「引擎出錯」
+     * 三種語意全部塌成 {@code 200 + {}}，呼叫端無從分辨該怎麼處理。
+     *
+     * <h2>三種結果</h2>
+     *
+     * <ol>
+     *   <li><b>非參與者 → 404</b>（不是 403）。403 會確認「這個案件存在」，
+     *       對可枚舉的 id 等於把枚舉管道留著。理由與
+     *       {@link ProcessAccessGuard#requireParticipant} 相同。</li>
+     *   <li><b>不存在的實例 → 404</b>。</li>
+     *   <li><b>已結束、而呼叫者是參與者 → 200 + {}</b>。
+     *       這是<b>刻意維持</b>的既有行為：Flowable 結束流程時會清除 runtime
+     *       變數，而前端的 {@code DocumentDetail.vue} 依賴空物件
+     *       （它 catch 空、variables 保持 {}、{@code DynamicForm} 仍用 schema 渲染）。
+     *       改成 404 會讓「審結的單打不開」。</li>
+     * </ol>
+     *
+     * <h2>稽核旁路（policy：只認 audit:log:read、唯讀、每次留痕）</h2>
+     *
+     * <p>與附件完全相同的政策與相同的實作方式（{@link ProcessAccessGuard#requireReadAccess}），
+     * 因為這裡的資料與附件是同一批（一份單的薪資欄位既在表單資料也在附件裡）。
+     * 經由旁路的讀取會寫一筆 {@code DATA_ACCESS {auditBypass:true}}。
+     *
+     * <p>⚠️ 與 {@code AttachmentController.download} 的一處刻意差異：
+     * 那裡<b>每一次</b>下載（含參與者）都留痕，這裡只記旁路。
+     * 因為 variables 在每次開啟單據時都會被讀一次（熱路徑），
+     * 而參與者讀到的正是他自己填的表單值。把「稽核旁路」這件事本身
+     * 完整記錄下來就足以回答「誰以稽核身分調閱了哪些案件」；
+     * 若連參與者讀表單都要留痕，等於要為日常操作建立另一套行為稽核。
+     * 這是政策選擇，若要與附件完全對齊，把 {@code publish} 移出 {@code if} 即可。
+     *
+     * <p>刻意<b>不</b>加 {@code @Transactional}：這是唯讀查詢 + 一次稽核寫入，
+     * 與 {@code AttachmentController.list} 同一型（稽核失敗 → 503，
+     * 見 {@code AuditFailClosedTest}）。加交易反而會讓稽核掛在 beforeCommit，
+     * 而回應組裝階段的例外會讓它永遠寫不進去。
+     */
     @GetMapping("/{id}/variables")
-    public Map<String, Object> getVariables(@PathVariable String id) {
-        try { return runtimeService.getVariables(id); }
-        catch (Exception e) { return Map.of(); }
+    public Map<String, Object> getVariables(@PathVariable String id, @CallerId String callerId) {
+        boolean auditBypass = accessGuard.requireReadAccess(id, callerId);
+        if (auditBypass) {
+            // 參與者讀自己的表單值不留痕（那是日常操作）；稽核旁路必須留痕。
+            auditPublisher.publish(new AuditEvent(OperationType.DATA_ACCESS.name(), callerId,
+                    id, null,
+                    Map.of("action", "get_variables", "auditBypass", true)));
+        }
+
+        // 區分「已結束」與「不存在」：兩者 runtime 都拿不到變數，
+        // 但前者是參與者有權看的合法狀態（回 {}），後者是 404。
+        // 順序上授權先於存在性檢查：沒有權限的人不該靠狀態碼分辨
+        // 「這個 id 不存在」與「我不該看這個 id」。
+        if (accessGuard.stateOf(id) != ProcessAccessGuard.InstanceState.RUNNING) {
+            return Map.of();
+        }
+        return runtimeService.getVariables(id);
     }
 
     @GetMapping("/{id}/bpmn-xml")

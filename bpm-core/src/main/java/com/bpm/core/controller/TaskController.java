@@ -58,45 +58,96 @@ public class TaskController {
     private final RuntimeService runtimeService;
     private final RepositoryService repositoryService;
     private final AuditEventPublisher auditPublisher;
+    private final com.bpm.core.security.ProcessAccessGuard accessGuard;
+    private final com.bpm.core.service.CandidateGroupMembership groupMembership;
 
     public TaskController(TaskService taskService, RuntimeService runtimeService,
                           RepositoryService repositoryService,
-                          AuditEventPublisher auditPublisher) {
+                          AuditEventPublisher auditPublisher,
+                          com.bpm.core.security.ProcessAccessGuard accessGuard,
+                          com.bpm.core.service.CandidateGroupMembership groupMembership) {
         this.taskService = taskService;
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
         this.auditPublisher = auditPublisher;
+        this.accessGuard = accessGuard;
+        this.groupMembership = groupMembership;
     }
 
     /**
-     * Merged pending tasks: assignee + candidateUser + candidateGroups, deduplicated.
+     * 我的待辦（指派給我 ＋ 我是候選人 ＋ 我所屬的候選群組），依 taskId 去重。
+     *
+     * <h2>改動前是什麼（#71）</h2>
+     *
+     * <p>{@code assignee}／{@code candidateUser}／{@code candidateGroups}
+     * 三個參數全是 {@code required=false} 且<b>完全不檢查是否等於呼叫者</b>；
+     * 三個都不帶時還有一條「return all」—— 也就是回傳全公司待辦，
+     * 洩漏「誰在審什麼」。那是收件匣資訊，不是公開資訊。
+     *
+     * <h2>三個參數三種處理</h2>
+     *
+     * <ol>
+     *   <li><b>{@code assignee}／{@code candidateUser}</b>：省略 → 用呼叫者；
+     *       帶了別人的 id → 明確 400（與 #66 同一政策）。
+     *       這兩個參數保留是為了讓呼叫端能明確表達意圖，不是為了授權 ——
+     *       它們的結果永遠與「省略」相同。</li>
+     *   <li><b>{@code candidateGroups}：帶了任何值 → 一律 400。</b>
+     *       這是本方法最需要解釋的一條。assignee／candidateUser 至少還能
+     *       解讀成「查自己」，而群組是一個<b>集合</b>的自稱 —— 等於要求
+     *       伺服器相信「我屬於這個組織」。放行它的後果與 #66 的 initiator
+     *       冒用完全同型，而且更隱蔽（拿到的結果看起來完全正常）。
+     *       即使帶的值剛好等於呼叫端自己的群組也拒絕：呼叫端送出這個參數
+     *       本身就表示它期待該值被採信。</li>
+     * </ol>
+     *
+     * <h2>⚠️ 省略 candidateGroups 時<b>不能</b>完全不查群組</h2>
+     *
+     * <p>設計器的「發起人所屬單位」會產生
+     * {@code flowable:candidateGroups="${orgService.getDeptId(initiator)}"}
+     * —— 一個<b>沒有受理人</b>的任務（見 {@code InitialAssigneeResolver}
+     * 對「只給候選群組」的說明）。若完全不查群組，這類任務會從<b>所有人</b>
+     * 的收件匣消失，而且沒有任何錯誤訊息：案件就那樣卡住。
+     * 「查不到就不查」正是 {@code DuplicateApprovalFilterTest} 記錄過的
+     * 教訓（候選任務被靜默隱藏 → 案件卡死）。
+     *
+     * <p>所以省略時由 {@link com.bpm.core.service.CandidateGroupMembership}
+     * 計算呼叫端實際所屬的群組（部門代碼 ∪ 權限碼 ∪ authorities）。
+     *
+     * <p>⚠️ 已部署的 {@code purchase-approval} 的 {@code financeReview} 用的是
+     * {@code candidateUsers} 不是 candidateGroups，所以這段不影響它 ——
+     * 由 {@code InvolvedInstancesTest.candidateUserFlowIsUnaffected} 證明。
+     *
+     * <h2>⚠️ 不加稽核</h2>
+     *
+     * <p>本端點只回傳呼叫者自己的待辦，沒有稽核旁路。被拒的參數是 400，
+     * 且已由 {@link com.bpm.core.security.ProcessAccessGuard} 留下
+     * {@code DATA_ACCESS {denied:true}}。
      */
     @GetMapping
     public List<Map<String, Object>> getTasks(
             @RequestParam(required = false) String assignee,
             @RequestParam(required = false) String candidateUser,
-            @RequestParam(required = false) String candidateGroups) {
+            @RequestParam(required = false) String candidateGroups,
+            @CallerId String callerId) {
+
+        String self = accessGuard.requireSelf(assignee, callerId, "assignee");
+        String selfAsCandidate = accessGuard.requireSelf(candidateUser, callerId, "candidateUser");
+        accessGuard.rejectCallerSuppliedGroups(candidateGroups, callerId);
 
         Map<String, Task> taskMap = new LinkedHashMap<>();
 
-        if (assignee != null) {
-            taskService.createTaskQuery().taskAssignee(assignee).list()
-                    .forEach(t -> taskMap.put(t.getId(), t));
-        }
-        if (candidateUser != null) {
-            taskService.createTaskQuery().taskCandidateUser(candidateUser).list()
-                    .forEach(t -> taskMap.putIfAbsent(t.getId(), t));
-        }
-        if (candidateGroups != null) {
-            taskService.createTaskQuery()
-                    .taskCandidateGroupIn(List.of(candidateGroups.split(",")))
-                    .list().forEach(t -> taskMap.putIfAbsent(t.getId(), t));
-        }
+        taskService.createTaskQuery().taskAssignee(self).list()
+                .forEach(t -> taskMap.put(t.getId(), t));
+        taskService.createTaskQuery().taskCandidateUser(selfAsCandidate).list()
+                .forEach(t -> taskMap.putIfAbsent(t.getId(), t));
 
-        // If no filter params, return all
-        if (assignee == null && candidateUser == null && candidateGroups == null) {
-            taskService.createTaskQuery().orderByTaskCreateTime().desc().list()
-                    .forEach(t -> taskMap.put(t.getId(), t));
+        // 候選群組任務沒有 assignee，只能靠群組找到。空集合時<b>不能</b>查 ——
+        // taskCandidateGroupIn(空清單) 會產生 IN ()，MSSQL 直接報錯。
+        java.util.Set<String> myGroups = groupMembership.groupsOf(self);
+        if (!myGroups.isEmpty()) {
+            taskService.createTaskQuery()
+                    .taskCandidateGroupIn(List.copyOf(myGroups))
+                    .list().forEach(t -> taskMap.putIfAbsent(t.getId(), t));
         }
 
         // ── 「同一人不得重複簽核」的過濾已移除（2026-09-28 決策）───────
