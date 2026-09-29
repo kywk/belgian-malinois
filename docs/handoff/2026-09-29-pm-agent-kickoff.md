@@ -20,9 +20,8 @@
   但目前**沒有 dev 分支**。**使用者已決定維持 `feature/* → main` 直接合併**
   （與上一輪 tech-debt-remediation 的做法一致；`dev` 沒有可部署環境，
   所有 deploy job 還是 `echo` 佔位）。不要再問這件事。
-- ⚠️ 工作樹裡可能有一個**未追蹤**的 `docs/handoff/2026-09-29-pm-agent-kickoff.md`，
-  那不是任何 agent 建立的，是使用者放的。**不要刪、不要 commit**，
-  要處理請先問使用者。
+- **你現在讀的這份檔案就是給你的 prompt**（`docs/handoff/2026-09-29-pm-agent-kickoff.md`），
+  已納入版控。它取代了上一輪放在同一個路徑的開工 prompt。
 
 ## 1. 必讀（依序）
 
