@@ -175,13 +175,24 @@ public class BpmPermissionService {
     /**
      * 挑第一個有空的權限持有者。
      *
-     * <p><b>沒有人有空時仍會回傳第一個人</b>，而不是 null。這是刻意的：
-     * 回 null 會讓任務沒有受理人，停在沒有人看得到的地方 ——
-     * 派給一個休假中的人至少還在他的收件匣裡，回來就看到。
+     * <h2>全部不在時：派給第一位的代理人（2026-09-29 決策）</h2>
      *
-     * <p>但這也表示可用性過濾是<b>盡力而為</b>，不是保證。改動前這件事沒有
-     * 任何痕跡，所以退化發生時無從察覺；現在會記一筆 warn。
-     * 若某個權限碼經常出現這行日誌，代表該權限的持有人太少，那是組織設定問題。
+     * <p>「不在」在這裡的定義就是「設了代理人」（{@code isUserAvailable} 由
+     * {@code getSubstitute} 推導）。所以全部不在時，每位持有人都已指定了誰來代理 ——
+     * 派給第一位的代理人，正是代理設定要處理的情況。
+     *
+     * <p>改動前是派給第一位持有人<b>本人</b>：案件會在休假中的人的收件匣裡
+     * 等到他回來，而代理人明明就在。回 null 更糟 —— 任務沒有受理人，
+     * 停在沒有人看得到的地方（會被 {@code UnreachableTaskListener} 告警，但仍然卡住）。
+     *
+     * <p>⚠️ 已知限制：
+     * <ul>
+     *   <li><b>代理人未必持有該權限碼。</b>代理是組織層的委託（「我不在時他代我簽」），
+     *       不經過權限中心。這與 {@code resolveEffective} 在其他指派路徑上的語意一致。</li>
+     *   <li><b>只解一層。</b>代理人自己也不在時不會再往下找 —— 代理鏈可能成環，
+     *       而且「代理人的代理人」已經超出原持有人的委託意圖。</li>
+     * </ul>
+     * 仍記一筆 warn：若某個權限碼經常出現，代表持有人太少，那是組織設定問題。
      */
     public String getFirstAvailableUser(String permCode) {
         List<String> users = getUsersByPermission(permCode);
@@ -191,10 +202,11 @@ public class BpmPermissionService {
                 .filter(orgService::isUserAvailable)
                 .findFirst()
                 .orElseGet(() -> {
-                    log.warn("權限 {} 的持有者 {} 全部不在（皆有代理人），退化為指派第一位 {}"
-                            + " —— 可用性過濾是盡力而為，不保證",
-                            permCode, users, users.getFirst());
-                    return users.getFirst();
+                    String first = users.getFirst();
+                    String substitute = orgService.resolveEffective(first);
+                    log.warn("權限 {} 的持有者 {} 全部不在，改派第一位 {} 的代理人 {}",
+                            permCode, users, first, substitute);
+                    return substitute;
                 });
     }
 

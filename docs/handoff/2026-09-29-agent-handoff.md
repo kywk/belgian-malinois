@@ -273,7 +273,8 @@ authority，`hasRole('ADMIN')` 不會命中 → **擁有全部權限的管理員
 2. ~~**「任務對所有人不可見」的通用防線**~~ —— **2026-09-29 決策：只告警，已完成**。
    `engine/UnreachableTaskListener` 在交易 **commit 後**檢查（不是 TASK_CREATED 當下 ——
    外部 API 同交易內補候選群組的模式會誤報），記 ERROR log + `TASK_UNREACHABLE` 稽核。
-3. **`getFirstAvailableUser` 全部不在時的行為**：目前退化為指派第一位並記 warn。
+3. ~~**`getFirstAvailableUser` 全部不在時的行為**~~ —— **2026-09-29 決策：派給第一位持有人的代理人，已完成**。
+   只解一層代理；代理人未必持有該權限碼（與 `resolveEffective` 語意一致）。
 4. **`AttachmentController` 要不要開 admin／auditor 旁路**：現在有伺服器端角色模型了，
    但「管理員能不能看任何案件的附件」是權責政策。
 
