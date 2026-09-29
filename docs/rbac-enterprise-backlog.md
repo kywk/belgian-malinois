@@ -1,7 +1,10 @@
 # 企業版 RBAC 權限系統 — 完整工項與工時估算
 
 > 產出日期：2026-06-08
+> 最後更新：2026-09-29（新增第十三節：BPM 平台已定案的介面約定與缺口）
 > 含對外 API 服務、Java SDK、屬性型角色綁定 (ABAC hybrid)
+>
+> **狀態：未開工。**BPM 平台目前以 `MockOrgController`／`MockPermController` 代替本系統。
 
 ---
 
@@ -244,6 +247,74 @@
 
 **小計：10.5d**
 
+## 十三、與 BPM 平台的介面約定（2026-09-29 現況）
+
+BPM 平台（Greyhound）是本系統的第一個呼叫端。它在 `feature/tech-debt-remediation`
+分支完成了認證整合（R-01），因此下列介面**已由 BPM 端的程式碼定案**。本系統實作時
+要嘛照這份約定提供，要嘛同步修改 BPM 端的 client —— 兩邊不一致時，BPM 會在啟動後
+第一次查組織／權限時失敗。
+
+### 13.1 認證：BPM 只驗證 JWT，不簽發
+
+- BPM **只驗證** JWT（`bpm.security.jwt.issuer-uri`），不簽發、不處理 OIDC 流程 ——
+  那由本系統或企業 IdP 負責（對應 #11、#12、#16）。
+- 身分取自 `sub` claim。
+- 有 `roles` claim 時**優先採用**（例如 `["admin"]` → `ROLE_ADMIN`）；沒有時才向本系統
+  查詢使用者的權限碼。
+- Server 之間的呼叫（例如下方的快取失效）走**信任閘道**：`X-Gateway-Secret` + `X-User-Id`，
+  而不是 #18 的 service token。兩者要擇一統一，或讓閘道負責轉換。
+
+### 13.2 權限碼格式
+
+- 形如 `domain:resource:action`，**含冒號**（例如 `hr:leave:approve`、`audit:log:read`）。
+  BPM 的 Redis key 已按此分 namespace；請不要改成其他分隔符。
+- 通配 `*` 代表全部權限。BPM 會把它轉成 `ROLE_ADMIN`，但**不會**自動取得具名權限碼
+  （例如附件的稽核旁路只認 `audit:log:read`）。
+- BPM 目前使用的權限碼：`audit:log:read`（查稽核、唯讀調閱附件），以及 BPMN 運算式中
+  流程自訂的簽核權限碼。
+
+### 13.3 BPM 實際呼叫的查詢 API
+
+BPM 的 `OrgRestClient`／`PermRestClient` 目前呼叫下列路徑（**沒有 `/v1` 前綴**，
+回應欄位名稱如右欄）。與第十節規劃的路徑不同，實作時請擇一對齊：
+
+| BPM 呼叫 | 回應 | 對應本文件 |
+|---|---|---|
+| `GET /api/users/{userId}` | 使用者資料 | #75 |
+| `GET /api/users/{userId}/manager` | `{ managerId }` | #75 |
+| `GET /api/users/{userId}/manager-chain?levels=N` | 主管 id 陣列（由近到遠） | **缺**（見 #101） |
+| `GET /api/users/{userId}/department` | `{ deptId }` | #75 |
+| `GET /api/users/{userId}/substitute` | `{ substituteId }`，無代理人為 null | **缺**（見 #102） |
+| `GET /api/departments/{deptId}/members` | 使用者 id 陣列 | **缺**（見 #103） |
+| `GET /api/permissions/{permCode}/users[?deptId=]` | 使用者 id 陣列 | #73（規劃為 `/api/v1/...`） |
+| `GET /api/users/{userId}/permissions` | 權限碼陣列 | #70 |
+| `GET /api/users/{userId}/has-permission?code=` | `{ hasPermission }` | #68（規劃為 `permissions/check?userId=&permCode=`） |
+
+語意上的要求：
+- **代理人**決定 BPM 的「是否在職」：有代理人 = 不在。BPM 據此改派給代理人，而且
+  只解一層代理（代理鏈可能成環）。
+- 查無此人時必須回**錯誤**（4xx），不可回預設值 —— mock 曾對未知 userId 一律回
+  `mgr001`，造成偽造身分的案件「看起來正常」地派給真實主管。
+
+### 13.4 快取失效：由本系統**推給** BPM
+
+方向與 #77 相反：#77 是「外部系統通知本系統」，而 BPM 需要的是本系統在組織／權限異動時
+**主動通知 BPM**（BPM 快取 TTL 1～30 分鐘）。
+
+- `POST {bpm}/api/internal/cache-invalidate/org`、`/perm`，需 `ROLE_GATEWAY`（經信任閘道）
+- body：`{ "type": "MANAGER|SUBSTITUTE|DEPARTMENT|ALL", "userIds": [], "permCodes": [], "deptIds": [] }`
+
+### 13.5 因此新增的工項
+
+| # | 工項 | 說明 | 估時 |
+|---|------|------|------|
+| 101 | 主管鏈查詢 API | 依層級回傳主管 id 陣列，供 BPM 多層簽核路由 | 0.5d |
+| 102 | 代理人設定與查詢 API | 代理人 CRUD（含期間）＋查詢；BPM 以此判斷是否在職 | 1d |
+| 103 | 部門成員查詢 API | 回傳部門的使用者 id 陣列 | 0.5d |
+| 104 | 異動主動通知下游 | 組織／權限異動時呼叫訂閱系統的快取失效端點（先支援 BPM 的格式） | 1d |
+
+**小計：3d**
+
 ---
 
 ## 總結
@@ -262,7 +333,8 @@
 | 對外 API 服務層 | 14 | 12.5d |
 | Java SDK | 14 | 18d |
 | 屬性同步與跨系統整合 | 6 | 10.5d |
-| **合計** | **100** | **~146d** |
+| 與 BPM 平台的介面缺口（2026-09-29 新增） | 4 | 3d |
+| **合計** | **104** | **~149d** |
 
 ---
 
