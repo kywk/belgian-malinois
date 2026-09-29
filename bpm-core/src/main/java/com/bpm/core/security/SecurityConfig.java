@@ -1,5 +1,6 @@
 package com.bpm.core.security;
 
+import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -90,6 +91,21 @@ public class SecurityConfig {
                         jwt.jwtAuthenticationConverter(jwtAuthenticationConverter())))
                 .addFilterBefore(gatewayFilter, UsernamePasswordAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> {
+
+                    // ── 錯誤頁的 ERROR dispatch ─────────────────────
+                    // controller 拋出 ResponseStatusException（404／409／400）或
+                    // AuditWriteException（503）時，容器會以 ERROR dispatch 轉到 /error
+                    // 組回應內容。改動前沒有這條規則 → 那次 dispatch 落到最後的
+                    // denyAll() → <b>所有錯誤在線上都變成 403</b>：前端分不出
+                    // 「不存在」「衝突」「稽核中斷請重試」與「沒權限」。
+                    //
+                    // MockMvc 不做 error dispatch，所以整合測試全綠也看不出來 ——
+                    // 是對執行中的服務 curl 才發現的（見 ErrorDispatchTest）。
+                    //
+                    // 放行是安全的：狀態碼在原本那次請求（已經過授權）就決定了，
+                    // ERROR dispatch 只負責寫回應內容。直接 GET /error 是 REQUEST
+                    // dispatch，不受這條規則影響，仍落到 denyAll()。
+                    auth.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll();
 
                     // ── 公開：容器健康檢查 ──────────────────────────
                     // docker compose 的 healthcheck 沒有身分可帶。

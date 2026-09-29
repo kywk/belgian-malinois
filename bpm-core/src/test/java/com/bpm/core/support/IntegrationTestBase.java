@@ -120,7 +120,7 @@ public abstract class IntegrationTestBase {
      * <p>不寫死 port 是為了避免 CI 併行時互相搶。ServerSocket(0) 到實際綁定之間
      * 有極小的競爭窗口，但這是這類測試的標準做法。
      */
-    private static final int SERVLET_PORT = findFreePort();
+    protected static final int SERVLET_PORT = findFreePort();
 
     private static int findFreePort() {
         try (var socket = new java.net.ServerSocket(0)) {
