@@ -164,15 +164,27 @@
 
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
-| 66 | 內部發起流程的 initiator 改由 JWT 決定 |**2026-09-29 完成**（`0b3e7d8`／`4d6dd98`）。`@CallerId` 決定 initiator 與稽核 operatorId；body 帶 initiator 明確 400（對齊 R-20）；`variables` 套用 `TaskController` 的 deny-list，擋掉夾帶 `onBehalfOf`（繞過 R-20 授權）與 `_externalSystemId`（繞過 R-09）；`DocumentController.createdBy` 同步修 | ~~1d~~ || ✅
+| 66 | 內部發起流程的 initiator 改由 JWT 決定 | ✅ **2026-09-29 完成**（`0b3e7d8`／`4d6dd98`）。`@CallerId` 決定 initiator 與稽核 operatorId；body 帶 initiator 明確 400（對齊 R-20）；`variables` 套用 `TaskController` 的 deny-list，擋掉夾帶 `onBehalfOf`（繞過 R-20 授權）與 `_externalSystemId`（繞過 R-09）；`DocumentController.createdBy` 同步修 | ~~1d~~ | ✅ |
 | 67 | Webhook 投遞接線 |**三段各自獨立斷線**（非一段）：(A) 沒有任何程式碼設定 `__webhookUrl`（自 2026-04-17 起從未存在過設定端）；(B) `WebhookTaskListener` 未被 BPMN 引用、也不在 `setBeans()`；(C) 前端 `WebhookProps.js` 寫進 BPMN `documentation`，後端零讀取。⚠️ 三種格式互不相通：spec 說 `extensionElements`、前端寫 `documentation`、consumer 期待 Rabbit payload 欄位。#25 缺 `task.timeout` 與候選人/operatorName/comment 欄位。規模 8～12 檔案，原估 2d 偏低。**已決策：仍是需求；設定來源待定（建議 `extensionElements`）** | 2d→4d || ⬜
 | 68 | R-20 剩餘項 |拆四小項：<br>**a** admin UI 開關（`ExternalSystemAdmin.vue` 缺 `allowOnBehalfOf`；⚠️ `resetForm()` 用 `Object.assign` 不刪鍵，編輯過 true 的系統後按新建會繼承該授權）<br>**b** 前端代發標示（⚠️ `onBehalf` 只在 2 個申請人端 API 有，審核人端 `/api/tasks`、`/api/history/tasks` 沒有；前端 `grep 申請人` 零命中，審核人目前不知道單是誰送的）<br>**c** 補件關卡派給誰（2 支 BPMN 共 3 個 UserTask 仍是 `${initiator}`；`UnreachableTaskListener` 只擋 null/blank，`assignee="system:erp"` 繞過告警靜默卡死）**已決策：新增 `applicantResolver` bean**<br>**d** lint rule h 升 error（**已驗證安全**：`bpm_external_system` 無 seed SQL、兩支 BPMN 首個 UserTask 都是 `assigneeResolver`、無測試斷言 severity） | 2d || ⬜
-| 69 | 不存在的流程 key 回 500 |**2026-09-29 完成**（`0b3e7d8`）。key 為 null/空 → 400；查不到定義 → 404（並 catch `FlowableObjectNotFoundException` 補 race window）。⚠️ 範圍比原描述廣：key 缺席與空字串原本也全是 500。`ExternalApiController` 的同一個洞未修（見 #71） | ~~0.5d~~ || ✅
+| 69 | 不存在的流程 key 回 500 | ✅ **2026-09-29 完成**（`0b3e7d8`）。key 為 null/空 → 400；查不到定義 → 404（並 catch `FlowableObjectNotFoundException` 補 race window）。⚠️ 範圍比原描述廣：key 缺席與空字串原本也全是 500。`ExternalApiController` 的同一個洞未修（見 #80） | ~~0.5d~~ | ✅ |
 | 70 | Spring Boot 4 + Flowable 8 升級 |Boot 3.5 已於 2026-06-30 EOL；兩者必須同步跳。計畫見 `docs/plan/2026-09-28-springboot4-upgrade.md` Stage 5～6 | 22d || ⬜
-| 71 | 讀端授權：可列任何人的案件、可讀任何案件的變數 |**2026-09-29 查證新發現，範圍遠大於預期**。所有下列端點的 `?` 篩選參數皆 `required=false` 且**不檢查是否等於呼叫者** → 不帶參數即回傳全部：<br>🔴 `GET /api/process-instances`（實測回 107 件全公司執行中案件，含 businessKey 與當前審核人）<br>🔴 `GET /api/tasks`（回傳全公司待辦，洩漏「誰在審什麼」）<br>🔴 `GET /api/process-instances/{id}/variables`（零檢查；欄位 id == 變數名 → **薪資等敏感表單資料全可讀**；`catch → Map.of()` 還把「沒權／不存在／引擎錯誤」三種語意塌成空物件 200）<br>🔴 `GET /api/history/process-instances`、🔴 `GET /api/documents`（不帶參數即 `findAll()`）<br>🟠 `GET /api/tasks/{id}/comments`、`GET /api/history/tasks/{taskId}/comments`（簽核意見）、`GET /api/history/tasks`（`ApprovalTimeline` 刻意不傳 assignee → 任何登入者可看任何案件的完整簽核時間軸）、`GET /api/documents/{id}`、`GET /api/form-data/{pid}`（與 variables 同一批敏感資料的另一條路徑）、`GET /api/process-instances/{id}/bpmn-xml`（`activeIds` 暴露卡在哪一關）<br>✅ 已正確保護：`/api/audit-logs/**`（URL 層 `audit:log:read`）、`/api/attachments*`（`requireReadAccess`）、`/api/external/**`（`verifyOwnership`）<br>**已決策：支援「只看自己」與「看自己參與的」兩種視角，拆不同 API。`isParticipant`（`AttachmentController:209-223`）涵蓋 initiator／assignee／owner／candidateUsers，但**不涵蓋 candidateGroups**（Flowable 的 `taskInvolvedUser` SQL 只比對 `LINK.USER_ID_`），而設計器產生的流程有用 candidateGroups** | 2d || 🔴
-| 72 | `FormDataController.submittedBy` 可冒用 |與 #66 同一型缺陷，整個 class 沒有 `@CallerId`。`POST`／`PUT /api/form-data` 的 `submittedBy` 來自 request body，同時被當作稽核 `operatorId`（`FORM_SUBMIT`／`FORM_UPDATE`）。修法與 `DocumentController` 完全相同。⚠️ 前端有 `getFormData` 但沒有 view 呼叫它（死碼，但 API 開放） | 0.5d || 🟠
-| 73 | 錯誤回應看不到訊息 |本 repo 未設 `server.error.include-message`（Spring Boot 3 預設 `never`），所以 `ResponseStatusException` 精心寫的訊息只存在於伺服器端日誌，呼叫端只看到 `"error":"Bad Request"`。這讓 #66 選定的「明確 400 拒絕」政策在實務上失去意義 —— 呼叫端無從得知要改什麼。前端 `http.js:65-66` 有 `detail` fallback，但拿不到 `message`。⚠️ 全 repo 所有端點的錯誤訊息都受影響，非本次引入 | 0.5d || 🟡
+| 71 | 讀端授權：可列任何人的案件、可讀任何案件的變數 | ✅ **2026-09-29 完成**（`17896e0`／`15f58cf`）。四個 🔴 端點（`/api/process-instances`、`/api/history/process-instances`、`/api/tasks`、`/{id}/variables`）＋ 兩個新端點 `/involved`（執行中與歷史）。共用 `ProcessAccessGuard` 與 `CandidateGroupMembership`。**剩餘項目見 #74～#78** | ~~2d~~ | ✅ |
+| 72 | `FormDataController.submittedBy` 可冒用 | ✅ **2026-09-29 完成**（`edfd118`）。`GET` 加 `requireReadAccess` ＋ 稽核旁路留痕；`PUT` 加 `getDataById` → `requireParticipant`（原本任何登入者都能改寫他人表單）；`POST`／`PUT` 的 `submittedBy` 改由 `@CallerId` 決定並明確 400。`FormService` 新增 `getDataById` | ~~0.5d~~ | ✅ |
+| 73 | 錯誤回應看不到訊息 | ✅ **2026-09-29 完成**（`2bb3430`）。`DeliberateErrorMessageAttributes` 只在「沒有任何例外傳到容器」時回傳 `jakarta.servlet.error.message` → 對意外例外結構性不可能成立，嚴格強於 `include-message=always`。⚠️ 實際範圍比「只有 ResponseStatusException」略寬（Spring 自己的 `ErrorResponse` 理由字串也在內，兩者在 `/error` 屬性上無法區分） | ~~0.5d~~ | ✅ |
 
+| 74 | 任務動作缺少持有者檢查（**本輪最嚴重**） | ✅ **2026-09-29 完成**（`c3f042d`）。`PUT /api/tasks/{id}` 從未比對呼叫者是否為 assignee／candidateUser／候選群組成員 → **任何登入者可批准或拒絕任意請假單、任意採購單**（實測：無關的 user002 簽掉 assignee=mgr001 的任務，回 200，流程走完 PROCESS_COMPLETE）。且這是前端實際在用的表單寫入路徑。新增 `TaskHolderGuard` 供讀寫兩端共用（含 owner，讓 delegate／resolve 不被自己打死） | ~~1d~~ | ✅ |
+| 75 | 加簽的授權與持久化 DoS | ✅ **2026-09-29 完成**（`15f58cf`）。`CountersignController` 三個端點全接 `TaskHolderGuard`。`POST` 原本可讓攻擊者建立子任務使受害者父任務被 409 **永久**擋住（DoS）；稽核 operatorId 原本記的是被指派人而非呼叫者 | ~~1d~~ | ✅ |
+| 76 | `GET /api/history/tasks` 是枚舉鑰匙 | ✅ **2026-09-29 完成**（`15f58cf`）。原本不帶參數回傳**全公司**所有已完成任務，是 #74／#77／#78／#79／#80 五個 id-based 端點的 taskId 發射台。`assignee` 帶他人 → 400；帶 `processInstanceId` → 驗參與者（`ApprovalTimeline.vue` 刻意不傳 assignee，審核人仍看得到完整軌跡） | ~~0.5d~~ | ✅ |
+| 77 | 表單 schema 改寫無 ADMIN 限制 | ✅ **2026-09-29 完成**（`cc530df`）。`/api/forms/**` 掛在 `/api/** → authenticated()`，任何登入者能三步改版並發布全公司審核表。⚠️ 依 spec §8.5（欄位 id == 變數名）能改 schema 就能加一個欄位叫 `approved`。新增權限碼 `bpm:form:design`（**非** ADMIN，因會擋掉「業務人員自行設計」的產品定位），讀維持登入即可 | ~0.5d | ✅ |
+| 78 | 稽核的 ROLE_ADMIN 旁路是側門 | ✅ **2026-09-29 完成**（`cc530df`）。`SecurityConfig` 讓 `/api/audit-logs/**` 接受 ADMIN，但 `AuditEvent.detail` 帶整包流程變數，而 `ProcessAccessGuard` 明確拒絕 ADMIN 讀同一批資料 → 側門。已移除。⚠️ **之後讀稽核要用 `dev-token.sh dir001`**，不要用 `admin001 admin` | 0.2d | ✅ |
+| 79 | 簽核意見零授權 | ⬜ `GET /api/tasks/{id}/comments`、`GET /api/history/tasks/{taskId}/comments`、`POST /api/tasks/{id}/comments` 全部零檢查。內含**簽核意見全文**（退回理由、駁回原因）。taskId 來源已堵，但歷史 taskId 仍可從稽核紀錄（`audit:log:read`）取得。⚠️ `POST` 的 `CommentRequest.userId` 讓 `req.userId()` 成為自報 fallback（靠 `firstNonBlank` 順序僥倖） | 1d | ⬜ |
+| 80 | `GET /api/process-instances/{id}/bpmn-xml` 與 `GET /api/documents` | 🟠 兩者零檢查。`bpmn-xml` 的 `activeIds` 洩漏「這張單現在卡在哪一關」——**能精準指導後續攻擊的情報**，比單純 id 枚舉價值高。`GET /api/documents` 不帶參數即 `findAll()`（回傳全部公文含 processInstanceId，是 pid 的第二個枚舉來源），與 #71 修掉的 `GET /api/process-instances` 同型。兩者的修法都只是 `requireReadAccess`／`requireSelf`（已存在且被用過） | 0.5d | ⬜ |
+| 81 | `POST /api/forms` 的 `createdBy` 可冒用 | 🟠 與 #66／#72 同型但落在 `FormDefinition` 而非流程。`FormDefinition.createdBy` 有 setter（**非** READ_ONLY）且 `FormService.create()` **完全不碰它**（只用 `@CallerId` 餵稽核）。對照 `POST /{formKey}/revisions` → `createNextDraft` 有 `setCreatedBy`，**兩個端點不一致**。後果：「這張審核表是誰做的」不可信 | 0.3d | ⬜ |
+| 82 | 前端沒有權限碼的概念 | 🟠 **`bpm:form:design` 在 UI 上看不到效果**。`bpm-frontend/src/services/session.js` 只讀 JWT 的 `roles` claim，而權限中心的權限碼**不在 token 裡**；`router/index.js:24,28` 的 `/admin/form-editor` 與 `/admin/forms` 是 `requiresRole: 'admin'`。所以只持有 `bpm:form:design` 的業務人員後端放行但前端擋掉。這不是 #77 的 regression（那兩條路由本來就要求 admin），但它讓產品價值看不到。修法需要新的資料來源：後端 `/api/me/authorities` 端點，或 IdP 簽發時把權限碼放進 token —— **架構決定** | 1.5d | ⬜ |
+| 83 | assignee 為 `system:<id>` 的任務沒有人能簽 | 🟠 **#74 造成的行為變化**（安全方向正確但功能壞掉）。外部系統發起 → 主管退回 → 補件關卡 assignee 是 `${initiator}` = `system:<id>` → 四個持有者條件全不命中 → 案件永久卡死。改動前是「任何人都能簽」，現在是「沒有人能簽」。**根本解法在 BPMN／路由層**：`initiator` 不是人時改指 `onBehalfOf` 或系統設定的受理人。`ExternalApiController.completeTask` 是 server-to-server 路徑有 `verifyRunningOwnership`，不受影響；缺口只在「人工去簽補件」 | 1d | ⬜ |
+| 84 | `NotifyAdminController.updateConfig` 未驗 templateId | 🟠 程式碼註解（`:135-145`）自稱「P1-13 只在 create/update 擋住了錯誤的 templateId」，但 `update` **實際上沒有擋**（`createConfig:184-187` 有）。指向不存在的模板 → `EmailConsumer` 取不到 → retry 3 次 → DLQ → **通知永久遺失** | 0.3d | ⬜ |
+| 85 | `ProcessVariableSpecController.update` 稽核說謊 | 🟡 `repo.findById(id)` 後不驗 `existing.getProcessDefinitionKey()` 是否等於路徑的 `{key}`，`{key}` 只被寫進稽核 → 稽核記「改了流程 A 的規格」而實際改的是流程 B 的那一筆。URL 層是 ADMIN 所以嚴重度低，但**稽核紀錄會說謊**，而稽核是這個專案的核心賣點 | 0.3d | ⬜ |
 ---
 
 ## 工項統計
@@ -210,13 +222,17 @@
 > 缺的是退到任意節點與駁回通知；#8～#12 的快取、失效與組合查詢已完成，剩下去 mock（等權限中心）。
 > 新增的 #66（內部 initiator）與 #70（Boot 4 升級）建議列為 P0：前者是身分冒用，後者是 EOL 後無安全修補。
 
-> 2026-09-29 晚間追加：**#66、#69 已完成**。新增的 **#71（讀端授權）建議升為 P0** ——
-> 實測 `GET /api/process-instances` 不帶參數回 107 件全公司執行中案件，
-> `GET /api/tasks` 不帶參數回傳全公司待辦，`GET /api/process-instances/{id}/variables`
-> 可讀任何案件的表單資料（薪資等敏感欄位）。這是寫入端 #66 的對稱缺口，
-> 寫入端已關而讀取端全開，實際風險沒有降低。
-> **#73（錯誤訊息不可見）建議併入 #71 一起做**：它是 #66「明確 400 拒絕」政策
-> 能否生效的前提。
+> **2026-09-29 晚間追加的項目（#66、#71～#78）已全部完成並合併進 main**（`a07e250`）。
+> 這一輪從「啟動流程的身分冒用」一路查到「任務動作本身沒有持有者檢查」——
+> 實測確認任何登入者可以批准或拒絕系統裡的任意請假單與採購單。
+>
+> **下一輪的 P0 建議**：
+> - **#83（`system:<id>` 的任務沒有人能簽）** —— 這是 #74 造成的行為變化。
+>   嚴重度雖是功能而非安全，但「案件永久卡死」比「案件被誤簽」更難察覺。
+> - **#79（簽核意見零授權）** —— 目前唯一還能讀到「誰審的、審核意見原文」的端點。
+> - **#82（前端接權限碼）** —— `bpm:form:design` 目前在 UI 上完全看不到效果，
+>   需要架構決定（權限碼的資料來源）。
+> - #80、#81 修法都很短，約 0.8d 全部可關上。
 
 ### P0 — 核心流程可用（必須先完成）
 - #1~#2 退件/拒絕機制
