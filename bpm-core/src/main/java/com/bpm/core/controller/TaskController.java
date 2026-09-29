@@ -16,6 +16,7 @@ import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
+import org.flowable.task.api.TaskQuery;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
@@ -59,19 +60,23 @@ public class TaskController {
     private final RepositoryService repositoryService;
     private final AuditEventPublisher auditPublisher;
     private final com.bpm.core.security.ProcessAccessGuard accessGuard;
-    private final com.bpm.core.service.CandidateGroupMembership groupMembership;
+    private final com.bpm.core.security.TaskHolderGuard holderGuard;
 
     public TaskController(TaskService taskService, RuntimeService runtimeService,
                           RepositoryService repositoryService,
                           AuditEventPublisher auditPublisher,
                           com.bpm.core.security.ProcessAccessGuard accessGuard,
-                          com.bpm.core.service.CandidateGroupMembership groupMembership) {
+                          // #77：讀寫兩端共用的持有者判斷。待辦清單與任務動作
+                          // 必須是同一條規則 —— 兩處各自維護時，只要有人改了
+                          // 其中一處，就會出現「看得到、點進去被拒」那種組合
+                          // 型式的差異，而那種差異比沒有檢查更難察覺。
+                          com.bpm.core.security.TaskHolderGuard holderGuard) {
         this.taskService = taskService;
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
         this.auditPublisher = auditPublisher;
         this.accessGuard = accessGuard;
-        this.groupMembership = groupMembership;
+        this.holderGuard = holderGuard;
     }
 
     /**
@@ -131,23 +136,15 @@ public class TaskController {
             @CallerId String callerId) {
 
         String self = accessGuard.requireSelf(assignee, callerId, "assignee");
-        String selfAsCandidate = accessGuard.requireSelf(candidateUser, callerId, "candidateUser");
+        accessGuard.requireSelf(candidateUser, callerId, "candidateUser");
         accessGuard.rejectCallerSuppliedGroups(candidateGroups, callerId);
 
+        // ⚠️ 三個查詢條件由 TaskHolderGuard 產生，而不是在這裡各寫一份
+        // （#77）。PUT /api/tasks/{id} 的授權檢查走的是同一組建構子，
+        // 見 TaskHolderGuard.inboxQueries 為什麼讀端保留批次查詢的形狀。
         Map<String, Task> taskMap = new LinkedHashMap<>();
-
-        taskService.createTaskQuery().taskAssignee(self).list()
-                .forEach(t -> taskMap.put(t.getId(), t));
-        taskService.createTaskQuery().taskCandidateUser(selfAsCandidate).list()
-                .forEach(t -> taskMap.putIfAbsent(t.getId(), t));
-
-        // 候選群組任務沒有 assignee，只能靠群組找到。空集合時<b>不能</b>查 ——
-        // taskCandidateGroupIn(空清單) 會產生 IN ()，MSSQL 直接報錯。
-        java.util.Set<String> myGroups = groupMembership.groupsOf(self);
-        if (!myGroups.isEmpty()) {
-            taskService.createTaskQuery()
-                    .taskCandidateGroupIn(List.copyOf(myGroups))
-                    .list().forEach(t -> taskMap.putIfAbsent(t.getId(), t));
+        for (TaskQuery q : holderGuard.inboxQueries(self)) {
+            q.list().forEach(t -> taskMap.putIfAbsent(t.getId(), t));
         }
 
         // ── 「同一人不得重複簽核」的過濾已移除（2026-09-28 決策）───────
@@ -186,8 +183,9 @@ public class TaskController {
      * <p><b>P1-1 稽核查不出是誰核准的。</b>operatorId 一律取
      * {@code req.assignee()}，但前端主要簽核入口的 payload 只有 action 與
      * variables → TASK_APPROVE／TASK_RETURN／TASK_REJECT 的 operatorId 全是
-     * null。現在改為：已認證的呼叫者（{@code @CallerId}）→ 任務目前的 assignee
-     * → body 的 assignee。R-01 完成後第一順位不再是可偽造的標頭。
+ * null。改為已認證的呼叫者（{@code @CallerId}）。R-01 完成後第一順位
+ * 不再是可偽造的標頭；而「fallback 到任務的 assignee」那一層在 #77
+ * 加上守衛之後已經是死碼，理由見下面 operatorId 那段。
      *
      * <p><b>P1-3 守門回 HTTP 200。</b>有未完成加簽時回
      * {@code {"status":"error"}} 卻是 200，前端只看 axios 是否 throw →
@@ -198,6 +196,37 @@ public class TaskController {
      * <p><b>P1-4 未知 action 靜默改派。</b>改為顯式 switch：未知或缺少
      * action 一律 400。改派必須明確指定 {@code action=reassign}，
      * 不再是「有 assignee 就改派」—— 後者讓 typo 把核准變成改派且回報成功。
+     *
+     * <h2>#77：這裡原本<b>沒有任何持有者檢查</b>（最嚴重的授權缺陷）</h2>
+     *
+     * <p>{@code @CallerId} 解析出來的 {@code callerId} 改動前<b>只用於稽核</b>，
+     * 從未拿去與 {@code task.getAssignee()} 比對。取得任務之後就直接
+     * {@code complete}／{@code delegateTask}／{@code setAssignee}／
+     * {@code resolveTask}，於是任何登入者只要知道 taskId 就能動任何任務。
+     *
+     * <p>實測（真實 JWT，線上服務）：user001 送出 leave-approval，
+     * 該案主管審核任務的 assignee 是 mgr001；讓與該案無關的 user002 去簽
+     * {@code PUT /api/tasks/{id} {"action":"complete","variables":[approved=true]}}
+     * 回 <b>200 {@code {"status":"ok"}}</b>，稽核留下
+     * {@code TASK_APPROVE | operatorId = user002}，流程直接走完。
+     * <b>任何登入者都能批准或拒絕系統裡的任意請假單、任意採購單。</b>
+     *
+     * <p>而且這條路徑正是前端實際在用的表單寫入路徑
+     * （{@code DocumentDetail.vue} → {@code PUT /api/tasks/{taskId}} 帶 variables），
+     * 也就是說 #72 剛修好的 {@code FormDataController} 保護力<b>低於</b>
+     * 前端真正在走的那條路 —— 拿表單資料的權限比簽核的權限還大。
+     *
+     * <h2>⚠️ 為什麼守衛排在「action 形狀檢查」<b>之後</b></h2>
+     *
+     * <p>順序是「形狀 → 授權 → 身分欄位」，與 {@code FormDataController.submit}
+     * 相同。請求本身不完整（沒有 action）與「你沒權」是兩件事：
+     * 先把形狀講清楚，呼叫端才知道要改 payload 還是改流程選擇。
+     *
+     * <p>反過來說，404 與 400 在此處本來就無法完全不可區分 ——
+     * 「任務不存在」是 404、「任務存在但 body 壞掉」是 400，
+     * 這個落差在改動前就存在，守衛插在前面並不會新開一條枚舉管道
+     * （見 {@code TaskActionHardeningTest.cannotHijackByBareAssignee}：
+     * 攻擊者送出 {@code {"assignee":"自己"}} 時斷言的就是 400）。
      */
     @PutMapping("/{id}")
     @Transactional("primaryTransactionManager")
@@ -212,11 +241,6 @@ public class TaskController {
         String processInstanceId = task.getProcessInstanceId();
         String action = req.action();
 
-        // 操作者：標頭優先（前端共用 axios instance 一律附上），
-        // 退回任務現有的 assignee，最後才是 body 的 assignee。
-        String operatorId = firstNonBlank(callerId,
-                firstNonBlank(task.getAssignee(), req.assignee()));
-
         OperationType auditType;
 
         if (action == null || action.isBlank()) {
@@ -226,17 +250,40 @@ public class TaskController {
                     "缺少 action（可用：claim, complete, delegate, resolve, reassign）");
         }
 
+        // ── #77：持有者守衛 ───────────────────────────────────────────
+        //
+        // 非持有者（含完全無關的使用者）→ 404，且**在碰到任務之前**就擋下，
+        // 因此 complete／reassign／delegate 都不會改動任何資料。
+        // 未認證 → 401。判斷規則見 TaskHolderGuard（與待辦清單同一份）。
+        holderGuard.requireHolder(task, callerId);
+
+        // 操作者就是呼叫者，一層 fallback 都不留。
+        //
+        // 改動前是 firstNonBlank(callerId, firstNonBlank(task.getAssignee(), req.assignee()))。
+        // 後面那兩層在守衛加入後<b>永遠不會生效</b>：requireHolder 保證 callerId
+        // 非空白（未認證已先被 401 擋下），firstNonBlank 的第一個參數就不會是
+        // null／空白。而它們描述的心智模型 —— 「操作者可能不是呼叫者」——
+        // 正是這個缺陷的成因：operatorId 只拿去稽核，從不與 task.getAssignee()
+        // 比對，於是稽核看起來健全，實際上任何人都能簽任何人的單。
+        //
+        // 稽核要記的是「誰按的按鈕」，不是「誰持有這個任務」——那是兩個不同
+        // 的事實，混用只會在出事時指錯方向。
+        String operatorId = callerId;
+
         switch (action) {
             case "claim" -> {
-                // claim(taskId, null) 的語意是「取消認領」，而且會跳過
-                // 已認領檢查 → 空 body 可強制釋放他人任務。因此 assignee
-                // 必須有值；acceptance 腳本只帶標頭不帶 body assignee，
-                // 所以這裡用解析後的 operatorId。
-                String claimant = firstNonBlank(callerId, req.assignee());
-                if (claimant == null) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                            "claim 必須指定認領者（已認證的身分或 body 的 assignee）");
-                }
+                // 認領者就是呼叫者，不接受 body 指定。
+                //
+                // 改動前是 firstNonBlank(callerId, req.assignee())，而
+                // "claim 必須指定認領者" 的 400 與「空 body 可強制釋放他人任務」
+                // 那段說明都建立在 assignee 可能是 null 之上。守衛加入後
+                // callerId 必定非空白，那個 fallback 與那個 400 都是死碼。
+                //
+                // 順帶關掉一個洞：改動前 {"action":"claim","assignee":"其他人"}
+                // 會<b>代別人認領</b>。那不是 claim 的語意（claim 是「這是我的」），
+                // 而且等於讓持有者指定任意受理人 —— 那是 reassign 的工作，
+                // 而 reassign 自己也還沒驗證新受理人（P1-4，尚未施作）。
+                String claimant = callerId;
                 try {
                     taskService.claim(id, claimant);
                 } catch (FlowableTaskAlreadyClaimedException e) {
@@ -244,10 +291,20 @@ public class TaskController {
                     throw new ResponseStatusException(HttpStatus.CONFLICT,
                             "任務已被他人認領", e);
                 }
-                operatorId = claimant;
                 auditType = OperationType.TASK_CLAIM;
             }
             case "complete" -> {
+                // 語意檢查（#77）：完成是持有者的權力，與其他 action 同一條守衛。
+                // leave-approval／purchase-approval 的補件關卡 assignee 是
+                // ${initiator}（申請人本人），所以申請人能簽自己的補件任務。
+                //
+                // ⚠️ 引擎層的既有行為（非本次引入）：被 delegate 出去、尚處於
+                // PENDING 的任務不能被 complete —— TaskHelper.completeTask 會
+                // 拋 FlowableException（"should be resolved instead"）→ 裸 500。
+                // 守衛不得（也沒有）把它變成 404：那會對 delegatee 謊稱任務不存在，
+                // 把一個可診斷的規則藏起來。委派要能走完，正確的動作是 resolve
+                // （見下面的 resolve 分支與 TaskHolderGuard 的生命週期分析）。
+                // 把這個 500 變成明確的 409 屬於另一件事，本次不做。
                 if (!taskService.getSubTasks(id).isEmpty()) {
                     throw new ResponseStatusException(HttpStatus.CONFLICT,
                             "有未完成的加簽子任務");
@@ -277,17 +334,37 @@ public class TaskController {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "delegate 必須指定 delegateUser");
                 }
+                // 語意檢查（#77）：被 delegate 出去之後 delegatee 必須能簽。
+                // 這是本次修改最大的迴歸風險 —— Flowable 的 delegateTask 會把
+                // assignee 換成 delegatee、把原本的 assignee 寫進 owner，
+                // 守衛若不放行 delegatee 就等於把委派功能打死。
+                // 由 TaskHolderGuard 的條件 1（assignee）涵蓋，
+                // 見 TaskHolderGuard 類別註解的 delegate／resolve 生命週期分析。
                 taskService.delegateTask(id, req.delegateUser());
                 auditType = OperationType.TASK_DELEGATE;
             }
             case "resolve" -> {
+                // 語意檢查（#77）：resolve 是「原指派人把被委派的任務收回來」，
+                // Flowable 的 resolveTask 把 assignee 還給 owner ——
+                // 呼叫者只可能是 owner（delegate 之前 owner 為 null 的話，
+                // 引擎會在 delegateTask 時把它設成原本的 assignee）。
+                // 由 TaskHolderGuard 的條件 2（owner）涵蓋。
+                //
+                // ⚠️ 未被 delegate 的任務上呼叫 resolve，引擎會拋例外 →
+                // 裸 500。這是既有行為（改動前任何人都能觸發），本次不處理；
+                // 真正該做的是「不是委派中的任務就回 409」，留待後續。
                 taskService.resolveTask(id);
                 auditType = OperationType.TASK_RESOLVE;
             }
             case "reassign" -> {
                 // 改派現在必須明確指定 action。
-                // ⚠️ 仍未檢查新 assignee 是否為該任務的候選人 —— 那需要
-                // 身分與授權模型（R-01），見 security-audit P1-4。
+                //
+                // 語意檢查（#77）：改派是持有者的權力，所以與其他 action
+                // 套用同一條守衛 —— 非持有者不得改派任何人的任務。
+                //
+                // ⚠️ 仍未檢查新 assignee 是否為該任務的候選人 —— 持有者目前
+                // 可以把任務指給任意 id。那是 P1-4 的另一半，本次不處理
+                // （範圍是「誰能動這個任務」，不是「能指派給誰」）。
                 if (req.assignee() == null || req.assignee().isBlank()) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "reassign 必須指定 assignee");
