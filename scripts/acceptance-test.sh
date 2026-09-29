@@ -41,9 +41,14 @@ bpm_put()  { curl -s -X PUT  "$BPM_URL$1" -H "Content-Type: application/json" -H
 bpm_get()  { curl -s         "$BPM_URL$1" -H "$(auth_header "$2")"; }
 
 start_process() {
-  local processKey="$1" initiator="$2" vars="$3"
-  bpm_post "/api/process-instances" "$initiator" \
-    "{\"processDefinitionKey\":\"$processKey\",\"initiator\":\"$initiator\",\"variables\":$vars}"
+  # start_process processKey caller vars
+  #
+  # caller 只用來簽 JWT 當 Authorization 標頭；**不可**放進 body。
+  # #66 之後 initiator 一律由伺服器從已認證的身分決定，
+  # body 帶了 initiator 會被明確拒絕成 400。
+  local processKey="$1" caller="$2" vars="$3"
+  bpm_post "/api/process-instances" "$caller" \
+    "{\"processDefinitionKey\":\"$processKey\",\"variables\":$vars}"
 }
 
 get_task_for() {

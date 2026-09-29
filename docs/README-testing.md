@@ -64,34 +64,43 @@ chmod +x scripts/acceptance-test.sh
 
 ## 手動測試流程
 
+> R-01 之後所有使用者路徑都用 JWT（`Authorization: Bearer`），不再用
+> `X-User-Id` 標頭自報身分。取得 token：`TOK=$(./scripts/dev-token.sh user001)`。
+> 下文的 `{TOK:user001}` 請換成實際 token。
+>
+> ⚠️ 啟動流程**不可**帶 `initiator`（#66）：發起人一律由伺服器從已認證的身分
+> 決定，body 帶了會被明確拒絕成 400。另外 `variables` 是 **object**（欄位 id ==
+> 流程變數名，spec §8.5），不是 `{name,value}` 陣列 —— 那是 `PUT /api/tasks/{id}`
+> 的格式，兩者不同。
+
 ### 請假流程（leave-approval）
 
 **申請（以 user001 身分）：**
 ```bash
 curl -X POST http://localhost:8080/api/process-instances \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: user001" \
+  -H "Authorization: Bearer $(./scripts/dev-token.sh user001)" \
   -d '{
     "processDefinitionKey": "leave-approval",
-    "initiator": "user001",
-    "variables": [
-      {"name": "leaveType",  "value": "annual"},
-      {"name": "dateRange",  "value": "2026-05-01~2026-05-03"},
-      {"name": "reason",     "value": "年假"}
-    ]
+    "variables": {
+      "leaveType": "annual",
+      "dateRange": "2026-05-01~2026-05-03",
+      "reason": "年假"
+    }
   }'
 ```
 
 **查詢 mgr001 的待辦：**
 ```bash
-curl http://localhost:8080/api/tasks?assignee=mgr001 -H "X-User-Id: mgr001"
+curl "http://localhost:8080/api/tasks?assignee=mgr001" \
+  -H "Authorization: Bearer $(./scripts/dev-token.sh mgr001)"
 ```
 
 **同意（將 {taskId} 替換為實際 ID）：**
 ```bash
 curl -X PUT http://localhost:8080/api/tasks/{taskId} \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: mgr001" \
+  -H "Authorization: Bearer $(./scripts/dev-token.sh mgr001)" \
   -d '{"action":"complete","variables":[{"name":"approved","value":true},{"name":"approverComment","value":"同意"}]}'
 ```
 
@@ -115,18 +124,19 @@ curl -X PUT http://localhost:8080/api/tasks/{taskId} \
 
 ```bash
 # 查詢候選任務
-curl "http://localhost:8080/api/tasks?candidateUser=mgr001" -H "X-User-Id: mgr001"
+curl "http://localhost:8080/api/tasks?candidateUser=mgr001" \
+  -H "Authorization: Bearer $(./scripts/dev-token.sh mgr001)"
 
 # 認領
 curl -X PUT http://localhost:8080/api/tasks/{taskId} \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: mgr001" \
+  -H "Authorization: Bearer $(./scripts/dev-token.sh mgr001)" \
   -d '{"action":"claim"}'
 
 # 完成
 curl -X PUT http://localhost:8080/api/tasks/{taskId} \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: mgr001" \
+  -H "Authorization: Bearer $(./scripts/dev-token.sh mgr001)" \
   -d '{"action":"complete","variables":[{"name":"approved","value":true},{"name":"approverComment","value":"財務審核通過"}]}'
 ```
 
@@ -139,7 +149,7 @@ curl -X PUT http://localhost:8080/api/tasks/{taskId} \
 # 建立加簽子任務
 curl -X POST http://localhost:8080/api/tasks/{taskId}/countersign \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: mgr001" \
+  -H "Authorization: Bearer $(./scripts/dev-token.sh mgr001)" \
   -d '{"countersignUserId": "dir001", "message": "請提供意見"}'
 ```
 
@@ -147,7 +157,7 @@ curl -X POST http://localhost:8080/api/tasks/{taskId}/countersign \
 ```bash
 curl -X POST http://localhost:8080/api/tasks/{taskId}/comments \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: mgr001" \
+  -H "Authorization: Bearer $(./scripts/dev-token.sh mgr001)" \
   -d '{"message": "請注意此案金額已超過授權額度"}'
 ```
 
