@@ -6,10 +6,14 @@ import com.bpm.core.form.repository.FormDataRepository;
 import com.bpm.core.form.repository.FormDefinitionRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
@@ -20,9 +24,15 @@ public class FormService {
     private final FormDefinitionRepository defRepo;
     private final FormDataRepository dataRepo;
 
-    public FormService(FormDefinitionRepository defRepo, FormDataRepository dataRepo) {
+    private final TransactionTemplate versionTx;
+
+    public FormService(FormDefinitionRepository defRepo, FormDataRepository dataRepo,
+                       @Qualifier("formTransactionManager") PlatformTransactionManager formTransactionManager) {
         this.defRepo = defRepo;
         this.dataRepo = dataRepo;
+        // 見 saveAllocatingVersion：每次取號嘗試必須是獨立交易。
+        this.versionTx = new TransactionTemplate(formTransactionManager);
+        this.versionTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /**
@@ -107,7 +117,17 @@ public class FormService {
     private FormDefinition saveAllocatingVersion(FormDefinition draft, String formKey) {
         for (int attempt = 0; attempt < 5; attempt++) {
             try {
-                return defRepo.saveAndFlush(draft);
+                // ⚠️ 每次嘗試必須是獨立交易（REQUIRES_NEW），理由與
+                // DocumentController.saveWithUniqueNumber 相同：在外層交易裡撞約束，
+                // 交易會被標成 rollback-only、Hibernate session 也不再可用，重試永遠不會成功。
+                //
+                // 改動前「剛好」能重試，是因為本類別的 @Transactional 未限定管理器、
+                // 開在 bpm_core_db 上，form repository 的每次呼叫其實各自 commit。
+                // 限定為 formTransactionManager 之後（P1-14）才讓這個問題浮現。
+                //
+                // 代價：draft 在外層交易之前就 commit。外層（例如稽核寫入）失敗時會留下
+                // 一份 draft，下一次改版會被「已有未發布 draft」擋下 —— 看得見、可刪除。
+                return versionTx.execute(status -> defRepo.saveAndFlush(draft));
             } catch (DataIntegrityViolationException e) {
                 draft.setVersion(defRepo.findMaxVersion(formKey) + 1 + attempt);
             }

@@ -97,15 +97,12 @@ public class ExternalSystemAdminController {
     @GetMapping
     public List<ExternalSystem> list() {
         List<ExternalSystem> all = repo.findAll();
-        all.forEach(s -> s.setApiKey("***")); // 不回傳 hash
-        return all;
+        return all.stream().map(ExternalSystemAdminController::masked).toList();
     }
 
     @GetMapping("/{systemId}")
     public ExternalSystem get(@PathVariable String systemId) {
-        ExternalSystem sys = find(systemId);
-        sys.setApiKey("***");
-        return sys;
+        return masked(find(systemId));
     }
 
     @PutMapping("/{systemId}")
@@ -132,8 +129,7 @@ public class ExternalSystemAdminController {
             audit(operatorId, "update", systemId, changes);
         }
 
-        saved.setApiKey("***");
-        return saved;
+        return masked(saved);
     }
 
     @DeleteMapping("/{systemId}")
@@ -194,6 +190,33 @@ public class ExternalSystemAdminController {
                 OperationType.CONFIG_CHANGE.name(),
                 operatorId != null && !operatorId.isBlank() ? operatorId : "unknown",
                 null, null, d));
+    }
+
+    /**
+     * 回應用的複本，apiKey 以 {@code ***} 遮蔽。
+     *
+     * <p>⚠️ <b>絕不可直接在 entity 上 {@code setApiKey("***")}</b>。
+     * {@code update()} 有 {@code @Transactional}（稽核 fail-closed，P1-14），
+     * 回傳的 entity 仍受 EntityManager 管理 —— 遮蔽會在 commit 時被 flush 進 DB，
+     * <b>把該系統的 API key 雜湊蓋成 {@code ***}，外部系統立即全部 401</b>。
+     * 改動前沒發生，只是因為方法沒有交易、entity 在 save() 後就已脫離管理。
+     * 這是 R-20 線上實測時發現的。GET 端點一併改用複本，免得日後有人替它們加交易。
+     */
+    private static ExternalSystem masked(ExternalSystem s) {
+        ExternalSystem m = new ExternalSystem();
+        m.setId(s.getId());
+        m.setSystemId(s.getSystemId());
+        m.setSystemName(s.getSystemName());
+        m.setApiKey("***");
+        m.setContactEmail(s.getContactEmail());
+        m.setAllowedProcessKeys(s.getAllowedProcessKeys());
+        m.setAllowedActions(s.getAllowedActions());
+        m.setCallbackUrl(s.getCallbackUrl());
+        m.setIpWhitelist(s.getIpWhitelist());
+        m.setEnabled(s.getEnabled());
+        m.setCreatedAt(s.getCreatedAt());
+        m.setLastUsedAt(s.getLastUsedAt());
+        return m;
     }
 
     private static Map<String, Object> snapshot(ExternalSystem s) {
