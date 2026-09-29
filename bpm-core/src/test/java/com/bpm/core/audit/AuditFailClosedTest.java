@@ -152,7 +152,15 @@ class AuditFailClosedTest extends IntegrationTestBase {
 
         mockMvc.perform(post("/api/process-instances")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"processDefinitionKey\":\"" + KEY + "\",\"initiator\":\"user001\"}"))
+                        // ⚠️ 不可帶 initiator（#66）：body 帶 initiator 會在進入
+                        // 稽核之前就被明確拒絕成 400。斷言 503 就會失敗，
+                        // 而失敗訊息會指向「狀態碼不符」——把排查方向帶到
+                        // 完全無關的地方。
+                        //
+                        // 所以移除該欄位而不是改預期值：預設身分是 user001，
+                        // server 寫入的 initiator 與原本送的值相同，
+                        // 測的仍然是同一件事（稽核寫不進去 → 不得留下流程實例）。
+                        .content("{\"processDefinitionKey\":\"" + KEY + "\"}"))
                 .andExpect(status().isServiceUnavailable());
 
         assertThat(runtimeService.createProcessInstanceQuery().processDefinitionKey(KEY).count())

@@ -3,6 +3,7 @@ package com.bpm.core.controller;
 import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
+import com.bpm.core.security.CallerId;
 import com.bpm.core.model.DocumentRequest;
 import com.bpm.core.repository.DocumentRequestRepository;
 import com.bpm.core.service.OrgService;
@@ -67,16 +68,55 @@ public class DocumentController {
      * <p>現在改為：先存公文（讓 unique 約束擋下撞號並重試）→ 再啟流程 →
      * 回填 processInstanceId。若啟流程失敗，留下的是一筆<b>看得見</b>的
      * 公文（可查詢、可重試、可清理），而不是一個看不見的孤兒流程。
+     *
+     * <p><b>3. createdBy 由登入身分決定（#66）。</b>改動前它是
+     * {@code @RequestBody} 上的一個純資料欄位，卻被當成三處的權威來源：
+     * 公文編號的部門代碼、流程變數 {@code initiator}（下游用它解析主管
+     * 與補件任務的 assignee）、以及稽核的 operatorId。於是任何登入者都能
+     * 以別人的名義建立公文 —— 與 {@code POST /api/process-instances}
+     * 同一型缺陷，兩條路都能冒用。
      */
     @PostMapping
     @Transactional("primaryTransactionManager")
-    public DocumentRequest create(@RequestBody DocumentRequest req) {
+    public DocumentRequest create(@RequestBody DocumentRequest req,
+                                  @CallerId String callerId) {
+        // 與 ProcessController 同一理由：未認證就拒絕，不 fallback 到標頭。
+        // 見 CallerIdArgumentResolver 類別註解 —— 退回讀標頭會讓整套認證
+        // 變成裝飾。而這條路會寫入稽核（fail-closed 前提），所以更不能
+        // 讓稽核記到一個編造的身分。
+        if (callerId == null || callerId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
+                    "無法確認建立人身分，請先登入");
+        }
+
         // 必定新增。夾帶 id 會讓 save() 走 merge → 改寫他人公文的
         // documentNumber / title（security-audit P0-4）。
         req.setId(null);
         req.setProcessInstanceId(null);
 
+        // createdBy = 登入者。
+        //
+        // ⚠️ 明確 400 拒絕冒用，而不是「先接受再覆寫」：覆寫會讓呼叫端
+        // 以為自己指定的值生效了（與 ProcessController 的 initiator、
+        // ExternalApiController 的 initiator 同一取捨）。
+        //
+        // 為什麼是「不同才拒絕」而不是「body 有帶就拒絕」：initiator 是
+        // 一個專用 DTO 欄位，server 可以用 containsKey 判斷「有沒有送」；
+        // createdBy 是 JPA entity 上的一個欄位，同時也是回應的一部分，
+        // Jackson 反序列化後無法分辨「沒送」與「送了 null」。而送出與自己
+        // 相同的身分並不構成冒用，拒絕它只會製造無意義的破壞。
+        // server 一律在下面覆寫成 callerId，因此 body 帶的值無論如何都蓋不掉。
+        String claimed = req.getCreatedBy();
+        if (claimed != null && !claimed.isBlank() && !callerId.equals(claimed)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "createdBy 由登入身分（" + callerId + "）決定，不可指定他人。"
+                            + "請移除 body 的 createdBy 欄位或改為登入身分。");
+        }
+        req.setCreatedBy(callerId);
+
         // Generate document number: DOC-{year}-{deptCode}-{seq}
+        // ⚠️ 必須在 setCreatedBy 之後：部門代碼是從 createdBy 查出來的，
+        // 用 body 的值會讓公文編號掛在別人的部門下。
         String deptCode = orgService.getDeptId(req.getCreatedBy());
         if (deptCode == null) deptCode = "GEN";
         String prefix = "DOC-" + Year.now().getValue() + "-" + deptCode.toUpperCase();
@@ -85,7 +125,7 @@ public class DocumentController {
 
         // 流程啟動在存檔之後：失敗時不會留下孤兒流程。
         Map<String, Object> vars = new HashMap<>();
-        vars.put("initiator", saved.getCreatedBy());
+        vars.put("initiator", callerId);
         vars.put("documentTitle", saved.getTitle());
         vars.put("urgencyLevel", saved.getUrgencyLevel());
         var pi = runtimeService.startProcessInstanceByKey(
@@ -95,7 +135,8 @@ public class DocumentController {
         saved.setProcessInstanceId(pi.getProcessInstanceId());
         saved = docRepo.save(saved);
 
-        auditPublisher.publish(new AuditEvent("PROCESS_START", saved.getCreatedBy(),
+        // operatorId 用 callerId：稽核要記「誰做的」，不是「單子掛在誰名下」。
+        auditPublisher.publish(new AuditEvent("PROCESS_START", callerId,
                 pi.getProcessInstanceId(), null,
                 Map.of("documentNumber", saved.getDocumentNumber(), "title", saved.getTitle())));
         return saved;
