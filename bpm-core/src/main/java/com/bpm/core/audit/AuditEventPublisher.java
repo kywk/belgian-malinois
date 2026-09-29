@@ -88,16 +88,20 @@ public class AuditEventPublisher {
     }
 
     /**
-     * 記錄一次<b>被拒絕</b>的存取嘗試。立即寫入，不跟隨交易。
+     * 立即寫入、<b>不跟隨交易</b>、失敗時<b>不拋例外</b>。只用於以下兩種情況，
+     * 其餘一律用 {@link #publish}。
      *
-     * <p>與 {@link #publish} 分開的理由：拒絕之後呼叫端緊接著會拋例外，
-     * 交易必然回滾 —— 若也掛在 {@code beforeCommit}，這筆紀錄永遠不會寫入。
+     * <p><b>1. 被拒絕的存取嘗試</b>（附件非參與者、外部 API 認證失敗）。
+     * 拒絕之後呼叫端緊接著會拋例外，交易必然回滾 —— 若也掛在
+     * {@code beforeCommit}，這筆紀錄永遠不會寫入。失敗時不拋：操作本身已經被拒絕，
+     * fail-closed 已經成立；改拋 {@link AuditWriteException} 只會讓回應從 404／401
+     * 變成 503，洩漏「這裡原本會拒絕你」以外的資訊，而不會多擋下任何東西。
      *
-     * <p>寫入失敗時<b>不拋例外</b>：操作本身已經被拒絕，這裡是 fail-closed 已經成立
-     * 的狀態。若改拋 {@link AuditWriteException}，回應會從 404／401 變成 503，
-     * 反而向呼叫端洩漏「這裡原本會拒絕你」以外的資訊，而不會多擋下任何東西。
+     * <p><b>2. 交易 commit 之後才發現的系統異常</b>（例如
+     * {@code UnreachableTaskListener}）。業務已經落地，拋例外只會讓使用者收到
+     * 錯誤、卻無法回滾任何東西。
      */
-    public void publishDenial(AuditEvent event) {
+    public void publishDetached(AuditEvent event) {
         try {
             write(event);
         } catch (AuditWriteException e) {

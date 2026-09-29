@@ -160,7 +160,7 @@ public class AttachmentController {
         }
         if (!isParticipant(processInstanceId, userId)) {
             // 稽核拒絕：有人嘗試存取無關案件的附件，這件事本身值得留痕。
-            auditPublisher.publishDenial(new AuditEvent(OperationType.DATA_ACCESS.name(), userId,
+            auditPublisher.publishDetached(new AuditEvent(OperationType.DATA_ACCESS.name(), userId,
                     processInstanceId, null,
                     Map.of("denied", true, "reason", "not a participant")));
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);

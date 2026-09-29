@@ -50,6 +50,8 @@ public enum OperationType {
     TASK_RESUBMIT,
     TASK_RESOLVE,
     TASK_UPDATE,
+    /** 任務建立後沒有任何人看得到（系統告警，見 UnreachableTaskListener）。 */
+    TASK_UNREACHABLE,
     FORM_SUBMIT,
     FORM_UPDATE,
     BPMN_DEPLOY,

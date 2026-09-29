@@ -152,7 +152,7 @@ public class ExternalApiAuthFilter extends OncePerRequestFilter {
         // Map.of 不接受 null value：getRemoteAddr() 依 Servlet 規範可為 null，
         // 若不處理會讓 reject() 自己拋 NPE，把原本要回的 401/403 蓋成 500。
         String ip = Objects.requireNonNullElse(request.getRemoteAddr(), "unknown");
-        auditPublisher.publishDenial(new AuditEvent("EXTERNAL_API_CALL",
+        auditPublisher.publishDetached(new AuditEvent("EXTERNAL_API_CALL",
                 systemId != null ? "system:" + systemId : "unknown",
                 null, null,
                 Map.of("status", "rejected", "reason", reason,

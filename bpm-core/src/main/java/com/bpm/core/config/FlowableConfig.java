@@ -54,13 +54,14 @@ public class FlowableConfig {
     @Bean
     public EngineConfigurationConfigurer<SpringProcessEngineConfiguration> processEngineConfigurer(
             ProcessCompletedListener processCompletedListener,
+            com.bpm.core.engine.UnreachableTaskListener unreachableTaskListener,
             OrgService orgService,
             com.bpm.core.service.InitialAssigneeResolver assigneeResolver,
             BpmPermissionService permService,
             BpmQueryService bpmQueryService,
             NotifyTaskListener notifyTaskListener) {
         return config -> {
-            config.setEventListeners(List.of(processCompletedListener));
+            config.setEventListeners(List.of(processCompletedListener, unreachableTaskListener));
             config.setBeans(Map.of(
                     "orgService", orgService,
                     "permService", permService,

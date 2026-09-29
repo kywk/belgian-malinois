@@ -270,9 +270,9 @@ authority，`hasRole('ADMIN')` 不會命中 → **擁有全部權限的管理員
 1. ~~**P1-14 fail-open**：稽核寫入失敗是否該阻擋業務操作？~~ —— **2026-09-29 決策：fail-closed，已完成**。
    稽核掛在業務交易的 `beforeCommit`，失敗即回滾並回 503。寫入類 controller 方法**必須**有限定的
    `@Transactional`（見 `AuditEventPublisher` 類別註解）；新增端點時別漏。
-2. **「任務對所有人不可見」的通用防線**：`TASK_CREATED` 監聽器要硬擋還是只記錄告警？
-   硬擋會弄壞外部 API 的「先啟動再補候選群組」模式（`ExternalApiController`
-   在 `startProcessInstanceByKey` 之後才 `addCandidateGroup`）。
+2. ~~**「任務對所有人不可見」的通用防線**~~ —— **2026-09-29 決策：只告警，已完成**。
+   `engine/UnreachableTaskListener` 在交易 **commit 後**檢查（不是 TASK_CREATED 當下 ——
+   外部 API 同交易內補候選群組的模式會誤報），記 ERROR log + `TASK_UNREACHABLE` 稽核。
 3. **`getFirstAvailableUser` 全部不在時的行為**：目前退化為指派第一位並記 warn。
 4. **`AttachmentController` 要不要開 admin／auditor 旁路**：現在有伺服器端角色模型了，
    但「管理員能不能看任何案件的附件」是權責政策。
