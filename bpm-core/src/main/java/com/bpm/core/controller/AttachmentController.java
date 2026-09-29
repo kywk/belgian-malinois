@@ -1,7 +1,9 @@
 package com.bpm.core.controller;
 
 import org.springframework.transaction.annotation.Transactional;
+import com.bpm.core.security.AuthorityResolver;
 import com.bpm.core.security.CallerId;
+import org.springframework.security.core.context.SecurityContextHolder;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.dto.AuditEvent;
@@ -149,22 +151,59 @@ public class AttachmentController {
      * 這個方法先前的註解說「身分仍可自報，因此不是完整的安全邊界」，
      * 那個限制已經不存在了。
      *
-     * <p>⚠️ 仍然沒有 admin／auditor 的旁路。現在有伺服器端的角色模型了
-     * （{@code AuthorityResolver}），所以要加的話是在此處判斷
-     * {@code ROLE_ADMIN}；但「管理員能不能看任何案件的附件」是權責政策，
-     * 不是技術缺口，所以留給明確決策。
+     * <p>讀取端點（列表、下載）另有稽核旁路，見 {@link #requireReadAccess}。
+     * 上傳<b>沒有</b>旁路：稽核人員的職責是查閱，不是替案件補件。
      */
     private void requireParticipant(String processInstanceId, String userId) {
         if (userId == null || userId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
         if (!isParticipant(processInstanceId, userId)) {
-            // 稽核拒絕：有人嘗試存取無關案件的附件，這件事本身值得留痕。
-            auditPublisher.publishDetached(new AuditEvent(OperationType.DATA_ACCESS.name(), userId,
-                    processInstanceId, null,
-                    Map.of("denied", true, "reason", "not a participant")));
+            denyNonParticipant(processInstanceId, userId);
+        }
+    }
+
+    /**
+     * 讀取權限：案件參與者，<b>或</b>持有 {@code audit:log:read} 的稽核人員。
+     *
+     * <h2>稽核旁路（2026-09-29 決策：只開稽核權限、唯讀、每次留痕）</h2>
+     *
+     * <p>調查一張單時，附件往往是關鍵證據（報價單、請假證明），而調查者不會是
+     * 該案的參與者。沒有旁路的話只能到伺服器上直接取檔 —— 那條路完全不留痕，
+     * 比開一個有稽核的旁路更糟。
+     *
+     * <p>刻意<b>只認 {@code audit:log:read}，不認 {@code ROLE_ADMIN}</b>：
+     * 「能管理系統」與「能看全公司的薪資單附件」是不同的權責。
+     * 通配權限的持有者被 {@code AuthorityResolver} 轉成 {@code ROLE_ADMIN}，
+     * 不會自動取得這個 authority —— 管理員要調閱，權限中心就得明確指派。
+     *
+     * <p>每次經由旁路的存取都寫一筆 {@code DATA_ACCESS}，標記 {@code auditBypass=true}，
+     * 讓「誰以稽核身分看了哪些案件」本身可以被稽核。
+     *
+     * @return {@code true} 表示這次存取是經由稽核旁路（呼叫端必須據此留痕）
+     */
+    private boolean requireReadAccess(String processInstanceId, String userId) {
+        if (userId == null || userId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
+        if (isParticipant(processInstanceId, userId)) return false;
+        if (callerHoldsAuditRead()) return true;
+        denyNonParticipant(processInstanceId, userId);
+        return false; // 不會執行到：denyNonParticipant 一定拋例外
+    }
+
+    private static boolean callerHoldsAuditRead() {
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth != null && auth.isAuthenticated() && auth.getAuthorities().stream()
+                .anyMatch(a -> AuthorityResolver.PERM_AUDIT_READ.equals(a.getAuthority()));
+    }
+
+    private void denyNonParticipant(String processInstanceId, String userId) {
+        // 稽核拒絕：有人嘗試存取無關案件的附件，這件事本身值得留痕。
+        auditPublisher.publishDetached(new AuditEvent(OperationType.DATA_ACCESS.name(), userId,
+                processInstanceId, null,
+                Map.of("denied", true, "reason", "not a participant")));
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND);
     }
 
     private boolean isParticipant(String processInstanceId, String userId) {
@@ -253,7 +292,12 @@ public class AttachmentController {
     public List<Map<String, Object>> list(@RequestParam String processInstanceId,
                                           @CallerId
                                           String callerId) {
-        requireParticipant(processInstanceId, callerId);
+        if (requireReadAccess(processInstanceId, callerId)) {
+            // 參與者列出自己案件的附件不留痕（那是日常操作）；稽核旁路必須留痕。
+            auditPublisher.publish(new AuditEvent(OperationType.DATA_ACCESS.name(), callerId,
+                    processInstanceId, null,
+                    Map.of("action", "list_attachments", "auditBypass", true)));
+        }
         return repo.findByProcessInstanceIdOrderByUploadedAtDesc(processInstanceId)
                 .stream().map(AttachmentController::toResponse).toList();
     }
@@ -267,7 +311,7 @@ public class AttachmentController {
 
         // Flowable 的 processInstanceId 可被枚舉，而改動前這個端點只做
         // findById → 任何人都能列舉並下載全公司案件的附件。
-        requireParticipant(att.getProcessInstanceId(), callerId);
+        boolean auditBypass = requireReadAccess(att.getProcessInstanceId(), callerId);
 
         // 同樣圍堵下載路徑。filePath 來自 DB，而在此修復之前寫入的資料列
         // 可能指向 uploadDir 之外的任意路徑 —— 若不檢查，一筆被污染的
@@ -280,7 +324,8 @@ public class AttachmentController {
         // 誰下載了薪資單必須留下紀錄（改動前三個端點全無稽核）。
         auditPublisher.publish(new AuditEvent(OperationType.DATA_ACCESS.name(), callerId,
                 att.getProcessInstanceId(), att.getTaskId(),
-                Map.of("attachmentId", att.getId(), "fileName", att.getFileName())));
+                Map.of("attachmentId", att.getId(), "fileName", att.getFileName(),
+                        "auditBypass", auditBypass)));
 
         Resource resource = new FileSystemResource(stored);
         return ResponseEntity.ok()

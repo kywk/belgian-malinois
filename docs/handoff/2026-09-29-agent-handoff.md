@@ -275,8 +275,8 @@ authority，`hasRole('ADMIN')` 不會命中 → **擁有全部權限的管理員
    外部 API 同交易內補候選群組的模式會誤報），記 ERROR log + `TASK_UNREACHABLE` 稽核。
 3. ~~**`getFirstAvailableUser` 全部不在時的行為**~~ —— **2026-09-29 決策：派給第一位持有人的代理人，已完成**。
    只解一層代理；代理人未必持有該權限碼（與 `resolveEffective` 語意一致）。
-4. **`AttachmentController` 要不要開 admin／auditor 旁路**：現在有伺服器端角色模型了，
-   但「管理員能不能看任何案件的附件」是權責政策。
+4. ~~**`AttachmentController` 要不要開 admin／auditor 旁路**~~ —— **2026-09-29 決策：只開 `audit:log:read`、唯讀、每次留痕，已完成**。
+   刻意不認 `ROLE_ADMIN`（通配持有者不自動取得）；上傳無旁路；旁路存取的 DATA_ACCESS 標 `auditBypass=true`。
 
 ### 6.2 建議的下一個工作項：Stage 5
 

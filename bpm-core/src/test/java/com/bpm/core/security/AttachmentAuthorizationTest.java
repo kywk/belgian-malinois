@@ -157,6 +157,46 @@ class AttachmentAuthorizationTest extends IntegrationTestBase {
                 .contains("FORM_SUBMIT", "DATA_ACCESS");
     }
 
+    // ── 稽核旁路（2026-09-29 決策：只開 audit:log:read、唯讀、每次留痕）──
+
+    @Test
+    @DisplayName("持有 audit:log:read 的非參與者可以列出與下載，且每次都留下 auditBypass 稽核")
+    void auditorCanReadAnyCaseAndItIsRecorded() throws Exception {
+        truncateAuditLog();
+        String pid = startCase();
+        String attId = upload(pid, "user001");
+
+        // dir001 持有 audit:log:read（權限中心 fixture），且不是這張 1 天假單的參與者。
+        mockMvc.perform(get("/api/attachments").param("processInstanceId", pid)
+                        .header("X-User-Id", "dir001"))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/attachments/{id}/download", attId)
+                        .header("X-User-Id", "dir001"))
+                .andExpect(status().isOk());
+
+        java.util.List<String> details = new java.util.ArrayList<>();
+        withAuditConnection(c -> {
+            try (var ps = c.prepareStatement("SELECT detail FROM bpm_audit_log "
+                    + "WHERE operator_id = 'dir001' AND operation_type = 'DATA_ACCESS' ORDER BY id")) {
+                var rs = ps.executeQuery();
+                while (rs.next()) details.add(rs.getString(1));
+            }
+        });
+        assertThat(details).as("列表與下載各一筆，都必須標記為稽核旁路").hasSize(2)
+                .allMatch(d -> d.contains("\"auditBypass\":true"));
+    }
+
+    @Test
+    @DisplayName("稽核旁路是唯讀的：持有 audit:log:read 也不能替別人的案件上傳附件")
+    void auditorCannotUpload() throws Exception {
+        String pid = startCase();
+        mockMvc.perform(multipart("/api/attachments")
+                        .file(new MockMultipartFile("file", "x.pdf", "application/pdf", "X".getBytes()))
+                        .param("processInstanceId", pid)
+                        .header("X-User-Id", "dir001"))
+                .andExpect(status().isNotFound());
+    }
+
     private static java.util.List<String> auditOps() {
         java.util.List<String> out = new java.util.ArrayList<>();
         withAuditConnection(c -> {
