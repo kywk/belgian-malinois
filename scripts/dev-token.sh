@@ -16,6 +16,29 @@
 #   ./scripts/dev-token.sh admin001 admin  # 指定身分與 roles claim
 #
 # 取得後：curl -H "Authorization: Bearer $(./scripts/dev-token.sh admin001)" ...
+#
+# ── dev 帳號與權限碼（MockPermController 是事實來源）───────────────
+#
+#   user001～user005  什麼權限都沒有      → 一般員工（預設身分）
+#   mgr001            bpm:form:design    → 部門主管，可設計表單（非管理員）
+#   mgr002            （無額外權限）
+#   dir001            audit:log:read     → 稽核職能
+#   admin001          *（通配）→ ROLE_ADMIN
+#
+# ⚠️ **不要用 `admin001 admin` 讀稽核。**
+# `/api/audit-logs/**` 只接受 audit:log:read，刻意不接受 ROLE_ADMIN ——
+# 稽核紀錄含全公司薪資與簽核意見，而 ProcessAccessGuard 早已拒絕
+# ROLE_ADMIN 讀案件流程變數；放行等於留下一條側門。
+# 正確用法（dir001 由權限中心持有 audit:log:read）：
+#
+#   curl "http://localhost:8080/api/audit-logs?size=5" \
+#     -H "Authorization: Bearer $(./scripts/dev-token.sh dir001)"
+#
+# ⚠️ 第二個參數（roles claim）會**完全取代**權限中心查詢
+# （SecurityConfig.authoritiesFromJwt：claim 有角色就不回頭查）。
+# 所以帶了 roles claim 就等於宣告「這個人的權限就是這些」——
+# `dev-token.sh dir001 admin` 會讓 dir001 變成管理員，且**不會**有
+# audit:log:read。要用權限中心的權限碼，就**不要**帶第二個參數。
 set -euo pipefail
 
 SUBJECT="${1:-user001}"

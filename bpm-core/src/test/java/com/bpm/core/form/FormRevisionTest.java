@@ -40,6 +40,20 @@ class FormRevisionTest extends IntegrationTestBase {
     @Autowired
     private FormDefinitionRepository defRepo;
 
+    /**
+     * 持有 {@code bpm:form:design} 的身分（MockPermController 的 dev fixture）。
+     *
+     * <p>⚠️ 2026-09-29 起 {@code POST/PUT/DELETE /api/forms/**} 需要這個權限碼
+     * （或 {@code ROLE_ADMIN}），所以這組測試<b>必須</b>宣告身分 ——
+     * {@code TestGatewayMockMvcCustomizer} 的預設身分是 user001，刻意選了一個
+     * 沒有任何權限的人。改動前這裡用預設身分就能改表單 schema。
+     *
+     * <p>刻意用 mgr001 而不是 admin001：這組測試因此走的是
+     * 「依權限中心指派的權限碼」那條路徑，而不是 ROLE_ADMIN 旁路 ——
+     * 兩條路徑都必須有人走，但不需要在每一個測試都重複走。
+     */
+    private static final String DESIGNER = "mgr001";
+
     private String uniqueKey() {
         return "rev-" + UUID.randomUUID().toString().substring(0, 8);
     }
@@ -69,7 +83,7 @@ class FormRevisionTest extends IntegrationTestBase {
 
         // 建立下一版 draft
         var res = mockMvc.perform(post("/api/forms/{formKey}/revisions", key)
-                        .header("X-User-Id", "admin001"))
+                        .header("X-User-Id", DESIGNER))
                 .andExpect(status().isOk())
                 .andReturn();
         String body = res.getResponse().getContentAsString();
@@ -79,13 +93,15 @@ class FormRevisionTest extends IntegrationTestBase {
 
         // 新的 schemaJson 必須放得進去 —— 這正是改動前做不到的事
         mockMvc.perform(put("/api/forms/{id}", draftId)
+                        .header("X-User-Id", DESIGNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"改版後的表單\","
                                 + "\"schemaJson\":\"{\\\"fields\\\":[{\\\"id\\\":\\\"newField\\\"}]}\"}"))
                 .andExpect(status().isOk());
 
         // 發布
-        mockMvc.perform(post("/api/forms/{id}/publish", draftId))
+        mockMvc.perform(post("/api/forms/{id}/publish", draftId)
+                        .header("X-User-Id", DESIGNER))
                 .andExpect(status().isOk());
 
         var all = versionsOf(key);
@@ -103,6 +119,7 @@ class FormRevisionTest extends IntegrationTestBase {
     void publishDoesNotDuplicate() throws Exception {
         String key = uniqueKey();
         var res = mockMvc.perform(post("/api/forms")
+                        .header("X-User-Id", DESIGNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"formKey\":\"" + key + "\",\"name\":\"新表單\","
                                 + "\"schemaJson\":\"{\\\"fields\\\":[]}\"}"))
@@ -110,7 +127,8 @@ class FormRevisionTest extends IntegrationTestBase {
         String id = res.getResponse().getContentAsString()
                 .replaceAll(".*\"id\":\"([^\"]*)\".*", "$1");
 
-        mockMvc.perform(post("/api/forms/{id}/publish", id)).andExpect(status().isOk());
+        mockMvc.perform(post("/api/forms/{id}/publish", id)
+                .header("X-User-Id", DESIGNER)).andExpect(status().isOk());
 
         assertThat(versionsOf(key))
                 .as("一次 publish 必須只留下一筆 published，"
@@ -127,13 +145,15 @@ class FormRevisionTest extends IntegrationTestBase {
         FormDefinition published = publishedForm(key, 1);
 
         // 對 published 重複呼叫 → 改動前版本號會無限膨脹
-        mockMvc.perform(post("/api/forms/{id}/publish", published.getId()))
+        mockMvc.perform(post("/api/forms/{id}/publish", published.getId())
+                        .header("X-User-Id", DESIGNER))
                 .andExpect(status().isBadRequest());
 
         // archived 不得被 publish 復活
         published.setStatus("archived");
         defRepo.save(published);
-        mockMvc.perform(post("/api/forms/{id}/publish", published.getId()))
+        mockMvc.perform(post("/api/forms/{id}/publish", published.getId())
+                        .header("X-User-Id", DESIGNER))
                 .andExpect(status().isBadRequest());
         assertThat(defRepo.findById(published.getId()).orElseThrow().getStatus())
                 .as("archived 不得被 publish 復活").isEqualTo("archived");
@@ -148,6 +168,7 @@ class FormRevisionTest extends IntegrationTestBase {
         publishedForm(key, 1);
 
         mockMvc.perform(post("/api/forms")
+                        .header("X-User-Id", DESIGNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"formKey\":\"" + key + "\",\"name\":\"重複\","
                                 + "\"schemaJson\":\"{}\"}"))
@@ -163,11 +184,11 @@ class FormRevisionTest extends IntegrationTestBase {
         publishedForm(key, 1);
 
         mockMvc.perform(post("/api/forms/{formKey}/revisions", key)
-                        .header("X-User-Id", "admin001"))
+                        .header("X-User-Id", DESIGNER))
                 .andExpect(status().isOk());
         // 第二次應被擋下，否則會出現兩份互相覆蓋的 draft
         mockMvc.perform(post("/api/forms/{formKey}/revisions", key)
-                        .header("X-User-Id", "admin001"))
+                        .header("X-User-Id", DESIGNER))
                 .andExpect(status().isConflict());
 
         assertThat(versionsOf(key)).hasSize(2);
@@ -177,7 +198,7 @@ class FormRevisionTest extends IntegrationTestBase {
     @DisplayName("對不存在的 formKey 建立改版必須回 404")
     void revisionOfUnknownKeyIs404() throws Exception {
         mockMvc.perform(post("/api/forms/{formKey}/revisions", "no-such-form")
-                        .header("X-User-Id", "admin001"))
+                        .header("X-User-Id", DESIGNER))
                 .andExpect(status().isNotFound());
     }
 }

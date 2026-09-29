@@ -205,7 +205,14 @@ class AuditFailClosedTest extends IntegrationTestBase {
     @DisplayName("查詢稽核（唯讀 DATA_ACCESS）時稽核失敗 → 503，不回傳資料")
     void readAuditFailureWithholdsData() throws Exception {
         auditAlwaysFails();
-        mockMvc.perform(get("/api/audit-logs/integrity-check").header("X-User-Id", "admin001")
+        // ⚠️ 身分用 dir001 而不是 admin001：2026-09-29 起 /api/audit-logs/**
+        // 只接受 audit:log:read，刻意不接受 ROLE_ADMIN（稽核紀錄含全公司薪資，
+        // 而 ProcessAccessGuard 早已拒絕 ROLE_ADMIN 讀案件流程變數）。
+        // 用 admin001 會在授權層就被擋下（403），於是這個測試驗的
+        // 就不再是「稽核寫失敗時不洩漏資料」，而變成「管理員讀不到稽核」——
+        // 而且 503 與 403 都在這個方法裡，斷言會以為 fail-closed 機制有效。
+        // 授權那一層由 AuditReadAuthorityTest 驗。
+        mockMvc.perform(get("/api/audit-logs/integrity-check").header("X-User-Id", "dir001")
                         .param("startDate", "2026-01-01T00:00:00Z").param("endDate", "2027-01-01T00:00:00Z"))
                 .andExpect(status().isServiceUnavailable());
     }
