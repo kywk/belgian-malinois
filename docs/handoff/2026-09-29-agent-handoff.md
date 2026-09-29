@@ -11,11 +11,12 @@
    `/Users/kywk/kywk/nanshan/sandbox/greyhound`（那裡只有三個空目錄、沒有 git repo）。
    每個 Bash 呼叫都要自己 `cd` 過去 —— **shell 的 cwd 在每次呼叫之間會重置**。
 
-2. **不要動使用者的 4 個未追蹤檔案**（他明確交代過）：
-   `backend-development-backlog.md`、`docs/backend-development-backlog.md`、
-   `docs/backend-completed-items.md`、`docs/rbac-enterprise-backlog.md`。
-   `git status` 一直會顯示它們，那是正常的，**不要 `git add -A` 把它們掃進去**。
-   本次所有 commit 都用明確路徑 staging。
+2. ~~**不要動使用者的 4 個未追蹤檔案**~~ —— **2026-09-29 已依使用者指示處理**：
+   `docs/backend-development-backlog.md`、`docs/backend-completed-items.md`、
+   `docs/rbac-enterprise-backlog.md` 已納入版控；根目錄的 `backend-development-backlog.md`
+   與 `docs/` 那份位元完全相同，已刪除。三份內容停在 2026-06-08，**未依本分支進度更新**
+   （例如仍把 form-service 列為獨立服務）。修改前先問使用者。
+   仍然建議用明確路徑 staging，不要 `git add -A`。
 
 3. **這個 repo 出現過 3 次 git index 異常**（`0dd8c46`、`64aef4c`，以及 base 上的
    `f12a8c2`）：commit 內容把先前 commit 的檔案「還原」掉了，工作樹始終正確。
@@ -320,8 +321,8 @@ Boot 3.5 已於 2026-06-30 EOL，之後沒有 OSS CVE 修補。計畫在
 - `docs/README-testing.md` —— dev 環境各服務的位址與手動驗證指令
 - `CLAUDE.md` —— 專案指引與已知技術債清單
 
-⚠️ `docs/backend-*.md` 與 `docs/rbac-enterprise-backlog.md` 是**使用者的未追蹤檔案**，
-可以讀但不要改（見第 0 節）。
+⚠️ `docs/backend-*.md` 與 `docs/rbac-enterprise-backlog.md` 是使用者的規劃文件（2026-09-29 納入版控），
+內容停在 2026-06-08，修改前先問使用者（見第 0 節）。
 
 ---
 
@@ -348,4 +349,4 @@ Boot 3.5 已於 2026-06-30 EOL，之後沒有 OSS CVE 修補。計畫在
 branch 有 57 commits，後端 262 + 前端 59 測試全綠（且後端是在 docker 容器
 **停止**的狀態下跑的），`acceptance-test.sh` PASS 7 / FAIL 0，
 stack 是 Boot 3.5.16 + Flowable 7.2.0 單一後端模組，平台層認證已啟用。
-工作樹只有使用者的 4 個未追蹤文件。**尚未合併到 main。**
+工作樹乾淨（使用者的規劃文件已於 2026-09-29 納入版控）。**尚未合併到 main。**
