@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
@@ -26,6 +27,7 @@ public class CountersignController {
     }
 
     @PostMapping("/{taskId}")
+    @Transactional("primaryTransactionManager")
     public Map<String, Object> createSubtask(@PathVariable String taskId,
                                               @RequestBody Map<String, String> req) {
         Task parent = taskService.createTaskQuery().taskId(taskId).singleResult();
@@ -101,6 +103,7 @@ public class CountersignController {
      * </ol>
      */
     @PutMapping("/{taskId}/{subtaskId}/complete")
+    @Transactional("primaryTransactionManager")
     public Map<String, Object> completeSubtask(@PathVariable String taskId,
                                                 @PathVariable String subtaskId,
                                                 @RequestBody(required = false) Map<String, String> req,

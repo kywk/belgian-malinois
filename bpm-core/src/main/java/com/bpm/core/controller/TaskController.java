@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
@@ -148,6 +149,7 @@ public class TaskController {
      * 不再是「有 assignee 就改派」—— 後者讓 typo 把核准變成改派且回報成功。
      */
     @PutMapping("/{id}")
+    @Transactional("primaryTransactionManager")
     public Map<String, Object> updateTask(@PathVariable String id,
                                           @RequestBody TaskActionRequest req,
                                           @CallerId
@@ -261,6 +263,7 @@ public class TaskController {
     }
 
     @PostMapping("/{id}/comments")
+    @Transactional("primaryTransactionManager")
     public Map<String, String> addComment(@PathVariable String id,
                                           @RequestBody CommentRequest req,
                                           @CallerId

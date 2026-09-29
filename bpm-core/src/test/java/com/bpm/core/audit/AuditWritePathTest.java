@@ -28,13 +28,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 但實際情況更基本：<b>根本沒有資料</b>。稽核報告不是不可信，是空的。
  *
  * <p><b>為什麼分兩層測。</b>寫入路徑是
- * {@code Controller → AuditEventPublisher.publish()（@Async）→ AuditLogService.append() → repository.save()}。
+ * {@code Controller → AuditEventPublisher.publish() → AuditLogService.append() → repository.save()}。
+ * （publish() 在 2026-09-29 前是 @Async；現在是同步 fail-closed，見 {@code AuditFailClosedTest}。）
  * 零筆資料可能出在任一層，而兩層的修法完全不同：
  * <ul>
- *   <li>{@link #appendPersistsDirectly()} 直接呼叫 {@code append()} —— 繞過 @Async。
- *       過了代表持久化層正常，問題在非同步那一層。</li>
- *   <li>{@link #publishPersistsAsynchronously()} 走 {@code publish()} —— 含 @Async。
- *       只有這個失敗，就證明是 @Async 的投遞或執行器有問題。</li>
+ *   <li>{@link #appendPersistsDirectly()} 直接呼叫 {@code append()} —— 繞過 publisher。
+ *       過了代表持久化層正常，問題在 publisher 那一層。</li>
+ *   <li>{@link #publishPersists()} 走 {@code publish()}。
+ *       只有這個失敗，就證明是 publisher 的投遞有問題。</li>
  * </ul>
  * 兩者一起看才能定位，缺一個就只能猜。
  */
@@ -103,24 +104,15 @@ class AuditWritePathTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("publish() 應非同步寫入稽核 DB（含 @Async，隔離非同步層）")
-    void publishPersistsAsynchronously() throws Exception {
+    @DisplayName("publish() 在交易外呼叫時應立即寫入稽核 DB")
+    void publishPersists() {
         auditEventPublisher.publish(new AuditEvent(
-                "TASK_APPROVE", "mgr001", "proc-async-1", "task-async-1",
+                "TASK_APPROVE", "mgr001", "proc-sync-1", "task-sync-1",
                 Map.of("approved", true)));
 
-        // @Async 在別的執行緒上跑，必須等；但不能無限等。
-        // 5 秒對一次 INSERT 而言極寬鬆 —— 逾時就是真的沒寫。
-        int rows = 0;
-        for (int i = 0; i < 50; i++) {
-            rows = countAuditRows();
-            if (rows > 0) break;
-            Thread.sleep(100);
-        }
-
-        assertThat(rows)
-                .as("publish() 經 @Async 後仍必須落地；若為 0 而 append() 測試是綠的，"
-                        + "問題就在 @Async 的執行器（例如解析到 Flowable 的 TaskExecutor 而非應用的）")
+        // 同步寫入：publish() 回傳時資料就必須已在 DB，不需要等待。
+        assertThat(countAuditRows())
+                .as("publish() 回傳後必須已落地；若為 0 而 append() 測試是綠的，問題就在 publisher")
                 .isEqualTo(1);
     }
 

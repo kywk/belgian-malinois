@@ -1,14 +1,11 @@
 package com.bpm.core.audit.service;
 
 import com.bpm.core.audit.consumer.AuditEventConsumer;
-import com.bpm.core.config.AuditAsyncConfig;
 import com.bpm.core.support.IntegrationTestBase;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.sql.Statement;
 import java.util.HashMap;
@@ -24,7 +21,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>{@code @Async} 未指定 executor → 用 Boot 預設的
  *       {@code applicationTaskExecutor}，佇列容量 {@code Integer.MAX_VALUE}
  *       → 稽核 DB 變慢時事件無上限堆在 heap，重啟／OOM 全部遺失，
- *       而業務操作早已回 200。</li>
+ *       而業務操作早已回 200。
+ *       （2026-09-29 起稽核改為同步 fail-closed，此項已不存在，
+ *       見 {@code AuditFailClosedTest}。）</li>
  *   <li>{@code dlq.audit} / {@code dlq.bpm} 沒有任何 consumer、沒有告警
  *       → 沉進死信的稽核永遠沒人知道。</li>
  *   <li>{@code AuditEventConsumer} 無幂等鍵 → broker 重投會 append 兩次，
@@ -39,10 +38,6 @@ class AuditDeliveryTest extends IntegrationTestBase {
 
     @Autowired
     private AuditLogService auditLogService;
-
-    @Autowired
-    @Qualifier(AuditAsyncConfig.AUDIT_EXECUTOR)
-    private ThreadPoolTaskExecutor auditExecutor;
 
     @BeforeEach
     void clean() {
@@ -70,18 +65,6 @@ class AuditDeliveryTest extends IntegrationTestBase {
             }
         });
         return n[0];
-    }
-
-    @Test
-    @DisplayName("稽核執行器的佇列必須有界（預設的 Integer.MAX_VALUE 會靜默吃掉事件）")
-    void auditExecutorQueueIsBounded() {
-        // 有界 + CallerRunsPolicy = 背壓；無界 = 堆在 heap 直到重啟全部遺失。
-        assertThat(auditExecutor.getThreadPoolExecutor().getQueue().remainingCapacity())
-                .as("佇列容量必須有界，且遠小於 Integer.MAX_VALUE")
-                .isLessThan(100_000);
-        assertThat(auditExecutor.getThreadPoolExecutor().getRejectedExecutionHandler())
-                .as("佇列滿時必須讓呼叫端自己跑（背壓），而不是丟棄或拋例外被吞掉")
-                .isInstanceOf(java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy.class);
     }
 
     @Test

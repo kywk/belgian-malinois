@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.ConfigChangeAuditor;
 import com.bpm.core.model.NotifyConfig;
@@ -88,6 +89,7 @@ public class NotifyAdminController {
 
     // Templates
     @PostMapping("/notify-templates")
+    @Transactional("primaryTransactionManager")
     public NotifyTemplate createTemplate(@RequestBody NotifyTemplate t,
                                          @CallerId String operatorId) {
         // 必定新增。夾帶 id 的話 save() 會走 merge → 覆寫既有模板
@@ -107,6 +109,7 @@ public class NotifyAdminController {
     }
 
     @PutMapping("/notify-templates/{id}")
+    @Transactional("primaryTransactionManager")
     public NotifyTemplate updateTemplate(@PathVariable String id, @RequestBody NotifyTemplate t,
                                          @CallerId String operatorId) {
         NotifyTemplate existing = templateRepo.findById(id)
@@ -141,6 +144,7 @@ public class NotifyAdminController {
      * 呼叫端以為刪掉了，而實際上什麼都沒發生。
      */
     @DeleteMapping("/notify-templates/{id}")
+    @Transactional("primaryTransactionManager")
     public void deleteTemplate(@PathVariable String id, @CallerId String operatorId) {
         NotifyTemplate existing = templateRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
@@ -160,6 +164,7 @@ public class NotifyAdminController {
 
     // Configs
     @PostMapping("/notify-configs")
+    @Transactional("primaryTransactionManager")
     public NotifyConfig createConfig(@RequestBody NotifyConfig c,
                                      @CallerId String operatorId) {
         c.setId(null);
@@ -193,6 +198,7 @@ public class NotifyAdminController {
     }
 
     @PutMapping("/notify-configs/{id}")
+    @Transactional("primaryTransactionManager")
     public NotifyConfig updateConfig(@PathVariable String id, @RequestBody NotifyConfig c,
                                      @CallerId String operatorId) {
         NotifyConfig existing = configRepo.findById(id)
@@ -213,6 +219,7 @@ public class NotifyAdminController {
     }
 
     @DeleteMapping("/notify-configs/{id}")
+    @Transactional("primaryTransactionManager")
     public void deleteConfig(@PathVariable String id, @CallerId String operatorId) {
         // 同 deleteTemplate：對不存在的 id 靜默 no-op 會讓呼叫端以為刪掉了。
         NotifyConfig existing = configRepo.findById(id)

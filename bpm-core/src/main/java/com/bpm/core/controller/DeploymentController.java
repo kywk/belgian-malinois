@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
@@ -80,6 +81,7 @@ public class DeploymentController {
     }
 
     @PostMapping
+    @Transactional("primaryTransactionManager")
     public Object deploy(@RequestParam("file") MultipartFile file,
                          @RequestParam(defaultValue = "") String name,
                          @CallerId

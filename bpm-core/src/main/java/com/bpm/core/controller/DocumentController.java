@@ -1,12 +1,17 @@
 package com.bpm.core.controller;
 
+import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.model.DocumentRequest;
 import com.bpm.core.repository.DocumentRequestRepository;
 import com.bpm.core.service.OrgService;
 import org.flowable.engine.RuntimeService;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -24,13 +29,19 @@ public class DocumentController {
     private final RuntimeService runtimeService;
     private final OrgService orgService;
     private final AuditEventPublisher auditPublisher;
+    private final TransactionTemplate numberingTx;
 
     public DocumentController(DocumentRequestRepository docRepo, RuntimeService runtimeService,
-                              OrgService orgService, AuditEventPublisher auditPublisher) {
+                              OrgService orgService, AuditEventPublisher auditPublisher,
+                              @Qualifier("primaryTransactionManager")
+                              PlatformTransactionManager primaryTransactionManager) {
         this.docRepo = docRepo;
         this.runtimeService = runtimeService;
         this.orgService = orgService;
         this.auditPublisher = auditPublisher;
+        // 見 saveWithUniqueNumber：每次取號嘗試必須是獨立交易。
+        this.numberingTx = new TransactionTemplate(primaryTransactionManager);
+        this.numberingTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /** 撞號時的重試次數。併發兩三個請求即可用完一次，5 次已足夠寬裕。 */
@@ -58,6 +69,7 @@ public class DocumentController {
      * 公文（可查詢、可重試、可清理），而不是一個看不見的孤兒流程。
      */
     @PostMapping
+    @Transactional("primaryTransactionManager")
     public DocumentRequest create(@RequestBody DocumentRequest req) {
         // 必定新增。夾帶 id 會讓 save() 走 merge → 改寫他人公文的
         // documentNumber / title（security-audit P0-4）。
@@ -103,7 +115,17 @@ public class DocumentController {
             int seq = docRepo.maxSequenceForPrefix(prefix) + 1 + attempt;
             req.setDocumentNumber(prefix + "-" + String.format("%03d", seq));
             try {
-                return docRepo.saveAndFlush(req);
+                // ⚠️ 每次嘗試必須是獨立交易（REQUIRES_NEW）。
+                //
+                // create() 有 @Transactional（稽核 fail-closed，P1-14）。若直接在外層交易
+                // 裡 saveAndFlush，撞號的約束違規會把外層交易標成 rollback-only、
+                // Hibernate session 也不再可用 —— 重試永遠不會成功，commit 時還會變成
+                // UnexpectedRollbackException。
+                //
+                // 代價：公文列在流程啟動前就已 commit。流程啟動或稽核失敗時留下一筆
+                // processInstanceId 為空的公文 —— 這正是上面 create() 註解所說
+                // 「看得見、可清理」的那種失敗狀態，與改動前一致。
+                return numberingTx.execute(status -> docRepo.saveAndFlush(req));
             } catch (DataIntegrityViolationException e) {
                 // 幾乎必然是 documentNumber 的 unique 約束（另一個請求先寫入了同號）。
                 // 重算下一號再試；flush 是必要的 —— 不 flush 的話違規會延後到

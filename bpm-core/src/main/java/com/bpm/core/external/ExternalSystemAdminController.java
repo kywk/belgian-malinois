@@ -1,5 +1,6 @@
 package com.bpm.core.external;
 
+import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.audit.AuditEventPublisher;
@@ -60,6 +61,7 @@ public class ExternalSystemAdminController {
     }
 
     @PostMapping
+    @Transactional("primaryTransactionManager")
     public Map<String, Object> create(@RequestBody ExternalSystem sys,
                                       @CallerId
                                       String operatorId) {
@@ -107,6 +109,7 @@ public class ExternalSystemAdminController {
     }
 
     @PutMapping("/{systemId}")
+    @Transactional("primaryTransactionManager")
     public ExternalSystem update(@PathVariable String systemId,
                                  @RequestBody ExternalSystem req,
                                  @CallerId
@@ -134,6 +137,7 @@ public class ExternalSystemAdminController {
     }
 
     @DeleteMapping("/{systemId}")
+    @Transactional("primaryTransactionManager")
     public Map<String, String> disable(@PathVariable String systemId,
                                        @CallerId
                                        String operatorId) {
@@ -149,6 +153,7 @@ public class ExternalSystemAdminController {
     }
 
     @PostMapping("/{systemId}/rotate-key")
+    @Transactional("primaryTransactionManager")
     public Map<String, String> rotateKey(@PathVariable String systemId,
                                          @CallerId
                                          String operatorId) {

@@ -1,5 +1,6 @@
 package com.bpm.core.form.controller;
 
+import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
@@ -24,6 +25,7 @@ public class FormDefinitionController {
     }
 
     @PostMapping
+    @Transactional("formTransactionManager")
     public FormDefinition create(@RequestBody FormDefinition def,
                                  @CallerId
                                  String userId) {
@@ -39,6 +41,7 @@ public class FormDefinitionController {
      * 透過 API 完全不可修改。
      */
     @PostMapping("/{formKey}/revisions")
+    @Transactional("formTransactionManager")
     public FormDefinition createRevision(@PathVariable String formKey,
                                          @CallerId
                                          String userId) {
@@ -60,6 +63,7 @@ public class FormDefinitionController {
     }
 
     @PutMapping("/{id}")
+    @Transactional("formTransactionManager")
     public FormDefinition update(@PathVariable String id, @RequestBody FormDefinition def,
                                  @CallerId
                                  String userId) {
@@ -69,6 +73,7 @@ public class FormDefinitionController {
     }
 
     @PostMapping("/{id}/publish")
+    @Transactional("formTransactionManager")
     public FormDefinition publish(@PathVariable String id,
                                   @CallerId
                                   String userId) {
@@ -78,6 +83,7 @@ public class FormDefinitionController {
     }
 
     @PostMapping("/{id}/archive")
+    @Transactional("formTransactionManager")
     public FormDefinition archive(@PathVariable String id,
                                   @CallerId
                                   String userId) {
@@ -87,6 +93,7 @@ public class FormDefinitionController {
     }
 
     @DeleteMapping("/{id}")
+    @Transactional("formTransactionManager")
     public Map<String, String> delete(@PathVariable String id,
                                       @CallerId
                                       String userId) {

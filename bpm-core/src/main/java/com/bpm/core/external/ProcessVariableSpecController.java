@@ -28,7 +28,7 @@ public class ProcessVariableSpecController {
 
     // Admin API
     @PostMapping("/api/admin/process-definitions/{key}/variable-spec")
-    @Transactional
+    @Transactional("primaryTransactionManager")
     public List<ProcessVariableSpec> batchSave(@PathVariable String key,
                                                 @RequestBody List<ProcessVariableSpec> specs,
                                                 @CallerId String operatorId) {
@@ -60,6 +60,7 @@ public class ProcessVariableSpecController {
     }
 
     @PutMapping("/api/admin/process-definitions/{key}/variable-spec/{id}")
+    @Transactional("primaryTransactionManager")
     public ProcessVariableSpec update(@PathVariable String key, @PathVariable String id,
                                        @RequestBody ProcessVariableSpec spec,
                                        @CallerId String operatorId) {

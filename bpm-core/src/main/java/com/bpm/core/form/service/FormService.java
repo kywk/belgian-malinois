@@ -32,7 +32,7 @@ public class FormService {
      * 結果是撞 {@code (formKey, version)} 唯一約束 → 500，
      * 而使用者得到的訊息完全看不出該怎麼做（security-audit P1-12）。
      */
-    @Transactional
+    @Transactional("formTransactionManager")
     public FormDefinition create(FormDefinition def) {
         // 第二層防線。entity 的 id 已標 READ_ONLY（Jackson 不會反序列化它），
         // 但 create 的語意就是「必定新增」，因此在此顯式歸零 ——
@@ -68,7 +68,7 @@ public class FormService {
      * <p>同一個 formKey <b>同時只允許一份 draft</b>：允許多份會出現兩個編輯者
      * 各自 publish、互相覆蓋版本號的情況，而且 UI 無法判斷哪一份才是「當前草稿」。
      */
-    @Transactional
+    @Transactional("formTransactionManager")
     public FormDefinition createNextDraft(String formKey, String createdBy) {
         if (!defRepo.existsByFormKey(formKey)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
@@ -116,12 +116,12 @@ public class FormService {
                 "版本號連續撞號，請重試");
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(value = "formTransactionManager", readOnly = true)
     public Page<FormDefinition> list(Pageable pageable) {
         return defRepo.findByStatusNotOrderByUpdatedAtDesc("archived", pageable);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(value = "formTransactionManager", readOnly = true)
     public FormDefinition getSchema(String formKey, Integer version) {
         if (version != null) {
             return defRepo.findByFormKeyAndVersion(formKey, version)
@@ -131,7 +131,7 @@ public class FormService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }
 
-    @Transactional
+    @Transactional("formTransactionManager")
     public FormDefinition update(String id, FormDefinition updated) {
         FormDefinition existing = defRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
@@ -161,7 +161,7 @@ public class FormService {
      * 就已經配好（見 {@link #createNextDraft}），發布只是狀態轉換，
      * 因此上述三個問題同時消失。
      */
-    @Transactional
+    @Transactional("formTransactionManager")
     public FormDefinition publish(String id) {
         FormDefinition existing = defRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
@@ -175,7 +175,7 @@ public class FormService {
         return defRepo.save(existing);
     }
 
-    @Transactional
+    @Transactional("formTransactionManager")
     public FormDefinition archive(String id) {
         FormDefinition existing = defRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
@@ -188,13 +188,13 @@ public class FormService {
     }
 
     /** 依 id 取得（刪除前要記錄它的內容，因此需要這個查詢）。 */
-    @Transactional(readOnly = true)
+    @Transactional(value = "formTransactionManager", readOnly = true)
     public FormDefinition getById(String id) {
         return defRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }
 
-    @Transactional
+    @Transactional("formTransactionManager")
     public void delete(String id) {
         FormDefinition existing = defRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
@@ -206,7 +206,7 @@ public class FormService {
     }
 
     // FormData operations
-    @Transactional
+    @Transactional("formTransactionManager")
     public FormData submitData(FormData data) {
         // 同 create()：送出表單資料必定是新增，不可因 body 夾帶 id
         // 而變成覆寫他人已送出的資料（submittedAt 不可更新 → 篡改無跡）。
@@ -214,12 +214,12 @@ public class FormService {
         return dataRepo.save(data);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(value = "formTransactionManager", readOnly = true)
     public List<FormData> getDataByProcess(String processInstanceId) {
         return dataRepo.findByProcessInstanceIdOrderBySubmittedAtDesc(processInstanceId);
     }
 
-    @Transactional
+    @Transactional("formTransactionManager")
     public FormData updateData(String id, FormData updated) {
         FormData existing = dataRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));

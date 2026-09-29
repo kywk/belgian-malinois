@@ -1,5 +1,6 @@
 package com.bpm.core.form.controller;
 
+import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.form.model.FormData;
@@ -22,6 +23,7 @@ public class FormDataController {
     }
 
     @PostMapping
+    @Transactional("formTransactionManager")
     public FormData submit(@RequestBody FormData data) {
         FormData saved = formService.submitData(data);
         auditPublisher.publish(new AuditEvent("FORM_SUBMIT", data.getSubmittedBy(), data.getProcessInstanceId(),
@@ -35,6 +37,7 @@ public class FormDataController {
     }
 
     @PutMapping("/{id}")
+    @Transactional("formTransactionManager")
     public FormData update(@PathVariable String id, @RequestBody FormData data) {
         FormData saved = formService.updateData(id, data);
         auditPublisher.publish(new AuditEvent("FORM_UPDATE", data.getSubmittedBy(), saved.getProcessInstanceId(),

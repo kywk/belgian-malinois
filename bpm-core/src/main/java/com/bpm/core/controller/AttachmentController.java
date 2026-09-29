@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.audit.model.OperationType;
@@ -65,6 +66,7 @@ public class AttachmentController {
     }
 
     @PostMapping
+    @Transactional("primaryTransactionManager")
     public Map<String, Object> upload(@RequestParam("file") MultipartFile file,
                                       @RequestParam String processInstanceId,
                                       @RequestParam(required = false) String taskId,
@@ -158,7 +160,7 @@ public class AttachmentController {
         }
         if (!isParticipant(processInstanceId, userId)) {
             // 稽核拒絕：有人嘗試存取無關案件的附件，這件事本身值得留痕。
-            auditPublisher.publish(new AuditEvent(OperationType.DATA_ACCESS.name(), userId,
+            auditPublisher.publishDenial(new AuditEvent(OperationType.DATA_ACCESS.name(), userId,
                     processInstanceId, null,
                     Map.of("denied", true, "reason", "not a participant")));
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
@@ -182,12 +184,18 @@ public class AttachmentController {
     }
 
     private String initiatorOf(String processInstanceId) {
-        try {
+        // 先確認實例仍在執行，而不是呼叫 getVariable 再 catch 例外。
+        //
+        // upload() 現在有 @Transactional（稽核 fail-closed，P1-14）。Flowable 命令在
+        // 外層交易中拋例外時，會把整個外層交易標成 rollback-only —— 就算這裡 catch
+        // 住了，commit 時仍會變成 UnexpectedRollbackException。已結案案件的附件上傳
+        // 因此會全部失敗。
+        if (runtimeService.createProcessInstanceQuery()
+                .processInstanceId(processInstanceId).singleResult() != null) {
             Object v = runtimeService.getVariable(processInstanceId, "initiator");
             if (v != null) return v.toString();
-        } catch (Exception ignored) {
-            // 已結案的實例在 runtimeService 查不到，改看歷史變數
         }
+        // 已結案的實例在 runtimeService 查不到，改看歷史變數
         var hv = historyService.createHistoricVariableInstanceQuery()
                 .processInstanceId(processInstanceId).variableName("initiator").list();
         return hv.isEmpty() || hv.get(0).getValue() == null

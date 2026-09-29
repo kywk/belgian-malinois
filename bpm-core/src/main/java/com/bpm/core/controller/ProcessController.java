@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.dto.StartProcessRequest;
@@ -34,6 +35,7 @@ public class ProcessController {
     }
 
     @PostMapping
+    @Transactional("primaryTransactionManager")
     public Map<String, Object> startProcess(@RequestBody StartProcessRequest req) {
         Map<String, Object> vars = req.variables() != null ? new HashMap<>(req.variables()) : new HashMap<>();
         if (req.initiator() != null) vars.put("initiator", req.initiator());

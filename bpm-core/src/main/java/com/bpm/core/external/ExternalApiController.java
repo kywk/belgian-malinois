@@ -1,5 +1,6 @@
 package com.bpm.core.external;
 
+import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.model.ExternalSystem;
@@ -57,6 +58,7 @@ public class ExternalApiController {
     // ── 1. Start Process ──
 
     @PostMapping("/process-instances")
+    @Transactional("primaryTransactionManager")
     public Map<String, Object> startProcess(@RequestBody Map<String, Object> body,
                                              @RequestAttribute("externalSystemId") String systemId,
                                              @RequestAttribute("externalSystem") ExternalSystem sys) {
@@ -195,6 +197,7 @@ public class ExternalApiController {
     // ── 3. Complete Task ──
 
     @PutMapping("/tasks/{taskId}")
+    @Transactional("primaryTransactionManager")
     public Map<String, Object> completeTask(@PathVariable String taskId,
                                              @RequestBody Map<String, Object> body,
                                              @RequestAttribute("externalSystemId") String systemId) {
@@ -339,12 +342,15 @@ public class ExternalApiController {
 
     /** 取變數值，先查執行中再查歷史；實例不存在時回 null 而非拋例外。 */
     private Object variableOf(String processInstanceId, String name) {
-        try {
+        // 先確認實例仍在執行，而不是呼叫 getVariable 再 catch 例外：
+        // Flowable 命令在外層交易（completeTask 的 @Transactional）中拋例外，
+        // 會把外層交易標成 rollback-only，catch 住也救不回來。
+        if (runtimeService.createProcessInstanceQuery()
+                .processInstanceId(processInstanceId).singleResult() != null) {
             Object v = runtimeService.getVariable(processInstanceId, name);
             if (v != null) return v;
-        } catch (RuntimeException ignored) {
-            // 實例已結束時 runtimeService 會拋例外，改查歷史
         }
+        // 實例已結束，改查歷史
         return historicVariable(processInstanceId, name);
     }
 
