@@ -1,5 +1,6 @@
 package com.bpm.core.external;
 
+import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
@@ -60,7 +61,7 @@ public class ExternalSystemAdminController {
 
     @PostMapping
     public Map<String, Object> create(@RequestBody ExternalSystem sys,
-                                      @RequestHeader(value = "X-User-Id", required = false)
+                                      @CallerId
                                       String operatorId) {
         // systemId 有 unique 約束，但靠約束失敗會得到一個看不懂的 500。
         // 明確檢查並回 409，同時避免「建立」意外變成覆寫 ——
@@ -108,7 +109,7 @@ public class ExternalSystemAdminController {
     @PutMapping("/{systemId}")
     public ExternalSystem update(@PathVariable String systemId,
                                  @RequestBody ExternalSystem req,
-                                 @RequestHeader(value = "X-User-Id", required = false)
+                                 @CallerId
                                  String operatorId) {
         ExternalSystem sys = find(systemId);
 
@@ -134,7 +135,7 @@ public class ExternalSystemAdminController {
 
     @DeleteMapping("/{systemId}")
     public Map<String, String> disable(@PathVariable String systemId,
-                                       @RequestHeader(value = "X-User-Id", required = false)
+                                       @CallerId
                                        String operatorId) {
         ExternalSystem sys = find(systemId);
         boolean wasEnabled = Boolean.TRUE.equals(sys.getEnabled());
@@ -149,7 +150,7 @@ public class ExternalSystemAdminController {
 
     @PostMapping("/{systemId}/rotate-key")
     public Map<String, String> rotateKey(@PathVariable String systemId,
-                                         @RequestHeader(value = "X-User-Id", required = false)
+                                         @CallerId
                                          String operatorId) {
         ExternalSystem sys = find(systemId);
         String oldHashPrefix = hashPrefix(sys.getApiKey());

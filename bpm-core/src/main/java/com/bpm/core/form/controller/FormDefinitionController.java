@@ -1,5 +1,6 @@
 package com.bpm.core.form.controller;
 
+import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.form.model.FormDefinition;
@@ -24,7 +25,7 @@ public class FormDefinitionController {
 
     @PostMapping
     public FormDefinition create(@RequestBody FormDefinition def,
-                                 @RequestHeader(value = "X-User-Id", required = false)
+                                 @CallerId
                                  String userId) {
         FormDefinition saved = formService.create(def);
         audit("FORM_UPDATE", userId, saved, "create");
@@ -39,7 +40,7 @@ public class FormDefinitionController {
      */
     @PostMapping("/{formKey}/revisions")
     public FormDefinition createRevision(@PathVariable String formKey,
-                                         @RequestHeader(value = "X-User-Id", required = false)
+                                         @CallerId
                                          String userId) {
         FormDefinition draft = formService.createNextDraft(formKey, userId);
         audit("FORM_UPDATE", userId, draft, "revise");
@@ -60,7 +61,7 @@ public class FormDefinitionController {
 
     @PutMapping("/{id}")
     public FormDefinition update(@PathVariable String id, @RequestBody FormDefinition def,
-                                 @RequestHeader(value = "X-User-Id", required = false)
+                                 @CallerId
                                  String userId) {
         FormDefinition saved = formService.update(id, def);
         audit("FORM_UPDATE", userId, saved, "update");
@@ -69,7 +70,7 @@ public class FormDefinitionController {
 
     @PostMapping("/{id}/publish")
     public FormDefinition publish(@PathVariable String id,
-                                  @RequestHeader(value = "X-User-Id", required = false)
+                                  @CallerId
                                   String userId) {
         FormDefinition saved = formService.publish(id);
         audit("FORM_UPDATE", userId, saved, "publish");
@@ -78,7 +79,7 @@ public class FormDefinitionController {
 
     @PostMapping("/{id}/archive")
     public FormDefinition archive(@PathVariable String id,
-                                  @RequestHeader(value = "X-User-Id", required = false)
+                                  @CallerId
                                   String userId) {
         FormDefinition saved = formService.archive(id);
         audit("FORM_UPDATE", userId, saved, "archive");
@@ -87,7 +88,7 @@ public class FormDefinitionController {
 
     @DeleteMapping("/{id}")
     public Map<String, String> delete(@PathVariable String id,
-                                      @RequestHeader(value = "X-User-Id", required = false)
+                                      @CallerId
                                       String userId) {
         FormDefinition existing = formService.getById(id);
         formService.delete(id);

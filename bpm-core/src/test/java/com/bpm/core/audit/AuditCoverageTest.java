@@ -105,9 +105,13 @@ class AuditCoverageTest extends IntegrationTestBase {
                                 + "\"allowedActions\":\"[\\\"start_process\\\"]\"}"))
                 .andExpect(status().isOk());
 
-        // 擴大授權範圍 —— 這是最需要留下前後值的一種變更
+        // 擴大授權範圍 —— 這是最需要留下前後值的一種變更。
+        //
+        // 身分用 dir001（持有通配以外的權限，但不是 ADMIN）會被 403 擋下，
+        // 所以這裡用 admin001。R-01 之後「非管理員擴大外部系統授權」
+        // 這條路已經走不通了 —— 見 nonAdminCannotChangeExternalSystems。
         mockMvc.perform(put("/api/admin/external-systems/" + sid)
-                        .header("X-User-Id", "attacker001")
+                        .header("X-User-Id", "admin001")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"systemName\":\"測試\","
                                 + "\"allowedProcessKeys\":\"[\\\"leave-approval\\\",\\\"purchase-approval\\\"]\","
@@ -121,7 +125,7 @@ class AuditCoverageTest extends IntegrationTestBase {
         assertThat(details.get(1))
                 .as("update 必須記錄操作者與授權欄位的前後值，"
                         + "否則事故調查時只知道「有人改了」")
-                .contains("attacker001")
+                .contains("admin001")
                 .contains("allowedProcessKeys")
                 .contains("purchase-approval");
     }
@@ -198,8 +202,12 @@ class AuditCoverageTest extends IntegrationTestBase {
 
         String other = "audit-mass2-" + UUID.randomUUID().toString().substring(0, 8);
         createdSystems.add(other);
+        // ⚠️ 用 admin001 而不是「攻擊者」：非管理員現在會被 403 擋在門外
+        // （那是 R-01 的效果，另有測試涵蓋）。但 mass assignment 的保護必須
+        // 對「有正當權限的管理員」也成立 —— 一次手誤或被複製的 body
+        // 不該靜默覆寫另一個系統的授權。認證不能取代輸入驗證。
         mockMvc.perform(post("/api/admin/external-systems")
-                        .header("X-User-Id", "attacker")
+                        .header("X-User-Id", "admin001")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"id\":\"" + victimId + "\",\"systemId\":\"" + other + "\","
                                 + "\"systemName\":\"已被覆寫\","
@@ -219,9 +227,12 @@ class AuditCoverageTest extends IntegrationTestBase {
     @DisplayName("查詢稽核紀錄本身必須留下紀錄（稽核稽核者）")
     void auditLogQueriesAreThemselvesAudited() throws Exception {
         // 稽核庫裡有全公司的請假、採購、核決金額與簽核意見。
-        // 可以無痕跡地翻閱它，等於這份資料沒有存取控制的事實層面。
+        //
+        // 身分用 dir001 —— 依 2026-09-29 的政策決策，稽核檢視權由權限中心以
+        // audit:log:read 指派，dir001 持有它。這個測試的重點正是：
+        // 「有正當權限的人」才是最需要被追蹤的對象，因為只有他做得到。
         mockMvc.perform(get("/api/audit-logs")
-                        .header("X-User-Id", "nosy001")
+                        .header("X-User-Id", "dir001")
                         .param("operatorId", "ceo001")
                         .param("size", "50"))
                 .andExpect(status().isOk());
@@ -229,10 +240,41 @@ class AuditCoverageTest extends IntegrationTestBase {
         var details = awaitAuditDetails(OperationType.DATA_ACCESS, 1);
         assertThat(details).isNotEmpty();
         assertThat(details.get(0))
-                .contains("nosy001")
+                .contains("dir001")
                 .contains("search")
                 .as("查詢條件必須留下 —— 「查了誰的紀錄」才是關鍵資訊")
                 .contains("ceo001");
+    }
+
+    @Test
+    @DisplayName("沒有 audit:log:read 的人不得查詢稽核紀錄")
+    void auditLogQueriesRequireTheAuditPermission() throws Exception {
+        // R-01 之前這裡完全沒有認證，任何人帶個 X-User-Id 就能翻閱全公司的
+        // 簽核紀錄。現在由權限中心的 audit:log:read 控制。
+        //
+        // ⚠️ 這個測試與上一個必須成組存在。少了它，上一個可以靠
+        // 「整條授權規則失效」達成 —— 而那正是修復前的狀態。
+        mockMvc.perform(get("/api/audit-logs")
+                        .header("X-User-Id", "user001")
+                        .param("size", "50"))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(get("/api/audit-logs/integrity-check")
+                        .header("X-User-Id", "mgr001")
+                        .param("startDate", "2026-01-01T00:00:00Z")
+                        .param("endDate", "2027-01-01T00:00:00Z"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("完全沒有身分時不得查詢稽核紀錄")
+    void anonymousCallersCannotQueryAuditLogs() throws Exception {
+        // 沒有閘道密鑰也沒有 Bearer token —— 這是外部攻擊者的實際情境。
+        // 401 而非 403：連身分都沒有。
+        mockMvc.perform(get("/api/audit-logs")
+                        .header("X-Gateway-Secret", "wrong-secret")
+                        .param("size", "5"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -241,7 +283,7 @@ class AuditCoverageTest extends IntegrationTestBase {
         // integrityCheck 是唯一能看出 hash chain 被動過的工具。
         // 若調查者就是竄改者，這筆紀錄是唯一的痕跡 —— 而且它寫在鏈上。
         mockMvc.perform(get("/api/audit-logs/integrity-check")
-                        .header("X-User-Id", "auditor001")
+                        .header("X-User-Id", "dir001")
                         .param("startDate", "2026-01-01T00:00:00Z")
                         .param("endDate", "2027-01-01T00:00:00Z"))
                 .andExpect(status().isOk());
@@ -249,7 +291,7 @@ class AuditCoverageTest extends IntegrationTestBase {
         var details = awaitAuditDetails(OperationType.DATA_ACCESS, 1);
         assertThat(details).isNotEmpty();
         assertThat(String.join("\n", details))
-                .contains("auditor001")
+                .contains("dir001")
                 .contains("integrity-check")
                 .as("檢查結論本身就是要留存的事實")
                 .contains("intact");
@@ -280,14 +322,14 @@ class AuditCoverageTest extends IntegrationTestBase {
 
         // 關掉通知 —— 相關人員就不會知道有案件在跑
         mockMvc.perform(put("/api/admin/notify-configs/" + cfgId)
-                        .header("X-User-Id", "quiet001")
+                        .header("X-User-Id", "admin001")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"processDefinitionKey\":\"leave-approval\",\"eventType\":\"task.created\","
                                 + "\"channel\":\"email\",\"templateId\":\"" + tplId + "\",\"enabled\":false}"))
                 .andExpect(status().isOk());
 
         var all = String.join("\n", awaitAuditDetails(OperationType.CONFIG_CHANGE, 3));
-        assertThat(all).contains("quiet001");
+        assertThat(all).contains("admin001");
         assertThat(all)
                 .as("enabled 從 true 變 false 必須看得出來")
                 .contains("before.enabled").contains("after.enabled");
@@ -330,6 +372,41 @@ class AuditCoverageTest extends IntegrationTestBase {
                 .andExpect(status().isOk());
         mockMvc.perform(delete("/api/admin/notify-templates/" + tplId).header("X-User-Id", "admin001"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("非管理員不得變更外部系統的授權設定")
+    void nonAdminCannotChangeExternalSystems() throws Exception {
+        // 這個端點管的是 allowedProcessKeys —— 誰能從外部發起哪些流程。
+        // R-01 之前它完全沒有認證：任何人帶個 X-User-Id 就能擴大授權，
+        // 而且（P2-4 之前）連稽核都沒有。
+        mockMvc.perform(post("/api/admin/external-systems")
+                        .header("X-User-Id", "mgr001")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"systemId\":\"should-not-exist\",\"systemName\":\"x\"}"))
+                .andExpect(status().isForbidden());
+
+        // dir001 持有多個權限碼但不是通配持有者 —— 一樣不該通過。
+        // 這一條在防的是「把 ADMIN 誤寫成任何權限碼都放行」。
+        mockMvc.perform(post("/api/admin/external-systems")
+                        .header("X-User-Id", "dir001")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"systemId\":\"should-not-exist-2\",\"systemName\":\"x\"}"))
+                .andExpect(status().isForbidden());
+
+        assertThat(externalSystemRepo.findBySystemId("should-not-exist")).isEmpty();
+        assertThat(externalSystemRepo.findBySystemId("should-not-exist-2")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("非管理員不得變更通知設定（隱藏簽核活動的路徑）")
+    void nonAdminCannotChangeNotificationConfig() throws Exception {
+        mockMvc.perform(post("/api/admin/notify-templates")
+                        .header("X-User-Id", "user001")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"x\",\"channel\":\"email\","
+                                + "\"subjectTemplate\":\"s\",\"bodyTemplate\":\"b\"}"))
+                .andExpect(status().isForbidden());
     }
 
     @Test

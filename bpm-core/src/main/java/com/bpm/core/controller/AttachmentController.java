@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.dto.AuditEvent;
@@ -68,8 +69,8 @@ public class AttachmentController {
                                       @RequestParam String processInstanceId,
                                       @RequestParam(required = false) String taskId,
                                       @RequestParam(required = false) String uploadedBy,
-                                      @RequestHeader(value = "X-User-Id", required = false)
-                                      String headerUserId) throws IOException {
+                                      @CallerId
+                                      String callerId) throws IOException {
         // ── 1. processInstanceId 白名單驗證 ──────────────────────────
         // 改動前這個值零驗證就進 resolve()，processInstanceId=../../../../etc/cron.d
         // 即可在容器內任意位置建立目錄並寫檔。
@@ -87,7 +88,7 @@ public class AttachmentController {
         }
 
         // ── 物件層授權（security-audit P1-6）─────────────────────────
-        String operator = firstNonBlank(headerUserId, uploadedBy);
+        String operator = firstNonBlank(callerId, uploadedBy);
         requireParticipant(processInstanceId, operator);
 
         Path dir = uploadDir.resolve(processInstanceId).normalize();
@@ -141,12 +142,15 @@ public class AttachmentController {
      * <p>回 404 而非 403：403 會確認「這個附件／案件存在」，
      * 對可枚舉的 id 來說等於把枚舉管道留著。
      *
-     * <p>⚠️ <b>限制</b>：呼叫者身分取自 {@code X-User-Id} 標頭，也就是仍可
-     * 自報（R-01 尚未完成）。因此這不是完整的安全邊界 —— 它關掉的是
-     * 「不需要任何知識就能枚舉全公司附件」這條路，並把授權判斷點建立起來，
-     * 讓 R-01 完成後只需要換掉身分的來源。
-     * ⚠️ 目前也沒有 admin／auditor 的旁路：那需要伺服器端的角色模型，
-     * 同樣要等 R-01。屆時在此方法加一個角色判斷即可。
+     * <p>呼叫者身分來自 {@code @CallerId}，也就是已認證的 principal
+     * （JWT 的 sub，或閘道認證過的身分）。R-01 已完成 ——
+     * 這個方法先前的註解說「身分仍可自報，因此不是完整的安全邊界」，
+     * 那個限制已經不存在了。
+     *
+     * <p>⚠️ 仍然沒有 admin／auditor 的旁路。現在有伺服器端的角色模型了
+     * （{@code AuthorityResolver}），所以要加的話是在此處判斷
+     * {@code ROLE_ADMIN}；但「管理員能不能看任何案件的附件」是權責政策，
+     * 不是技術缺口，所以留給明確決策。
      */
     private void requireParticipant(String processInstanceId, String userId) {
         if (userId == null || userId.isBlank()) {
@@ -239,23 +243,23 @@ public class AttachmentController {
 
     @GetMapping
     public List<Map<String, Object>> list(@RequestParam String processInstanceId,
-                                          @RequestHeader(value = "X-User-Id", required = false)
-                                          String headerUserId) {
-        requireParticipant(processInstanceId, headerUserId);
+                                          @CallerId
+                                          String callerId) {
+        requireParticipant(processInstanceId, callerId);
         return repo.findByProcessInstanceIdOrderByUploadedAtDesc(processInstanceId)
                 .stream().map(AttachmentController::toResponse).toList();
     }
 
     @GetMapping("/{id}/download")
     public ResponseEntity<Resource> download(@PathVariable String id,
-                                             @RequestHeader(value = "X-User-Id", required = false)
-                                             String headerUserId) {
+                                             @CallerId
+                                             String callerId) {
         FileAttachment att = repo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
 
         // Flowable 的 processInstanceId 可被枚舉，而改動前這個端點只做
         // findById → 任何人都能列舉並下載全公司案件的附件。
-        requireParticipant(att.getProcessInstanceId(), headerUserId);
+        requireParticipant(att.getProcessInstanceId(), callerId);
 
         // 同樣圍堵下載路徑。filePath 來自 DB，而在此修復之前寫入的資料列
         // 可能指向 uploadDir 之外的任意路徑 —— 若不檢查，一筆被污染的
@@ -266,7 +270,7 @@ public class AttachmentController {
         }
 
         // 誰下載了薪資單必須留下紀錄（改動前三個端點全無稽核）。
-        auditPublisher.publish(new AuditEvent(OperationType.DATA_ACCESS.name(), headerUserId,
+        auditPublisher.publish(new AuditEvent(OperationType.DATA_ACCESS.name(), callerId,
                 att.getProcessInstanceId(), att.getTaskId(),
                 Map.of("attachmentId", att.getId(), "fileName", att.getFileName())));
 

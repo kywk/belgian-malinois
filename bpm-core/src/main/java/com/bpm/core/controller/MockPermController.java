@@ -55,11 +55,17 @@ public class MockPermController {
         PERM_USERS.put("purchase:order:approve",  List.of("mgr001", "mgr002", "dir001"));
         PERM_USERS.put("legal:contract:review",   List.of("dir001"));
         PERM_USERS.put("purchase:self:approve",   List.of("dir001"));
+        // 稽核檢視權。政策決策（2026-09-29）：由權限中心指派，
+        // 不用寫死的使用者清單也不收斂成「只有管理員」。
+        // dir001 代表稽核職能；admin001 持有通配權限 * 因而自動涵蓋。
+        PERM_USERS.put("audit:log:read",          List.of("dir001", "admin001"));
 
         USER_PERMS.put("mgr001", List.of("hr:leave:approve", "finance:payment:approve", "purchase:order:approve"));
         USER_PERMS.put("mgr002", List.of("hr:leave:approve", "purchase:order:approve"));
         USER_PERMS.put("dir001", List.of("hr:leave:approve", "finance:payment:approve", "purchase:order:approve",
-                                          "legal:contract:review", "purchase:self:approve"));
+                                          "legal:contract:review", "purchase:self:approve",
+                                          // 稽核檢視權，見上方 PERM_USERS 的說明
+                                          "audit:log:read"));
         USER_PERMS.put("admin001", List.of("*"));
     }
 

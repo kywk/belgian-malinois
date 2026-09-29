@@ -42,6 +42,9 @@ class MassAssignmentTest extends IntegrationTestBase {
         String victimId = victim.getId();
 
         mockMvc.perform(post("/api/admin/notify-templates")
+                        // /api/admin/** 需要 ADMIN（R-01）。預設身分 user001
+                        // 沒有權限，會被 403 擋在 mass assignment 的檢查之前。
+                        .header("X-User-Id", "admin001")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"id\":\"" + victimId + "\","
                         + "\"name\":\"PHISHING\",\"channel\":\"EMAIL\","
@@ -87,6 +90,9 @@ class MassAssignmentTest extends IntegrationTestBase {
     void normalCreateStillWorks() throws Exception {
         long before = templateRepo.count();
         mockMvc.perform(post("/api/admin/notify-templates")
+                        // /api/admin/** 需要 ADMIN（R-01）。預設身分 user001
+                        // 沒有權限，會被 403 擋在 mass assignment 的檢查之前。
+                        .header("X-User-Id", "admin001")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"name\":\"新模板\",\"channel\":\"EMAIL\","
                         + "\"subjectTemplate\":\"主旨\",\"bodyTemplate\":\"內容\"}"));
@@ -102,6 +108,9 @@ class MassAssignmentTest extends IntegrationTestBase {
     @DisplayName("回應仍必須包含 id（READ_ONLY 只擋反序列化，不擋序列化）")
     void responseStillExposesId() throws Exception {
         var res = mockMvc.perform(post("/api/admin/notify-templates")
+                        // /api/admin/** 需要 ADMIN（R-01）。預設身分 user001
+                        // 沒有權限，會被 403 擋在 mass assignment 的檢查之前。
+                        .header("X-User-Id", "admin001")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"name\":\"檢查回應\",\"channel\":\"EMAIL\","
                         + "\"subjectTemplate\":\"s\",\"bodyTemplate\":\"b\"}"))

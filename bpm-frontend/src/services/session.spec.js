@@ -1,12 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { decodeToken, getToken, setToken, clearToken, currentIdentity, hasRole } from './session.js'
+import { testJwt } from './testJwt.js'
 
 /**
  * 身分與角色（services/session.js）。
  *
- * 這個檔案是整個前端唯一的身分來源，也是 2026-09-28 那次角色政策決策
- * （auditor 收斂為明確清單）唯一改動的地方。它同時是接上真實 JWT 的縫線
- * —— decodeToken() 換掉就等於換掉整套身分來源，因此它的行為必須被釘死。
+ * 這個檔案是整個前端唯一的身分來源。
+ *
+ * ── R-01 之後 ──
+ * 後端已啟用認證，token 是簽章過的 JWT。先前的測試斷言「token 的值就是
+ * userId」與「前端的 MOCK_ROLE_MAP 決定角色」—— 兩者都已不成立，
+ * 而且必須不成立：前端自訂的角色表是一份會與權限中心漂移的政策複本。
+ *
+ * roles 現在只來自 JWT 的 roles claim。claim 沒帶時前端<b>不推測</b> ——
+ * 後端會回頭查權限中心，前端猜錯只會產生「看得到選項但點下去被擋」。
  */
 describe('session', () => {
   beforeEach(() => localStorage.clear())
@@ -17,40 +24,66 @@ describe('session', () => {
       expect(decodeToken('')).toEqual({ userId: null, roles: [], raw: null })
     })
 
-    it('mock 階段 token 的值就是 userId', () => {
-      expect(decodeToken('user001').userId).toBe('user001')
-      expect(decodeToken('user001').raw).toBe('user001')
+    it('sub 成為 userId', () => {
+      const t = testJwt('user001')
+      expect(decodeToken(t).userId).toBe('user001')
+      expect(decodeToken(t).raw).toBe(t)
     })
 
-    it('admin001 同時具備 admin 與 auditor', () => {
-      expect(decodeToken('admin001').roles).toEqual(['admin', 'auditor'])
+    it('roles claim 成為角色', () => {
+      expect(decodeToken(testJwt('admin001', { roles: ['admin', 'auditor'] })).roles)
+        .toEqual(['admin', 'auditor'])
     })
 
-    it('dir001 具備 auditor 但不具備 admin', () => {
-      const roles = decodeToken('dir001').roles
-      expect(roles).toContain('auditor')
-      expect(roles).not.toContain('admin')
-    })
-
-    it('一般使用者不得取得任何角色', () => {
-      // 這是 2026-09-28 的政策決策：auditor 先前是「所有登入者皆有」，
-      // 讓 router 的 auditor 守衛形同虛設。收斂後預設必須是空陣列。
-      for (const u of ['user001', 'user005', 'mgr001', 'mgr002']) {
-        expect(decodeToken(u).roles, `${u} 不應有角色`).toEqual([])
+    it('沒有 roles claim 時前端不得自行推測角色', () => {
+      // R-01 之前這裡是前端的 MOCK_ROLE_MAP 在發角色 —— 一份與權限中心
+      // 平行維護的政策複本。現在 claim 沒帶就是空陣列，由後端向權限中心查。
+      for (const u of ['admin001', 'dir001', 'user001', 'mgr001']) {
+        expect(decodeToken(testJwt(u)).roles, `${u} 不該被前端推測出角色`).toEqual([])
       }
+    })
+
+    it('裸 userId（R-01 之前的 token）必須視為未登入', () => {
+      // 舊的 localStorage 值會落到這裡。若當成有效身分，使用者會看到一個
+      // 「已登入但每個請求都 401」的畫面，而且完全不知道為什麼。
+      expect(decodeToken('admin001').userId).toBeNull()
+      expect(decodeToken('user001').userId).toBeNull()
     })
 
     it('不得以字串前綴取得管理權限', () => {
       // 改動前是 token.startsWith('admin')，因此 admin999 也會拿到 admin。
-      expect(decodeToken('admin999').roles).toEqual([])
-      expect(decodeToken('administrator').roles).toEqual([])
+      expect(decodeToken(testJwt('admin999')).roles).toEqual([])
+      expect(decodeToken(testJwt('administrator')).roles).toEqual([])
+    })
+
+    it('過期的 token 視為未登入', () => {
+      const expired = testJwt('admin001', {
+        roles: ['admin'],
+        exp: Math.floor(Date.now() / 1000) - 60,
+      })
+      expect(decodeToken(expired).userId).toBeNull()
+    })
+
+    it('沒有 sub 的 token 視為未登入', () => {
+      expect(decodeToken(testJwt(null, { roles: ['admin'] })).userId).toBeNull()
+    })
+
+    it('無法解析的 payload 視為未登入，不得拋出', () => {
+      expect(() => decodeToken('aaa.!!!not-base64!!!.ccc')).not.toThrow()
+      expect(decodeToken('aaa.!!!not-base64!!!.ccc').userId).toBeNull()
+    })
+
+    it('UTF-8 內容必須正確還原', () => {
+      // atob 只處理 latin1，中文姓名等內容需要額外轉換。
+      expect(decodeToken(testJwt('王小明')).userId).toBe('王小明')
     })
   })
 
   describe('token 存取', () => {
     it('寫入後可讀回，清除後為 null', () => {
-      setToken('user001')
-      expect(getToken()).toBe('user001')
+      const t = testJwt('user001')
+      setToken(t)
+      expect(getToken()).toBe(t)
       clearToken()
       expect(getToken()).toBeNull()
     })
@@ -71,7 +104,7 @@ describe('session', () => {
       const orig = localStorage.setItem
       localStorage.setItem = () => { throw new Error('QuotaExceeded') }
       try {
-        expect(() => setToken('user001')).not.toThrow()
+        expect(() => setToken(testJwt('user001'))).not.toThrow()
       } finally {
         localStorage.setItem = orig
       }
@@ -80,10 +113,10 @@ describe('session', () => {
 
   describe('hasRole', () => {
     it('依當前身分判斷', () => {
-      setToken('admin001')
+      setToken(testJwt('admin001', { roles: ['admin', 'auditor'] }))
       expect(hasRole('admin')).toBe(true)
       expect(hasRole('auditor')).toBe(true)
-      setToken('user001')
+      setToken(testJwt('user001'))
       expect(hasRole('admin')).toBe(false)
       expect(hasRole('auditor')).toBe(false)
     })

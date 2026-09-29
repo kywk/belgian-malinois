@@ -36,7 +36,8 @@ public class ConfigChangeAuditor {
     }
 
     /**
-     * @param operatorId  X-User-Id 標頭。空白時記成 {@code unknown} 而非 null ——
+     * @param operatorId  已認證的呼叫者（{@code @CallerId}）。
+     *                    空白時記成 {@code unknown} 而非 null ——
      *                    null 在查詢時容易被誤讀成「這個欄位不適用」，
      *                    而事實是「我們不知道是誰」。那是不同的意思。
      * @param configType  組態種類，例如 {@code notify-template}。

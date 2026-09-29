@@ -1,5 +1,6 @@
 package com.bpm.core.external;
 
+import com.bpm.core.security.CallerId;
 import com.bpm.core.model.ExternalSystem;
 import com.bpm.core.model.ProcessVariableSpec;
 import com.bpm.core.repository.ProcessVariableSpecRepository;
@@ -30,7 +31,7 @@ public class ProcessVariableSpecController {
     @Transactional
     public List<ProcessVariableSpec> batchSave(@PathVariable String key,
                                                 @RequestBody List<ProcessVariableSpec> specs,
-                                                @RequestHeader(value = "X-User-Id", required = false) String operatorId) {
+                                                @CallerId String operatorId) {
         // 先記下舊的變數名再刪 —— 這個端點是「整批取代」，
         // 所以移除了哪些變數跟新增了哪些一樣重要：
         // 刪掉一個 required 變數等於放寬外部系統的輸入驗證。
@@ -61,7 +62,7 @@ public class ProcessVariableSpecController {
     @PutMapping("/api/admin/process-definitions/{key}/variable-spec/{id}")
     public ProcessVariableSpec update(@PathVariable String key, @PathVariable String id,
                                        @RequestBody ProcessVariableSpec spec,
-                                       @RequestHeader(value = "X-User-Id", required = false) String operatorId) {
+                                       @CallerId String operatorId) {
         ProcessVariableSpec existing = repo.findById(id).orElseThrow();
         String before = "%s:%s required=%s".formatted(
                 existing.getVariableName(), existing.getVariableType(), existing.getRequired());

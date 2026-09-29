@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.audit.model.OperationType;
@@ -133,7 +134,8 @@ public class TaskController {
      * <p><b>P1-1 稽核查不出是誰核准的。</b>operatorId 一律取
      * {@code req.assignee()}，但前端主要簽核入口的 payload 只有 action 與
      * variables → TASK_APPROVE／TASK_RETURN／TASK_REJECT 的 operatorId 全是
-     * null。現在改為：X-User-Id 標頭 → 任務目前的 assignee → body 的 assignee。
+     * null。現在改為：已認證的呼叫者（{@code @CallerId}）→ 任務目前的 assignee
+     * → body 的 assignee。R-01 完成後第一順位不再是可偽造的標頭。
      *
      * <p><b>P1-3 守門回 HTTP 200。</b>有未完成加簽時回
      * {@code {"status":"error"}} 卻是 200，前端只看 axios 是否 throw →
@@ -148,8 +150,8 @@ public class TaskController {
     @PutMapping("/{id}")
     public Map<String, Object> updateTask(@PathVariable String id,
                                           @RequestBody TaskActionRequest req,
-                                          @RequestHeader(value = "X-User-Id", required = false)
-                                          String headerUserId) {
+                                          @CallerId
+                                          String callerId) {
         Task task = taskService.createTaskQuery().taskId(id).singleResult();
         if (task == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "任務不存在: " + id);
@@ -159,7 +161,7 @@ public class TaskController {
 
         // 操作者：標頭優先（前端共用 axios instance 一律附上），
         // 退回任務現有的 assignee，最後才是 body 的 assignee。
-        String operatorId = firstNonBlank(headerUserId,
+        String operatorId = firstNonBlank(callerId,
                 firstNonBlank(task.getAssignee(), req.assignee()));
 
         OperationType auditType;
@@ -177,10 +179,10 @@ public class TaskController {
                 // 已認領檢查 → 空 body 可強制釋放他人任務。因此 assignee
                 // 必須有值；acceptance 腳本只帶標頭不帶 body assignee，
                 // 所以這裡用解析後的 operatorId。
-                String claimant = firstNonBlank(headerUserId, req.assignee());
+                String claimant = firstNonBlank(callerId, req.assignee());
                 if (claimant == null) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                            "claim 必須指定認領者（X-User-Id 標頭或 body 的 assignee）");
+                            "claim 必須指定認領者（已認證的身分或 body 的 assignee）");
                 }
                 try {
                     taskService.claim(id, claimant);
@@ -261,12 +263,12 @@ public class TaskController {
     @PostMapping("/{id}/comments")
     public Map<String, String> addComment(@PathVariable String id,
                                           @RequestBody CommentRequest req,
-                                          @RequestHeader(value = "X-User-Id", required = false)
-                                          String headerUserId) {
+                                          @CallerId
+                                          String callerId) {
         Task task = taskService.createTaskQuery().taskId(id).singleResult();
         String processInstanceId = task != null ? task.getProcessInstanceId() : null;
 
-        String author = firstNonBlank(headerUserId, req.userId());
+        String author = firstNonBlank(callerId, req.userId());
 
         // 用 try/finally 還原原值：Authentication 存放在 ThreadLocal，
         // 而 servlet 容器的執行緒是重複使用的 —— 不還原會讓下一個請求

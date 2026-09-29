@@ -45,6 +45,30 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
+        <!-- 認證與授權（security-audit：平台層原本完全沒有 Spring Security，
+             身分靠呼叫端自帶的 X-User-Id 標頭，可隨意填寫）。
+
+             oauth2-resource-server 提供 JWT 驗證：應用只驗簽章與 claims，
+             永不經手密碼。dev 用本地產生的 RSA 金鑰自行簽發，
+             prod 由企業 IdP 的 issuer-uri 提供 JWKS。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+        <!-- nimbus-jose-jwt（dev 簽發 token 用）不需要顯式宣告：
+             它由 oauth2-resource-server → spring-security-oauth2-jose
+             遞移帶入，且不在 Boot 的 BOM 管理範圍內，
+             寫死版本反而會與 Spring Security 期望的版本漂移。 -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-mail</artifactId>

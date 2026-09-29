@@ -1,5 +1,6 @@
 package com.bpm.core.audit.controller;
 
+import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.model.AuditLog;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.audit.AuditEventPublisher;
@@ -56,7 +57,7 @@ public class AuditLogController {
             @RequestParam(required = false) String endDate,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
-            @RequestHeader(value = "X-User-Id", required = false) String requesterId) {
+            @CallerId String requesterId) {
 
         OperationType opType = operationType != null ? OperationType.valueOf(operationType) : null;
         Instant start = startDate != null ? Instant.parse(startDate) : null;
@@ -83,7 +84,7 @@ public class AuditLogController {
     public Map<String, Object> integrityCheck(
             @RequestParam String startDate,
             @RequestParam String endDate,
-            @RequestHeader(value = "X-User-Id", required = false) String requesterId) {
+            @CallerId String requesterId) {
         Map<String, Object> result =
                 auditLogService.integrityCheck(Instant.parse(startDate), Instant.parse(endDate));
 

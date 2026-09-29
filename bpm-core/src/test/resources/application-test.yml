@@ -24,6 +24,24 @@ flowable:
   async-executor-activate: false
 
 bpm:
+  security:
+    jwt:
+      # 測試用對稱密鑰。JwtSecurityValidator 要求 issuer-uri 或 dev-secret
+      # 至少有一個 —— 測試不接真實 IdP，所以用 dev-secret。
+      # JwtAuthenticationTest 會用同一組密鑰簽出 token 測真正的驗證路徑。
+      dev-secret: test-only-jwt-secret-at-least-32-bytes-long
+    gateway:
+      # ⚠️ 測試扮演「信任閘道」，而不是為測試開一條後門。
+      #
+      # 68 處測試用 X-User-Id 宣告身分。若為此加一個 test-only 的標頭認證，
+      # 那就是一條可能誤上 prod 的旁路（P2-7 的教訓）。改為讓測試走
+      # 使用者指定的正式機制之一：閘道認證。IntegrationTestBase 以
+      # defaultRequest 附上密鑰，所以每個測試的 X-User-Id 原樣生效，
+      # 而且走的是與 production 完全相同的過濾器。
+      enabled: true
+      shared-secret: test-only-gateway-secret
+      # MockMvc 的 remoteAddr 預設是 127.0.0.1
+      trusted-proxies: 127.0.0.1
   upload:
     dir: ./target/test-uploads
   external:

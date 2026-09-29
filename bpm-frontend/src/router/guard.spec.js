@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setToken } from '../services/session.js'
+import { testJwt } from '../services/testJwt.js'
 
 // router/index.js 會 import 全部的 view（每個 view 又拉 element-plus、
 // bpmn-js…），在單元測試裡載入它們既慢又脆弱。因此把 view 全部 stub 掉 ——
@@ -57,35 +58,35 @@ describe('router 角色守衛', () => {
   })
 
   it('已登入但角色不足時擋回首頁', async () => {
-    setToken('user001')
+    setToken(testJwt('user001'))
     expect(await guard('/admin/forms')).toBe('/')
     expect(await guard('/admin/processes')).toBe('/')
     expect(await guard('/admin/external-systems')).toBe('/')
   })
 
   it('admin 可進入管理頁面', async () => {
-    setToken('admin001')
+    setToken(testJwt('admin001', { roles: ['admin', 'auditor'] }))
     expect(await guard('/admin/forms')).toBe('/admin/forms')
     expect(await guard('/admin/processes')).toBe('/admin/processes')
   })
 
   it('稽核頁面需要 auditor —— 一般使用者被擋（2026-09-28 政策收斂）', async () => {
-    setToken('user001')
+    setToken(testJwt('user001'))
     expect(await guard('/audit-log')).toBe('/')
   })
 
   it('dir001 具 auditor，可進入稽核頁面', async () => {
-    setToken('dir001')
+    setToken(testJwt('dir001', { roles: ['auditor'] }))
     expect(await guard('/audit-log')).toBe('/audit-log')
   })
 
   it('dir001 沒有 admin，不得進入管理頁面', async () => {
-    setToken('dir001')
+    setToken(testJwt('dir001', { roles: ['auditor'] }))
     expect(await guard('/admin/forms')).toBe('/')
   })
 
   it('無角色要求的路由一律放行', async () => {
-    setToken('user001')
+    setToken(testJwt('user001'))
     expect(await guard('/tasks')).toBe('/tasks')
     expect(await guard('/my-applications')).toBe('/my-applications')
     expect(await guard('/start')).toBe('/start')

@@ -90,19 +90,38 @@ class CommentTcA02Test extends IntegrationTestBase {
                 .containsExactlyInAnyOrder("mgr001", "dir001", "user001");
     }
 
+    /**
+     * body 的 userId <b>不得</b>覆寫已認證的身分（R-01）。
+     *
+     * <h2>這個測試的斷言在 R-01 時被反轉</h2>
+     *
+     * <p>先前的版本叫 {@code userIdInBodyStillWorks}，斷言 body 的
+     * {@code userId} 會成為批註作者 —— 那在「身分本來就是可偽造的標頭」的
+     * 年代不算缺陷，因為偽造身分有更直接的方法。
+     *
+     * <p>但 R-01 之後身分來自簽章過的 JWT 或閘道認證。此時若 body 還能覆寫它，
+     * 整套認證就失去意義：任何登入者都能以他人名義留下簽核批註，
+     * 而稽核紀錄會如實記下那個假身分 —— 比沒有紀錄更糟，因為它看起來可信。
+     *
+     * <p>所以行為改為：已認證的身分優先，body 的 userId 被忽略。
+     */
     @Test
-    @DisplayName("批註：body 的 userId 仍可作為身分來源（相容前端既有呼叫）")
-    void userIdInBodyStillWorks() throws Exception {
+    @DisplayName("批註：body 的 userId 不得覆寫已認證的身分（R-01）")
+    void bodyUserIdCannotOverrideAuthenticatedIdentity() throws Exception {
         Task task = startLeaveAndGetTask();
 
         mockMvc.perform(post("/api/tasks/{id}/comments", task.getId())
+                        .header("X-User-Id", "user001")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"message\":\"來自 body 的身分\",\"userId\":\"mgr002\"}"))
+                        .content("{\"message\":\"冒用他人身分的批註\",\"userId\":\"mgr002\"}"))
                 .andExpect(status().isOk());
 
         assertThat(taskService.getTaskComments(task.getId()))
                 .singleElement()
-                .satisfies(c -> assertThat(c.getUserId()).isEqualTo("mgr002"));
+                .satisfies(c -> assertThat(c.getUserId())
+                        .as("body 的 userId 覆寫了已認證的身分 —— "
+                                + "任何登入者都能以他人名義留下簽核批註")
+                        .isEqualTo("user001"));
     }
 
     @Test

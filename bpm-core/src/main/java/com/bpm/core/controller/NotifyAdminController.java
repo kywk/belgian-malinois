@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.ConfigChangeAuditor;
 import com.bpm.core.model.NotifyConfig;
 import com.bpm.core.model.NotifyTemplate;
@@ -88,7 +89,7 @@ public class NotifyAdminController {
     // Templates
     @PostMapping("/notify-templates")
     public NotifyTemplate createTemplate(@RequestBody NotifyTemplate t,
-                                         @RequestHeader(value = "X-User-Id", required = false) String operatorId) {
+                                         @CallerId String operatorId) {
         // 必定新增。夾帶 id 的話 save() 會走 merge → 覆寫既有模板
         // （可植入釣魚連結）。零稽核那一半已在本次補上（P2-4）。
         t.setId(null);
@@ -107,7 +108,7 @@ public class NotifyAdminController {
 
     @PutMapping("/notify-templates/{id}")
     public NotifyTemplate updateTemplate(@PathVariable String id, @RequestBody NotifyTemplate t,
-                                         @RequestHeader(value = "X-User-Id", required = false) String operatorId) {
+                                         @CallerId String operatorId) {
         NotifyTemplate existing = templateRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
         // 先取摘要再套用 —— 順序反了就拿不到舊值。
@@ -140,7 +141,7 @@ public class NotifyAdminController {
      * 呼叫端以為刪掉了，而實際上什麼都沒發生。
      */
     @DeleteMapping("/notify-templates/{id}")
-    public void deleteTemplate(@PathVariable String id, @RequestHeader(value = "X-User-Id", required = false) String operatorId) {
+    public void deleteTemplate(@PathVariable String id, @CallerId String operatorId) {
         NotifyTemplate existing = templateRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
 
@@ -160,7 +161,7 @@ public class NotifyAdminController {
     // Configs
     @PostMapping("/notify-configs")
     public NotifyConfig createConfig(@RequestBody NotifyConfig c,
-                                     @RequestHeader(value = "X-User-Id", required = false) String operatorId) {
+                                     @CallerId String operatorId) {
         c.setId(null);
         // ⚠️ templateId 必須指向存在的模板（security-audit P1-13）。
         // 改動前完全不驗證，而 NotifyConfig 也沒有 nullable=false：
@@ -193,7 +194,7 @@ public class NotifyAdminController {
 
     @PutMapping("/notify-configs/{id}")
     public NotifyConfig updateConfig(@PathVariable String id, @RequestBody NotifyConfig c,
-                                     @RequestHeader(value = "X-User-Id", required = false) String operatorId) {
+                                     @CallerId String operatorId) {
         NotifyConfig existing = configRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
         var before = configDigest(existing);
@@ -212,7 +213,7 @@ public class NotifyAdminController {
     }
 
     @DeleteMapping("/notify-configs/{id}")
-    public void deleteConfig(@PathVariable String id, @RequestHeader(value = "X-User-Id", required = false) String operatorId) {
+    public void deleteConfig(@PathVariable String id, @CallerId String operatorId) {
         // 同 deleteTemplate：對不存在的 id 靜默 no-op 會讓呼叫端以為刪掉了。
         NotifyConfig existing = configRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));

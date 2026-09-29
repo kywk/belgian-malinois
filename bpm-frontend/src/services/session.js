@@ -4,57 +4,64 @@
  * auth store、http instance、router guard 三者都從這裡讀身分，
  * 避免各自去碰 localStorage 或 axios.defaults 而產生不一致。
  *
- * ⚠️ 目前是 mock 身分：token 的值就是 userId（例如 "admin001"），
- * 後端也沒有任何驗證（見 CLAUDE.md 已知技術債 #1）。
- * 真正的 JWT 接上來時，唯一需要改的是 decodeToken()。
+ * ── R-01 之後 ──
+ * 後端已啟用 Spring Security，身分來自簽章過的 JWT。token 不再是 userId，
+ * decodeToken() 解的是 JWT payload（那正是這個縫線預留的用途）。
+ *
+ * 角色來源也跟著變：不再有前端的 MOCK_ROLE_MAP。roles 來自 JWT 的 roles
+ * claim；claim 沒帶時前端不自行推測 —— 後端會回頭查權限中心，
+ * 而前端猜錯只會產生「看得到選項但點下去被擋」的壞體驗。
+ * 那種情況下選單少顯示一項，比顯示一個點不動的項目好。
  */
-
 const TOKEN_KEY = 'token'
 
 /**
- * Mock 角色對照表。
+ * 把 JWT 解析成身分資訊。
  *
- * 這張表是刻意集中在一處的「政策決策點」，不要把角色判斷散落到元件裡。
- *
- * - admin：維持與改動前相同的行為（原本是 token.startsWith('admin')），
- *   因此只有 admin001 具備，不會讓任何人多拿到管理權限。
- * - auditor：**已於 2026-09-28 依政策決策收斂為明確清單**（先前是暫時授予
- *   所有登入者）。稽核 log 記錄「誰在什麼時候核准了什麼」，屬敏感資料，
- *   企業慣例是稽核人員與管理者才可檢視 —— 全體可見等於讓 router 的
- *   auditor 守衛形同虛設。
- *
- *   目前授予：admin001（管理者）、dir001（總監，代表稽核職能）。
- *   ⚠️ 這份名單是 mock 階段的**佔位政策**，不是最終的權責設計。真正的稽核
- *   權責應由權限中心定義（docs/rbac-enterprise-backlog.md）；屆時 roles
- *   直接來自 JWT claim，這整張表即可刪除。
- *   若要增減可檢視稽核的人，改這張表就好，不要在元件裡加判斷。
- */
-const MOCK_ROLE_MAP = {
-  admin001: ['admin', 'auditor'],
-  dir001: ['auditor'],
-}
-// 預設不帶任何角色。收斂 auditor 之後這裡必須是空陣列 ——
-// 留著 ['auditor'] 會讓上面那份名單完全沒有作用。
-const MOCK_DEFAULT_ROLES = []
-
-/**
- * 把 token 解析成身分資訊。
- *
- * ── 這就是接上真實 JWT 的唯一縫線 ──
- * 屆時改為解析 JWT payload，例如：
- *   const claims = JSON.parse(atob(token.split('.')[1]))
- *   return { userId: claims.sub, roles: claims.roles ?? [], raw: token }
- * 呼叫端（auth store / http / router guard）都不需要改。
+ * ⚠️ 只讀 payload，不驗簽章 —— 驗證是後端的事（R-01）。前端解 token 只為了
+ * 決定要顯示哪些選單，任何安全決策都不在這裡。所以這裡解析失敗
+ * 只會少顯示一些選項，不會放行任何東西。
  *
  * @returns {{userId: string|null, roles: string[], raw: string|null}}
  */
 export function decodeToken(token) {
-  if (!token) return { userId: null, roles: [], raw: null }
-  return {
-    userId: token,
-    roles: MOCK_ROLE_MAP[token] ?? MOCK_DEFAULT_ROLES,
-    raw: token,
+  const empty = { userId: null, roles: [], raw: null }
+  if (!token) return empty
+
+  const parts = token.split('.')
+  if (parts.length !== 3) {
+    // 不是 JWT。R-01 之前 token 的值就是 userId ——
+    // 舊的 localStorage 值會落到這裡。視為未登入，讓使用者重新登入拿到 JWT。
+    return empty
   }
+
+  try {
+    const claims = JSON.parse(decodeBase64Url(parts[1]))
+    if (!claims.sub) return empty
+    // exp 過期的 token 後端會拒，前端提前視為未登入，
+    // 避免使用者看到一個「已登入但每個請求都 401」的畫面。
+    if (typeof claims.exp === 'number' && claims.exp * 1000 <= Date.now()) return empty
+    return {
+      userId: claims.sub,
+      roles: Array.isArray(claims.roles) ? claims.roles : [],
+      raw: token,
+    }
+  } catch {
+    return empty
+  }
+}
+
+/** base64url → 字串。atob 不接受 -/_ 也不接受缺少 padding。 */
+function decodeBase64Url(value) {
+  const b64 = value.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4)
+  // decodeURIComponent/escape 的組合讓 UTF-8 內容（例如中文名稱）正確還原
+  return decodeURIComponent(
+    atob(padded)
+      .split('')
+      .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+      .join('')
+  )
 }
 
 // localStorage 在私密視窗、被封鎖的站台資料等情況下讀寫都可能拋錯，

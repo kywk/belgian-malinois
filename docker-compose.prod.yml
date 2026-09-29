@@ -9,6 +9,13 @@
 #   WEBHOOK_HMAC_SECRET    webhook 簽章密鑰。
 #   ORG_SERVICE_URL        真實組織系統。未設定即啟動失敗（P2-7）。
 #   PERM_SERVICE_URL       真實權限系統。同上。
+#   OIDC_ISSUER_URI        企業 IdP 的位置。本服務只驗證 JWT，不簽發也不處理
+#                          OIDC 流程（那由另一個服務負責）。
+#                          prod 未設定即啟動失敗（JwtSecurityValidator）。
+#   GATEWAY_AUTH_ENABLED   是否啟用 server 之間的閘道認證（預設 false）。
+#   GATEWAY_SHARED_SECRET  啟用閘道時必填。沒有密鑰的話任何能連到應用 port
+#                          的人都能用 X-User-Id 偽造身分。
+#   GATEWAY_TRUSTED_PROXIES 選用的來源位址白名單（逗號分隔）。
 #   GITHUB_REPO / IMAGE_TAG  映像來源。
 #
 # 啟動：docker compose -f docker-compose.prod.yml up -d
@@ -80,6 +87,12 @@ services:
       # 不該啟動成功，它能提供服務就代表它正在做錯誤的授權決定。
       ORG_SERVICE_URL: "${ORG_SERVICE_URL}"
       PERM_SERVICE_URL: "${PERM_SERVICE_URL}"
+      # 身分來源（R-01）。未設定會讓啟動失敗 —— 身分設錯的服務
+      # 能提供服務，就代表它正在接受偽造的身分，而且看起來一切正常。
+      OIDC_ISSUER_URI: "${OIDC_ISSUER_URI}"
+      GATEWAY_AUTH_ENABLED: "${GATEWAY_AUTH_ENABLED:-false}"
+      GATEWAY_SHARED_SECRET: "${GATEWAY_SHARED_SECRET:-}"
+      GATEWAY_TRUSTED_PROXIES: "${GATEWAY_TRUSTED_PROXIES:-}"
       # ⚠️ 這一個變數覆蓋全部三個 DataSource（core／audit／form）。
       #
       # 原本這裡寫的是 SPRING_DATASOURCE_PASSWORD，那只蓋得到 primary ——

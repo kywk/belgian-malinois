@@ -61,6 +61,9 @@ import java.sql.Statement;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
 @AutoConfigureMockMvc  // DEFINED_PORT 下仍需要它才會有 MockMvc bean
+// 測試以「信任閘道」的身分發請求 —— 不是為測試開後門，
+// 而是走使用者指定的正式機制之一。見 TestGatewayMockMvcCustomizer。
+@org.springframework.context.annotation.Import(TestGatewayMockMvcCustomizer.class)
 @ActiveProfiles("test")
 public abstract class IntegrationTestBase {
 

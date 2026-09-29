@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { testJwt } from './testJwt.js'
 
 // ElMessage 會在 jsdom 下嘗試掛 DOM，改成 spy 以便斷言「顯示了什麼訊息」。
 // vi.mock 會被提升到檔首，因此 mock 物件必須用 vi.hoisted 一起提升，
@@ -46,17 +47,24 @@ describe('http instance', () => {
   }
 
   describe('身分 header', () => {
-    it('已登入時附上 Authorization 與 X-User-Id', () => {
-      setToken('mgr001')
+    it('已登入時附上 Authorization', () => {
+      const t = testJwt('mgr001')
+      setToken(t)
       const cfg = runRequest()
-      expect(cfg.headers.Authorization).toBe('Bearer mgr001')
-      expect(cfg.headers['X-User-Id']).toBe('mgr001')
+      expect(cfg.headers.Authorization).toBe(`Bearer ${t}`)
+    })
+
+    it('不得再送 X-User-Id（R-01）', () => {
+      // 後端已改為從 JWT 的 sub 取得身分。裸的 X-User-Id 只在同時帶了閘道
+      // 密鑰時才構成身分，而瀏覽器沒有那個密鑰（也不該有）。
+      // 繼續送它只會在排查時誤導 —— 讓人以為身分是從那裡來的。
+      setToken(testJwt('mgr001'))
+      expect(runRequest().headers['X-User-Id']).toBeUndefined()
     })
 
     it('未登入時不附任何身分 header', () => {
       const cfg = runRequest()
       expect(cfg.headers.Authorization).toBeUndefined()
-      expect(cfg.headers['X-User-Id']).toBeUndefined()
     })
 
     it('baseURL 為相對路徑（dev 走 vite proxy、prod 同源）', () => {
@@ -86,7 +94,7 @@ describe('http instance', () => {
 
     it('清掉 session 並顯示登入失效訊息', async () => {
       const calls = stubLocation('/tasks')
-      setToken('mgr001')
+      setToken(testJwt('mgr001'))
       await runError({ response: { status: 401, data: {} } })
       expect(getToken(), 'session 必須被清掉，否則會卡在永遠 401 的畫面').toBeNull()
       expect(elMessage.error).toHaveBeenCalledWith(expect.stringContaining('登入'))
@@ -95,7 +103,7 @@ describe('http instance', () => {
 
     it('已在首頁時重新載入而非再次導向（避免無效導航）', async () => {
       const calls = stubLocation('/')
-      setToken('mgr001')
+      setToken(testJwt('mgr001'))
       await runError({ response: { status: 401, data: {} } })
       expect(calls.assign).toEqual([])
       expect(calls.reload).toBe(1)

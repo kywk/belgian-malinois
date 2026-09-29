@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.audit.model.OperationType;
@@ -81,7 +82,7 @@ public class DeploymentController {
     @PostMapping
     public Object deploy(@RequestParam("file") MultipartFile file,
                          @RequestParam(defaultValue = "") String name,
-                         @RequestHeader(value = "X-User-Id", required = false)
+                         @CallerId
                          String operatorId) throws IOException {
         String xml = new String(file.getBytes());
         String deployName = name.isEmpty() ? file.getOriginalFilename() : name;

@@ -10,13 +10,11 @@ import java.nio.charset.StandardCharsets;
 /**
  * BPMN 靜態檢查。設計器在存檔前會打這裡。
  *
- * <h2>⚠️ 這個端點沒有認證（security-audit P2-5）</h2>
+ * <h2>這個端點的暴露面（security-audit P2-5）</h2>
  *
- * <p>但那不是這個端點特有的問題：本專案<b>完全沒有 Spring Security</b>
- * （全 repo 找不到 {@code SecurityFilterChain} / {@code @EnableWebSecurity}），
- * 身分靠呼叫端自行帶的 {@code X-User-Id} 標頭，而那是可以隨便填的。
- * 所以在這裡單獨加認證沒有意義 —— 要修的是平台層的認證，那是獨立的題目，
- * 規模遠大於 P2。
+ * <p>⚠️ 這段說明已過期：當時本專案完全沒有 Spring Security，所以在單一端點
+ * 加認證沒有意義。平台層認證已於 R-01 完成，本端點現在要求
+ * {@code authenticated()}（見 {@code SecurityConfig}）。
  *
  * <p>這裡處理的是<b>這個端點特有</b>的暴露面：它是一個接受任意 XML 的解析入口。
  *

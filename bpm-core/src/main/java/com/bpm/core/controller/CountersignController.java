@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import com.bpm.core.security.CallerId;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import org.flowable.engine.TaskService;
@@ -103,7 +104,7 @@ public class CountersignController {
     public Map<String, Object> completeSubtask(@PathVariable String taskId,
                                                 @PathVariable String subtaskId,
                                                 @RequestBody(required = false) Map<String, String> req,
-                                                @RequestHeader(value = "X-User-Id", required = false)
+                                                @CallerId
                                                 String operatorId) {
         Task subtask = taskService.createTaskQuery().taskId(subtaskId).singleResult();
         if (subtask == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);

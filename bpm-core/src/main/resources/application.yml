@@ -132,6 +132,30 @@ bpm:
   upload:
     dir: ./uploads
   bpmn-definitions-dir: ./bpmn-definitions
+  security:
+    jwt:
+      # 本服務<b>只驗證</b> JWT，不簽發、不處理 OIDC 流程 —— 那由另一個服務負責。
+      #
+      # prod：指向企業 IdP，Spring Security 會抓它的 JWKS 驗簽章與 issuer。
+      # 由 ${OIDC_ISSUER_URI} 提供，未設定即啟動失敗（JwtSecurityValidator）。
+      issuer-uri: ${OIDC_ISSUER_URI:}
+      # dev：對稱密鑰。沒有 IdP 也能開發，token 由 scripts/dev-token.sh
+      # 用同一組密鑰產生 —— 那個腳本在應用之外，所以「只驗證不簽發」仍成立。
+      #
+      # ⚠️ prod profile 下設定這個值會讓啟動失敗：任何知道它的人都能簽發
+      # 有效身分。HS256 要求至少 32 bytes。
+      dev-secret: bpm-dev-jwt-secret-do-not-use-in-production
+    gateway:
+      # Server 之間呼叫的認證。預設關閉 —— 漏設的結果是「那條路徑不可用」
+      # 而非「任何人都能偽造身分」。
+      enabled: true
+      # 啟用時必填。沒有密鑰的話任何能連到應用 port 的人都能用 X-User-Id
+      # 偽造身分，那正是本次要修掉的狀態。
+      shared-secret: bpm-dev-gateway-secret-do-not-use-in-production
+      # 選用的來源位址白名單（完整位址，或以 . 結尾的前綴）。
+      # 留空代表不限制來源 —— 密鑰仍是必要條件。
+      # 容器環境的 IP 是動態的，所以不建議只靠這個。
+      trusted-proxies:
   lint:
     # /api/bpmn/lint 接受的 XML 上限（bytes）。這是一個無認證的 XML 解析入口，
     # 而 @RequestBody String 會把整份內容讀進記憶體（security-audit P2-5）。
@@ -206,6 +230,15 @@ spring:
       on-profile: prod
 
 bpm:
+  security:
+    jwt:
+      # prod 不可有 dev 密鑰（JwtSecurityValidator 會拒絕啟動）。
+      dev-secret:
+    gateway:
+      # server 之間的路徑由部署環境決定要不要開。開了就必須給密鑰。
+      enabled: ${GATEWAY_AUTH_ENABLED:false}
+      shared-secret: ${GATEWAY_SHARED_SECRET:}
+      trusted-proxies: ${GATEWAY_TRUSTED_PROXIES:}
   external:
     # 關掉開發 fixture。組織與權限是授權的事實來源，
     # 正式環境用寫死的 9 人 fixture 做授權判定是不可接受的。

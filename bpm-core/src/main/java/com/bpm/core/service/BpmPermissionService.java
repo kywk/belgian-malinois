@@ -114,6 +114,17 @@ public class BpmPermissionService {
         return userPermissions(userId).contains(permCode);
     }
 
+    /**
+     * 使用者持有的權限碼。
+     *
+     * <p>公開是為了讓 {@code AuthorityResolver} 把它們轉成 Spring Security 的
+     * authorities —— 授權規則因此能用權限中心的同一套詞彙
+     * （{@code hasAuthority("audit:log:read")}），不必再維護一份角色映射表。
+     */
+    public List<String> getUserPermissions(String userId) {
+        return userPermissions(userId);
+    }
+
     /** 取使用者的權限清單（快取），冷熱路徑回傳相同的資料結構。 */
     private List<String> userPermissions(String userId) {
         String key = "perm:user:" + userId;

@@ -24,10 +24,11 @@ http.interceptors.request.use((config) => {
   const { userId, raw } = currentIdentity()
   if (raw) {
     config.headers['Authorization'] = `Bearer ${raw}`
-    // ⚠️ X-User-Id 是 mock 期間後端取得身分的方式（後端目前信任此 header）。
-    // 真實 JWT 上線後應移除這行，改由後端從 token 推導身分 —— 只要 server
-    // 還從 header/參數讀身分，加了 JWT 仍然可以冒用他人核決。見 backlog R-01。
-    config.headers['X-User-Id'] = userId
+    // ⚠️ 不要再送 X-User-Id（R-01）。
+    //
+    // 後端已改為從 JWT 的 sub 取得身分；裸的 X-User-Id 只在請求同時帶了
+    // 閘道密鑰時才構成身分，而瀏覽器沒有那個密鑰（也不該有）。
+    // 繼續送它只會在排查時誤導 —— 讓人以為身分是從那裡來的。
   }
   return config
 })
