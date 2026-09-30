@@ -175,4 +175,48 @@ class ExternalSystemPolicyTest {
             assertThat(policy.isProcessKeyAllowed(s, "anything")).isTrue();
         }
     }
+
+    /**
+     * {@code allowedCandidateGroups}（#88 政策 B）。
+     *
+     * <p>守衛層（{@code ExternalActorGuardTest}）已經把它走過一遍；
+     * 這裡補的是<b>只有這一層才看得到</b>的形狀：admin UI 自由填寫時
+     * 可能存進資料庫的<b>逗號分隔</b>格式（見 {@link #CommaSeparated} 的說明）。
+     */
+    @Nested
+    @DisplayName("allowedCandidateGroups")
+    class CandidateGroups {
+
+        private ExternalSystem withGroups(String raw) {
+            ExternalSystem s = new ExternalSystem();
+            s.setSystemId("erp");
+            s.setAllowedCandidateGroups(raw);
+            return s;
+        }
+
+        @Test
+        @DisplayName("逗號分隔格式可用（admin UI 自由填寫會存成這個）")
+        void commaSeparatedAdminUiFormat() {
+            ExternalSystem s = withGroups("dept001, hr:leave:approve ,dept002");
+            assertThat(policy.isCandidateGroupAllowed(s, "dept001")).isTrue();
+            assertThat(policy.isCandidateGroupAllowed(s, "hr:leave:approve")).isTrue();
+            assertThat(policy.isCandidateGroupAllowed(s, "dept002")).isTrue();
+            assertThat(policy.isCandidateGroupAllowed(s, "dept003")).isFalse();
+        }
+
+        @Test
+        @DisplayName("格式錯誤 → 拒絕全部（fail-closed），不得當成不限制")
+        void malformedFailsClosed() {
+            // 方向很重要：把壞掉的設定當成「不限制」等於把整個白名單打開，
+            // 而管理員的下一個動作通常是「沒生效，再存一次」。
+            ExternalSystem s = withGroups("[not json");
+            assertThat(policy.isCandidateGroupAllowed(s, "dept001")).isFalse();
+        }
+
+        @Test
+        @DisplayName("有清單時 null 群組不得放行（空字串群組不是任何人的群組）")
+        void nullGroupDeniedAgainstList() {
+            assertThat(policy.isCandidateGroupAllowed(withGroups("[\"dept001\"]"), null)).isFalse();
+        }
+    }
 }

@@ -19,6 +19,17 @@
         </template>
       </el-table-column>
       <!--
+        ⚠️ 這一欄與表單的輸入框是同一件事的兩個面（#88 政策 B）。
+        沒有它，管理員只能靠「點進編輯才知道」確認一個系統能被指定哪些待辦池 ——
+        而「以為自己看得到」正是授權類缺陷發生的前提（與下面代發授權欄位同一個道理）。
+      -->
+      <el-table-column label="允許候選群組" min-width="180">
+        <template #default="{ row }">
+          <el-tag v-if="!row.allowedCandidateGroups" type="info" size="small">不限制</el-tag>
+          <el-tag v-for="k in parseJson(row.allowedCandidateGroups)" :key="k" size="small" style="margin:2px">{{ k }}</el-tag>
+        </template>
+      </el-table-column>
+      <!--
         ⚠️ 這一欄與表單裡的開關是同一件事的兩個面。
         沒有它，管理員只能靠「點進編輯才知道」來確認一個系統有沒有代發授權 ——
         而授權繼承的缺陷（見 resetForm 的註解）正是發生在「以為自己看得到」的
@@ -58,6 +69,30 @@
         </el-form-item>
         <el-form-item label="允許流程 (JSON array)">
           <el-input v-model="form.allowedProcessKeys" placeholder='["leave-approval","purchase-approval"]' />
+        </el-form-item>
+        <!--
+          ⚠️ 這個欄位<b>必須</b>在 blankForm() 裡，否則會製造一個比 #68a 更難察覺的
+          授權缺陷（#88 政策 B）：
+
+          applyForm() 只從列資料挑 blankForm() 認得的鍵，而 submitForm() 送的是
+          {...form}。少了這一行，編輯任一系統（例如只改名字）都會讓 payload
+          裡沒有 allowedCandidateGroups —— 後端 PUT 是整欄覆寫，於是
+          **儲存一次就把白名單清成「不限制」**，而畫面上沒有任何東西顯示這件事。
+          而且被靜默放寬的方向是「可以指定更多待辦池」，也就是授權範圍。
+
+          所以這裡除了把它加進 blankForm()，也給它一個輸入框 ——
+          「沒有人能設定的授權」本身就是缺陷（allowOnBehalfOf 的註解是同一句話）。
+        -->
+        <el-form-item label="允許候選群組 (JSON array)">
+          <el-input v-model="form.allowedCandidateGroups" placeholder='["dept001","hr:leave:approve"]' />
+          <div style="color:#909399;font-size:13px;line-height:1.6;margin-top:4px">
+            外部系統呼叫 <code>/api/external/process-instances</code> 時，
+            <code>firstTaskCandidateGroups</code> 的<b>每一個</b>群組都必須在這份清單內，
+            否則整個請求會被 403 擋下且不啟動流程。
+            <br />
+            ⚠️ <b>留空代表「不限制」</b>（與「允許流程」同一條規則），
+            也就是該系統可以指定任意群組的待辦池。
+          </div>
         </el-form-item>
         <el-form-item label="允許操作">
           <el-checkbox-group v-model="actions">
@@ -138,6 +173,13 @@ function blankForm() {
     systemName: '',
     contactEmail: '',
     allowedProcessKeys: '',
+    // ⚠️ #88 政策 B：必須在這裡（見模板裡同一個欄位的註解）。
+    // 少了它，編輯任一系統都會讓 payload 沒有這個鍵，而後端 PUT 是整欄覆寫
+    // → 儲存一次就把白名單靜默清成「不限制」。
+    //
+    // 預設必須是空字串（＝後端的 null ＝不限制），與後端
+    // ExternalSystemPolicy.Kind.UNRESTRICTED 同一個方向。
+    allowedCandidateGroups: '',
     ipWhitelist: '',
     callbackUrl: '',
     // R-20 的代發授權。預設必須是 false（與後端 create() 的

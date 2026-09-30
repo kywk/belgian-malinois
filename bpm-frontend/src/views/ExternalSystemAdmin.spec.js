@@ -84,6 +84,8 @@ const erpRow = {
   allowOnBehalfOf: true,
   createdAt: '2026-09-01T00:00:00Z',
   lastUsedAt: '2026-09-20T00:00:00Z',
+  // #88 政策 B：候選群組白名單。
+  allowedCandidateGroups: '["dept001"]',
 }
 
 async function mountAdmin(rows = [erpRow]) {
@@ -291,5 +293,118 @@ describe('ExternalSystemAdmin 的代發授權開關（#68a）', () => {
 
     expect(s.systems).toHaveLength(1)
     expect(s.systems[0].allowOnBehalfOf).toBe(true)
+  })
+})
+
+/**
+ * #88 政策 B：候選群組白名單（{@code allowedCandidateGroups}）必須在表單裡。
+ *
+ * <h3>⚠️ 這不是「補一個輸入框」，是防一個授權缺陷</h3>
+ *
+ * <p>{@code applyForm()} 只從列資料挑 {@code blankForm()} 認得的鍵，而
+ * {@code submitForm()} 送的是 <code>{...form}</code>。所以若
+ * {@code allowedCandidateGroups} 不在 {@code blankForm()} 裡：
+ *
+ * <pre>
+ *   1. 編輯 erp（已設定 ["dept001"] 白名單）→ 只改名字 → 儲存
+ *   2. payload 沒有 allowedCandidateGroups 這個鍵
+ *   3. 後端 PUT 是整欄覆寫 → 白名單變成 null ＝「不限制」
+ *   4. 該系統從此可以把單子丟進任意待辦池，而畫面上完全看不出來
+ * </pre>
+ *
+ * <p>與 #68a 的形狀相同但<b>方向更糟</b>：#68a 是新系統繼承了不該有的權限，
+ * 這個是<b>既有的權限被靜默移除</b>——而且被移除的方向是放寬。
+ */
+describe('ExternalSystemAdmin 的候選群組白名單（#88 政策 B）', () => {
+  beforeEach(() => {
+    getExternalSystems.mockClear()
+    getExternalSystems.mockResolvedValue([])
+    createExternalSystem.mockClear()
+    createExternalSystem.mockResolvedValue({ apiKey: 'sk-new' })
+    updateExternalSystem.mockClear()
+    updateExternalSystem.mockResolvedValue({})
+  })
+
+  it('編輯既有系統時必須把白名單載進表單', async () => {
+    const wrapper = await mountAdmin()
+    const s = state(wrapper)
+
+    s.editSystem(erpRow)
+    expect(s.form.allowedCandidateGroups,
+      '前置條件：白名單必須從列資料載入，否則後續所有斷言都是對空字串的')
+      .toBe('["dept001"]')
+  })
+
+  it('⚠️ 只改名字的儲存不得弄掉白名單（少帶欄位 = 靜默放寬授權）', async () => {
+    const wrapper = await mountAdmin()
+    const s = state(wrapper)
+
+    s.editSystem(erpRow)
+    s.form.systemName = 'ERP 系統（改名）'
+    await s.submitForm()
+    await flush()
+
+    const payload = updateExternalSystem.mock.calls[0][1]
+    expect(payload.allowedCandidateGroups,
+      '後端 PUT 是整欄覆寫：漏掉這個欄位等於把白名單清成「不限制」')
+      .toBe('["dept001"]')
+  })
+
+  it('設定新的白名單必須送得出去（後端靠它授權）', async () => {
+    const wrapper = await mountAdmin([{ ...erpRow, allowedCandidateGroups: '' }])
+    const s = state(wrapper)
+
+    s.editSystem({ ...erpRow, allowedCandidateGroups: '' })
+    s.form.allowedCandidateGroups = '["dept001","dept002"]'
+    await s.submitForm()
+    await flush()
+
+    expect(updateExternalSystem.mock.calls[0][1].allowedCandidateGroups)
+      .toBe('["dept001","dept002"]')
+  })
+
+  it('建立新系統時預設為「不限制」（空字串 → 後端 null → UNRESTRICTED）', async () => {
+    const wrapper = await mountAdmin()
+    const s = state(wrapper)
+
+    clickCreate(s)
+    expect(s.form.allowedCandidateGroups,
+      '預設不得是某個群組 —— 那是授權，而授權必須由人明確給')
+      .toBe('')
+
+    s.form.systemId = 'brand-new'
+    s.form.systemName = '全新系統'
+    await s.submitForm()
+    await flush()
+
+    expect(createExternalSystem.mock.calls[0][0].allowedCandidateGroups).toBe('')
+  })
+
+  it('停用後再啟用不得順手清掉白名單', async () => {
+    const wrapper = await mountAdmin([{ ...erpRow, enabled: false }])
+    const s = state(wrapper)
+
+    await s.toggleEnabled({ ...erpRow, enabled: false })
+    await flush()
+
+    const payload = updateExternalSystem.mock.calls[0][1]
+    expect(payload.enabled).toBe(true)
+    expect(payload.allowedCandidateGroups,
+      'toggleEnabled 送的是 {...row}，所以 row 有沒有帶到這個欄位是後端 GET 的責任')
+      .toBe('["dept001"]')
+  })
+
+  it('列表必須實際顯示「允許候選群組」這一欄與「不限制」', async () => {
+    // ⚠️ 用「完整 mount」而不是 shallow（與代發授權那一條同一個理由）：
+    // shallow 之下 el-table 整個被 stub 掉，連欄位標題都不會渲染。
+    getExternalSystems.mockResolvedValue([erpRow, { ...erpRow, systemId: 'erp2', allowedCandidateGroups: null }])
+    const wrapper = mount(Admin, { global: { plugins: [ElementPlus] } })
+    await flush()
+
+    expect(wrapper.text()).toContain('允許候選群組')
+    expect(wrapper.text()).toContain('dept001')
+    // 空值必須顯示成「不限制」，不能顯示成一個空欄位 ——
+    // 「空白欄位」與「不限制」的差別正是授權範圍的差別。
+    expect(wrapper.text()).toContain('不限制')
   })
 })

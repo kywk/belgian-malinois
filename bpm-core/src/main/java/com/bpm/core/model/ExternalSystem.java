@@ -69,6 +69,32 @@ public class ExternalSystem {
     @Column(nullable = false)
     private Boolean allowOnBehalfOf = false;
 
+    /**
+     * 此系統被授權指定的候選群組白名單（#88 政策 B）。
+     *
+     * <p>改動前 {@code firstTaskCandidateGroups} <b>完全沒有任何驗證</b> ——
+     * 外部系統可以把案件丟進任意群組的待辦池（部門代碼、權限碼、JWT authority
+     * 這三種來源，見 {@code CandidateGroupMembership}），那是授權範圍問題。
+     *
+     * <p>⚠️ <b>空值的語意是「不限制」，不是「禁止所有群組」</b>。
+     * 這不是本欄位的特例，而是 {@link com.bpm.core.external.ExternalSystemPolicy}
+     * 對<b>所有</b>授權欄位共用的四態規則（{@code Kind.UNRESTRICTED}），
+     * 與 {@code allowedProcessKeys}／{@code allowedActions} 完全一致。
+     * 兩個後果：
+     * <ul>
+     *   <li>migration 之後既有資料列一律為 null，而<b>不需要回填</b>
+     *       （見 V4__external_system_allowed_candidate_groups.sql）。</li>
+     *   <li>⚠️ 反過來說，<b>對既有系統而言這個檢查完全沒有效果</b>，直到管理員
+     *       逐一設定。與 {@code allowedProcessKeys} 是同一個已知狀況（R-21：
+     *       寫入端應強制必填），本工項刻意不順手改那個政策。</li>
+     * </ul>
+     *
+     * <p>格式與 {@code allowedProcessKeys} 同樣是 JSON array 字串
+     * （{@code ExternalSystemPolicy} 另外容忍逗號分隔格式）。
+     */
+    @Column(columnDefinition = "NVARCHAR(MAX)")
+    private String allowedCandidateGroups; // JSON array string
+
     @Column(updatable = false)
     private Instant createdAt;
 
@@ -99,6 +125,8 @@ public class ExternalSystem {
     public void setEnabled(Boolean enabled) { this.enabled = enabled; }
     public Boolean getAllowOnBehalfOf() { return allowOnBehalfOf; }
     public void setAllowOnBehalfOf(Boolean allowOnBehalfOf) { this.allowOnBehalfOf = allowOnBehalfOf; }
+    public String getAllowedCandidateGroups() { return allowedCandidateGroups; }
+    public void setAllowedCandidateGroups(String allowedCandidateGroups) { this.allowedCandidateGroups = allowedCandidateGroups; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getLastUsedAt() { return lastUsedAt; }

@@ -1,11 +1,17 @@
 package com.bpm.core.external;
 
+import com.bpm.core.model.ExternalSystem;
 import com.bpm.core.service.OrgService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.server.ResponseStatusException;
+
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * 外部系統指名的身分，必須是組織系統認識的人（#88）。
@@ -77,30 +83,68 @@ import org.springframework.web.server.ResponseStatusException;
  * 前提之一是組織系統必須 fail-closed（查不到就報錯）。
  * 前綴比對不依賴那個前提，所以保留它。
  *
- * <h2>⚠️ fail-closed：組織系統不可用時一律拒絕（政策）</h2>
+ * <h2>⚠️ 故障與拒絕必須分開：查無此人 → 400，組織系統故障 → 503</h2>
  *
- * <p>本方法的 {@code catch} 捕捉<b>所有</b>例外，包含連線逾時、5xx、
- * 以及「查無此人」的 404 —— 三者的結果都是 400 拒絕。方向是<b>刻意</b>的：
- * 放行（fail-open）等於回到缺陷本身（指派給一個沒有人能持有的身分），
- * 而這是簽核系統裡最難察覺的失敗型態。稽核那條線也是同一個方向
- * （fail-closed 是本專案的既定原則）。
+ * <p>本方法的 {@code catch} 捕捉<b>所有</b>例外，但<b>它們不是同一件事</b>，
+ * 而回應必須分開（2026-09-30 使用者裁決）:
  *
- * <p>但代價必須寫清楚：<b>組織系統掛掉時，外部系統發起流程會全部被拒</b>，
- * 而且回的是 400（呼叫端通常<b>不會</b>重試）。若 PM 認為應該改回 503
- * 讓批次重試，那是<b>狀態碼語意</b>的政策決定（且會改變 {@code onBehalfOf}
- * 現有的行為），不該由實作端默默決定。見本次工項報告。
+ * <table border="1">
+ *   <caption>組織查詢失敗的兩種語意</caption>
+ *   <tr><th>情形</th><th>判準</th><th>回應</th><th>呼叫端該做什麼</th></tr>
+ *   <tr><td>組織系統<b>明確回答「查無此人」</b></td>
+ *       <td>HTTP 404（{@code MockOrgController} 對 fixture 外的 id 就是這樣）</td>
+ *       <td><b>400</b></td><td>改 payload（換成對的員工編號）</td></tr>
+ *   <tr><td>組織系統<b>故障</b></td>
+ *       <td>連線逾時／無法連線／5xx／其他 4xx／回應無法解析</td>
+ *       <td><b>503</b></td><td>稍後重試，payload 不用改</td></tr>
+ * </table>
  *
- * <p>因為 400 同時涵蓋「payload 不對」與「我們查不到」，錯誤訊息必須
- * 把兩者都點名 —— 否則營運看到「不是組織系統認識的人員」會去查
- * 呼叫端的參數，而真正的故障在基礎設施。{@code log.warn} 是同一個目的：
- * 讓運維不必靠讀錯誤訊息來分辨。
+ * <p><b>為什麼故障要回 503 而不是 400</b>：守衛在
+ * {@code startProcessInstanceByKey} <b>之前</b>，被拒時沒有任何東西被建立 ——
+ * 所以重試是<b>安全的</b>，不會產生重複流程。用 400 會讓批次不重試，
+ * 組織恢復後要人工重跑。
  *
- * <h2>為什麼是 400 而不是 403／404</h2>
+ * <p><b>為什麼仍要 fail-closed（不放行）</b>：方向不變。放行等於回到缺陷本身
+ * （指派給一個沒有人能持有的身分），而這是簽核系統裡最難察覺的失敗型態。
+ * 裁決改的是<b>狀態碼語意</b>（要不要重試），不是<b>要不要拒絕</b>。
+ * 兩者常被混為一談 —— fail-open 是安全問題，400/503 是可用性問題。
  *
- * <p>400 = 「請求本身不完整或不被允許，該改的是 payload」，與
- * {@code allowedProcessKeys} 的 403（授權）與流程定義不存在的 404
- * 必須能分辨。呼叫端拿到 400 就會去改參數，而「把員工編號換成對的」
- * 正是它能自己做的事。
+ * <h2>⚠️ 分界線是「HTTP 404」，而且為什麼它剛好等於「查無此人」</h2>
+ *
+ * <p>判準是「<b>組織系統有沒有給出一個明確的拒絕</b>」，在 HTTP 上就是
+ * 404（{@code HttpClientErrorException.NotFound}）：
+ * <ul>
+ *   <li>本專案的 {@code MockOrgController} <b>刻意 fail-closed</b>
+ *       （P2-7）—— 對 fixture 外的 id 丟 404，訊息寫明「fixture 裡沒有這個」。
+ *       改動前它對任何 id 都捏造 {@code mgr001}，而那正是 #83 的缺陷
+ *       兩輪都沒被任何測試抓到的原因。所以 <b>404 = 明確拒絕</b>。</li>
+ *   <li>而鏈頂人員（{@code dir001}／{@code admin001}）<b>不是</b> 404：
+ *       mock 對他們回 {@code {}}（存在但沒有主管），這是本 repo
+ *       <b>刻意保留</b>的區分 —— 一個實在的組織系統也必須這樣回答，
+ *       否則「查得到但沒有主管」與「查不到」就無法分辨。</li>
+ * </ul>
+ *
+ * <p><b>為什麼其他 4xx 不算「查無此人」</b>：組織系統回 401／403 代表的是
+ * 「<b>我們</b>沒被允許查」（憑證或權限設定錯了），不是「這個人不存在」。
+ * 回 400 會告訴呼叫端「改你的 payload」，而正確的動作是修我們自己的設定 ——
+ * 那正是「400 讓批次不重試」這個後果最貴的一種。
+ *
+ * <h2>⚠️ 分不出來的情形：200 但內容不足</h2>
+ *
+ * <p>若組織系統對未知 id 回 <b>200 + 空的內容</b>（既不捏造也不報錯），
+ * 本方法會把它當成「他存在但沒有主管」而放行。這是本類別註解早就記錄過的
+ * 前提：<b>「組織系統說這個人存在」只有在它 fail-closed 時才是可信證據。</b>
+ * 不為此多打一次網路（那要一個「這個人存不存在」的 API，而
+ * {@code getDirectManager} 的語意已經被整個 repo 的 BPMN 運算式依賴）。
+ *
+ * <p>因為 400 與 503 分開了，錯誤訊息也<b>分成兩句</b>：400 那句講「換 id」，
+ * 503 那句講「我們查不到、請稍後重試」。運維不必靠讀錯誤訊息來分辨故障在哪一側。
+ *
+ * <h2>為什麼是 400／503 而不是 403／404</h2>
+ *
+ * <p>403 = 授權（那是 {@code allowedProcessKeys} 與候選群組白名單的位置），
+ * 404 = 資源不存在（流程定義不存在的位置）。這兩者都不能重複使用：
+ * 403 會確認物件存在，對可枚舉的 id 等於留枚舉管道。
  *
  * <h2>⚠️ 交易內的外部呼叫（security-audit P1-10）</h2>
  *
@@ -111,6 +155,8 @@ import org.springframework.web.server.ResponseStatusException;
  * 風險由 {@code OrgService} 既有的逾時設定（connect 2s／read 3s）
  * 與 Redis 快取（60 分鐘 TTL）控住，<b>本類別不新增這個風險</b> ——
  * {@code onBehalfOf} 的驗證本來就在同一個交易內做同一件事。
+ * 拋 {@code ResponseStatusException} 與拋任何其他例外一樣會 rollback 交易，
+ * 而此時沒有任何資料被寫入，所以 rollback 正是想要的行為。
  *
  * <h2>為什麼把 {@code onBehalfOf} 的既有檢查也收進來</h2>
  *
@@ -124,27 +170,39 @@ import org.springframework.web.server.ResponseStatusException;
  * 兩套形狀 —— 而且兩邊的錯誤訊息會不一致。
  * 改動只是把既有那段換成本類別，<b>行為不變</b>
  * （未知員工仍然是 400），多出來的是空白與前綴兩層以及統一的訊息。
+ *
+ * <h2>候選群組白名單為什麼也在這個類別裡（#88 政策 B）</h2>
+ *
+ * <p>「外部系統指名的東西必須是被授權的」是同一個主題的兩面：
+ * {@code firstTaskAssignee} 那面是「必須是人」，{@code firstTaskCandidateGroups}
+ * 那面是「必須是被授權的群組」。放在一起的理由不是方便，而是
+ * <b>兩者都必須擋在 {@code startProcessInstanceByKey} 之前</b> ——
+ * 放錯位置就會留下一個已經存在、卻沒有人能簽的案件。
  */
 @Component
 public class ExternalActorGuard {
 
     private static final Logger log = LoggerFactory.getLogger(ExternalActorGuard.class);
 
+    /** 候選群組白名單是授權設定，規則由 ExternalSystemPolicy 唯一負責。 */
     private final OrgService orgService;
+    private final ExternalSystemPolicy policy;
 
-    public ExternalActorGuard(OrgService orgService) {
+    public ExternalActorGuard(OrgService orgService, ExternalSystemPolicy policy) {
         this.orgService = orgService;
+        this.policy = policy;
     }
 
     /**
-     * 這個欄位指名的身分必須是組織系統認識的人，否則 400。
+     * 這個欄位指名的身分必須是組織系統認識的人。
      *
      * <p>{@code userId} 為 {@code null} 時<b>直接放行</b>：
      * 「沒有指名」是呼叫端合法的選擇（改用候選群組或代發），
      * 由呼叫端自己的「至少有一個」規則處理，不是這條規則的事。
      *
      * @param field  body 欄位名，放進錯誤訊息讓呼叫端知道要改哪一個
-     * @throws ResponseStatusException 400，理由有三種（見類別註解）
+     * @throws ResponseStatusException 400（查無此人）或 503（組織系統故障），
+     *         分界線見類別註解「故障與拒絕必須分開」
      */
     public void requireKnownPerson(String field, String userId) {
         if (userId == null) return;
@@ -201,18 +259,114 @@ public class ExternalActorGuard {
         // 那會擋掉總監本人（見 InitialAssigneeResolverTest 那個
         // 「捏造的答案恰好等於預期值」的老教訓）。
         //
-        // catch 全部例外是刻意的 fail-closed，見類別註解。
+        // catch 全部例外是刻意的 fail-closed（不論故障還是查無此人都不放行），
+        // 但**狀態碼分開** —— 見類別註解「故障與拒絕必須分開」。
         try {
             orgService.getDirectManager(userId);
         } catch (Exception e) {
-            log.warn("外部系統指定的 {}={} 未通過組織系統查核，拒絕發起流程: {}",
-                    field, userId, e.toString());
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    field + "=" + userId + " 不是組織系統認識的人員，無法指派給他。"
-                            + "請確認 id 拼寫（大小寫、前後空白都會影響比對）。"
-                            + "若組織系統目前無法連線，本系統一律拒絕發起（fail-closed），"
-                            + "請稍後重試；若該人員確實存在，請改用 onBehalfOf 代員工發起。",
+            if (isDefinitiveRejection(e)) {
+                // 組織系統明確回答「查無此人」：呼叫端該改 payload。
+                log.warn("外部系統指定的 {}={} 不是組織系統認識的人員，拒絕發起流程: {}",
+                        field, userId, e.toString());
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        field + "=" + userId + " 不是組織系統認識的人員，無法指派給他。"
+                                + "請確認 id 拼寫（大小寫、前後空白都會影響比對）。"
+                                + "若該人員確實存在，請改用 onBehalfOf 代員工發起。",
+                        e);
+            }
+            // 我們沒拿到答案（連線逾時／無法連線／5xx／其他 4xx／無法解析）。
+            // log.error 而非 warn：這一筆是基礎設施故障，需要有人被通知。
+            log.error("組織系統查詢失敗（{}={}），無法判定該人員是否存在，"
+                    + "回 503 讓呼叫端稍後重試: {}", field, userId, e.toString(), e);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "組織系統目前無法查詢（" + e.getClass().getSimpleName() + "），"
+                            + "無法確認 " + field + "=" + userId + " 是否為有效人員，因此未發起流程。"
+                            + "這是暫時性問題，請稍後以相同的參數重試 —— "
+                            + "本次請求未建立任何流程實例，重試不會產生重複案件。",
                     e);
         }
+    }
+
+    /**
+     * 組織系統的回應是否是<b>明確的拒絕</b>（查無此人），而不是故障。
+     *
+     * <p>判準是 HTTP 404。理由見類別註解「分界線是 HTTP 404」。
+     *
+     * <h2>為什麼只認 404，其他 4xx 一律當故障</h2>
+     *
+     * <p>401／403 描述的是<b>我們</b>的問題（憑證或權限設定錯了），
+     * 不是「這個人不存在」。把它們當成 400 會讓呼叫端去改 payload，
+     * 而它改了也一樣失敗 —— 那是把「我們壞了」說成「你送錯了」。
+     *
+     * <p>⚠️ 刻意<b>不</b>用 {@code e instanceof RestClientResponseException}
+     * 搭配「4xx 都算拒絕」：那會讓一個壞掉的權限設定看起來像
+     * 「查無此人」，而症狀會變成批次大量回 400、沒有人查基礎設施。
+     * 預設方向是<b>把不確定當成故障</b>（503 會被重試、會被告警），
+     * 而不是當成拒絕（400 不會被重試、不會被告警）。
+     */
+    private static boolean isDefinitiveRejection(Exception e) {
+        return e instanceof HttpClientErrorException.NotFound;
+    }
+
+    /**
+     * 送來的每一個候選群組都必須在該系統的 {@code allowedCandidateGroups} 內
+     * （#88 政策 B）。
+     *
+     * <h2>為什麼回傳解析後的清單，而不是讓呼叫端自己再 split 一次</h2>
+     *
+     * <p>呼叫端原本是 {@code firstGroups.split(",")} 再逐個
+     * {@code addCandidateGroup}。若驗證與套用各自解析一次，就是
+     * <b>同一條規則兩套形狀</b>（#84／#86 的成因）：驗證過的清單與
+     * 實際寫進 identity link 的清單可能不一致（例如某個實作忘了 trim），
+     * 而且「驗證了 3 個群組、實際寫了 4 個」這種 bug 不會有任何錯誤。
+     * 由本方法回傳<b>同一份</b>清單，兩邊不可能對不起來。
+     *
+     * <h2>空白項目為什麼丟棄而不是拒絕</h2>
+     *
+     * <p>改動前 {@code " , "} 會被 split 成幾個空字串並原樣
+     * {@code addCandidateGroup(taskId, "")} —— 建立名為空字串的候選群組。
+     * 丟棄它們不是放寬：**沒有人會是空字串群組的成員**，所以丟棄不會讓
+     * 任何群組的成員看不到任務。它修掉的是兩個實際問題：
+     * <ul>
+     *   <li>設定了白名單時，空字串不在清單內 → 403 的訊息會指名一個
+     *       「看得見但看不懂」的群組名。</li>
+     *   <li>空字串的 identity link 會讓 {@code UnreachableTaskListener}
+     *       的 {@code hasCandidate} 為真（它只檢查 {@code getGroupId() != null}），
+     *       於是「實際上沒有任何人能簽」的情況<b>不會告警</b>。丟棄之後
+     *       listener 就會如實回報 —— 見 {@link #requireKnownPerson}
+     *       的空白那一層為什麼拒絕而這裡只丟棄。</li>
+     * </ul>
+     *
+     * <p>⚠️ <b>刻意不在這裡拒絕</b>「送出空白群組」：那是政策決定
+     * （該回 400 還是當成沒指定），本工項不代 PM 做。
+     * 但清單被丟空之後 {@code startProcess} 的「至少有一個」規則
+     * 會如實看到「沒有群組」，所以不會變成靜默卡死。
+     *
+     * @param sys   發起方；白名單為空時<b>不限制</b>（見 ExternalSystemPolicy）
+     * @param raw   body 的 {@code firstTaskCandidateGroups}（逗號分隔字串）
+     * @return 解析後的群組清單（trim 後、已丟棄空白項目、去重並保留順序）
+     * @throws ResponseStatusException 403（白名單不包含某個群組）
+     */
+    public List<String> requireAllowedCandidateGroups(ExternalSystem sys, String raw) {
+        if (raw == null) return List.of();
+
+        // 去重並保留順序：用 LinkedHashSet 讓 "dept001,dept001" 只寫一次，
+        // 同一組輸入的結果因此與書寫順序無關（deterministic）。
+        Set<String> groups = new LinkedHashSet<>();
+        for (String g : raw.split(",")) {
+            String name = g.trim();
+            if (name.isEmpty()) continue;
+            if (!policy.isCandidateGroupAllowed(sys, name)) {
+                log.warn("系統 {} 嘗試指定未授權的候選群組 {}（白名單: {}），拒絕發起流程",
+                        sys.getSystemId(), name, sys.getAllowedCandidateGroups());
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "此系統未被授權使用候選群組: " + name
+                                + "。firstTaskCandidateGroups 的每一個群組都必須先被管理員"
+                                + "授權（allowedCandidateGroups）；請改用已授權的群組，"
+                                + "或請管理員在外部系統設定中授權這個群組。");
+            }
+            groups.add(name);
+        }
+        return List.copyOf(groups);
     }
 }
