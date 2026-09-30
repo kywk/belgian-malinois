@@ -49,7 +49,7 @@ backlog 原本寫「只要該 key 已有任何一筆規格，重複儲存必定�
 | 前端 | Vue 3.4 + Vite 5 + Element Plus |
 | DB | MSSQL 2022，**三個資料庫**：`bpm_core_db`／`bpm_audit_db`／`bpm_form_db` |
 | 其他 | RabbitMQ、Redis、MailHog。Docker 是 **OrbStack** |
-| 測試 | 後端 **587** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **87** 個（Vitest） |
+| 測試 | 後端 **629** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **93** 個（Vitest） |
 | 分支 | `feature/round2-hardening`，比 `main` 多 9 個 commit，**未 push** |
 | 部署 | **尚未部署，只有本機開發** |
 
@@ -454,7 +454,34 @@ agent 用 `javap -p -c` 讀 `flowable-engine-7.2.0.jar` 的實際編譯產物，
 「這兩種狀態在正常流程下不可達」是**推導**（Flowable 結束流程實例時在同一個交易
 刪掉 task 與 pid 的列）。agent 有誠實標示這個區別。
 
-`feature/round2-hardening` = `29a7824`（#86 #79 #81 #87 #80 #83 全部合併），**未 push**。
-已完成 **#86 #79 #87 #81 #80 #83 #88 #89 #68(a/b/d)**、**#67 部分**。後端 **585** 測試全綠（**容器停止狀態下跑的**）、
-前端 **87** 全綠、`acceptance-test.sh` PASS 7 / FAIL 0。工作樹乾淨。
-**待裁決：#79-2、#87-2、#87-3（見第 8 節）。尚未部署。**
+## 11. 現況一句話
+
+**2026-09-30 收尾（第二輪全部完成）**：`feature/round2-hardening` 已 merge 進 `main`，**未 push**。
+
+本輪完成 **#86 #79 #81 #87 #80 #83 #88 #89 #67（節點層）#68(a/b/d)**，
+加上九項使用者裁決中的四項實作（**#88 政策 A/B、#87-2/3、#79-2**）。
+後端 **629** 測試全綠（**容器停止狀態下跑的**）、前端 **93** 全綠、
+`acceptance-test.sh` PASS 7 / FAIL 0。工作樹乾淨、**所有 worktree 與
+feature 分支已清除**。**尚未部署。**
+
+**V4 migration 已在真實 dev 庫首次套用成功**（`flyway_schema_history`
+`version=4, success=1`）—— 這是本專案**第一次實際跑 Flyway migration**。
+寫新的 migration 時可參考
+`V4__external_system_allowed_candidate_groups.sql` 的風格：可空欄位 +
+`COL_LENGTH` 存在性判斷（讓它能在 ddl-auto 建出的舊 dev DB 上重跑）+
+把「為什麼可空、既有資料要不要回填」的權衡寫在註解裡。
+
+## 12. 尚未處理的（下一輪）
+
+| 項目 | 說明 |
+|---|---|
+| **#90** | 申請人端沒有代發標示（`MyApplications.vue` 從未渲染 `onBehalf`）。純前端 0.2d |
+| **#91** | `flowable:assignee="${var}"` 求值為空白 → 候選群組 count=0、**管理員部署即可觸發**。#89 讓它看得見但沒擋 |
+| **#92** | `setAssignee(taskId, "nobody-xyz")`（未知的人）不告警。listener 無法不查組織系統就判斷，而那會在簽核交易內打 HTTP |
+| **#67 流程層** | `ProcessCompletedListener` 的流程級 webhook 仍無投遞設定來源（斷線 A 的第四個實例）。spec §11.4 只定義節點層 |
+| **#67 前端** | `modeling.updateProperties(element, { extensionElements })` 那一步沒有自動化測試覆蓋 |
+| **#25** | webhook payload 缺口：`task.timeout` 事件、候選人、`operatorName`、`comment` |
+| **#93**（新） | `firstTaskCandidateGroups` 送 JSON array 會 **500**（`ClassCastException`），而 spec §9.1.3 示範的正是 array。**請求契約待定**（spec 可能是舊的） |
+| **#82** | 前端接權限碼（架構決定，要先問使用者） |
+| **#68** | R-20 剩餘：`ExternalSystemAdmin.vue` 的 `resetForm()` 繼承授權已修，但 admin UI 開關本身已完成；僅剩 docs 收尾 |
+| **#70** | Boot 4 + Flowable 8。前置調查完成，從純 pom 的 S5-0a～S5-0e 開始。⚠️ **升級時 `ExtensionElementPreservationTest` 會是第一個紅的** |

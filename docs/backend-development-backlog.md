@@ -19,7 +19,7 @@
 - **audit-log-service**：已於 2026-04-24 併入 bpm-core；稽核為 fail-closed（寫不進就回滾）
 - **認證**：平台層 JWT 驗證＋信任閘道已完成（R-01）；個案層級授權仍由各 controller 負責
 - **外圍系統整合（組織／權限）仍以 Mock 替代**，真正的權限中心見 `docs/rbac-enterprise-backlog.md`
-- **測試**：後端 587 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 87 個（Vitest）
+- **測試**：後端 **629** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **93** 個（Vitest）
 - 安全與正確性修復（P0／P1／P2、R 編號）另見 `docs/plan/2026-09-28-security-audit.md`、
   `docs/plan/2026-09-28-remediation-backlog.md`，已完成部分列在 `docs/backend-completed-items.md` 第八節
 
@@ -299,8 +299,8 @@
 | 基礎設施 | 4 | 0 | 2 | 2 | 3.5d |
 | Form Service | 6 | 2 | 2 | 2 | 6d |
 | 跨服務整合 | 6 | 1 | 4 | 1 | 17d |
-| 2026-09-29 新增 | 28 | 20 | 1 | 7 | 24d |
-| **合計** | **92** | **42** | **21** | **29** | **~110.3 人天** |
+| 2026-09-29 新增 | 28 | 23 | 1 | 4 | 21d |
+| **合計** | **92** | **45** | **21** | **26** | **~107.3 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
