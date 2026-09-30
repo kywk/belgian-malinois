@@ -256,19 +256,55 @@ export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
 
 ---
 
-## 10. 下一輪若要並行 subagent —— 必須先做這件事
+## 10. 並行 subagent 的標準流程（2026-09-30 第二次並行，已落實）
 
-**每個 agent 一個獨立 git worktree。** 2026-09-30 兩個 agent 共用主樹時，
-實際發生了檔案被捲進對方 commit、backlog 被整份還原掉的資料損失（見 4.5）。
+上一輪的教訓（4.5）已轉成本輪的實際做法。**這一套流程可用，照它做。**
+
+### 10.1 PM 在分派前
 
 ```bash
-git worktree add /tmp/gh-<工項號> <base-commit>
-# 給 agent 的 prompt 要明講：cd /tmp/gh-<工項號>，且 git add 必須用明確路徑
-git worktree remove /tmp/gh-<工項號> --force
+cd /Users/kywk/kywk/nanshan/greyhound
+git status --short          # 必須乾淨，否則 worktree 的 base 是髒的
+BASE=$(git rev-parse --short HEAD)
+for n in 83 80 81; do git worktree add /tmp/gh-$n $BASE; done
+git worktree list            # 確認每個 agent 一個
 ```
 
-⚠️ **worktree 必須是 agent 唯一的操作對象**，PM 不得對它做 `git worktree remove`
-（2026-09-30 PM 就在基線驗證跑一半時把 worktree 移除了，測試被殺掉、拿到假結果）。
+### 10.2 給 agent 的 prompt 必須包含的四件事
+
+1. **工作目錄是 `/tmp/gh-<工項號>`，每個 Bash 呼叫都要自己 `cd` 過去**
+   （shell 的 cwd 會重置 —— 這是最容易漏掉的一條）
+2. **絕對不要碰主樹 `/Users/kywk/kywk/nanshan/greyhound`**
+3. **不要 push**；不要 `git add -A`
+4. **不要對你的 worktree 執行 `git worktree remove`**（PM 上一輪就是把
+   別人的測試殺掉、拿到假結果）
+
+### 10.3 🚦 資源限制必須寫進 prompt
+
+8080 只有一個、Testcontainers 記憶體有限。**prompt 要明講**：
+
+- **不要啟動 docker compose、不要做線上實測** → PM 統一做
+- **不要 `docker compose stop`**（會影響其他 agent）
+- **不要讀 `target/surefire-reports`** → 只讀 `mvn verify` 的 `Tests run: N`
+
+即使 worktree 隔離了，**線上實測仍然不能並行** —— 8080 埠只有一個。
+這是 worktree 解決不了的資源衝突，只能由 PM 序列進行。
+
+### 10.4 PM 收回 agent 的成果時
+
+- **不要**對 agent 正在用的 worktree 做 `git worktree remove`（見 10.2 第 4 點）
+- 先在**主樹**驗證：`mvn verify` → 重建容器 → seed → acceptance-test → 線上實測
+- 確認各 agent 的 commit 沒有互相捲入檔案：
+  `git show --stat <commit>` 逐個看
+- 確認沒有測試被刪掉（用乾淨 base 的 worktree 跑一次基線比對）
+- 全部通過後才合併，然後 `git worktree remove`
+
+### 10.5 驗證階段的兩個陷阱（PM 本輪實際踩到）
+
+- **不要用 surefire 報告加總算測試總數**。報告檔不涵蓋 `@Nested` 內類別。
+  PM 實測：逐類加總 416，實際 450，差 34 條。**只有 mvn verify 的輸出是真的。**
+- **要確認「測試沒有被刪掉」**，做法是從乾淨 base 建一個 worktree 跑基線，
+  與本輪 HEAD 的逐類測試數比對。差異只該出現在新增的類別上。
 
 ---
 
