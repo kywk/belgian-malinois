@@ -49,7 +49,7 @@ backlog 原本寫「只要該 key 已有任何一筆規格，重複儲存必定�
 | 前端 | Vue 3.4 + Vite 5 + Element Plus |
 | DB | MSSQL 2022，**三個資料庫**：`bpm_core_db`／`bpm_audit_db`／`bpm_form_db` |
 | 其他 | RabbitMQ、Redis、MailHog。Docker 是 **OrbStack** |
-| 測試 | 後端 **585** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **87** 個（Vitest） |
+| 測試 | 後端 **587** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **87** 個（Vitest） |
 | 分支 | `feature/round2-hardening`，比 `main` 多 9 個 commit，**未 push** |
 | 部署 | **尚未部署，只有本機開發** |
 
@@ -424,7 +424,35 @@ git worktree list            # 確認每個 agent 一個
 
 ---
 
-## 11. 現況一句話
+### 10.7 負向控制組的正確用法：讓它揭露**修法的形狀**，不只是「測試會紅」
+
+#79-2 的負向控制組做了三組，產出的資訊**遠超過「測試紅了」**：
+
+| 控制組 | 注入的缺陷 | 結果 | 揭露了什麼 |
+|---|---|---|---|
+| NC-1 | 整份還原 controller | 紅 1 / 綠 18 | 基本確認守衛有效 |
+| NC-2 | **把「任務必須在 runtime」塞進 `processInstanceIdOfTask`** | 紅 2 / 綠 17 | ⚠️ **這個錯誤修法也會讓 404 的測試變綠** —— 只有「讀取端仍然工作」那條分辨得出來。若沒有那條測試，錯誤做法就會合進主干 |
+| NC-3 | 整條路徑無條件 404（「全部都擋」） | 紅 4 / 綠 15 | 抓出的是「執行中仍然 200」那條 —— **這就是非空對照存在的理由** |
+
+**「綠了哪幾條」比「紅了哪幾條」更有資訊。** NC-2 期間缺陷測試是綠的，
+證明「測試全綠」不等於「修法正確」——它證明了**還缺一條分辨測試**。
+
+⚠️ 附帶收穫：NC-3 讓 `unrelatedUserCannotComment` 轉紅（守衛沒跑到 → 沒有
+`DATA_ACCESS` 留痕），證明「被拒的存取嘗試值得知道」不是裝飾。
+
+### 10.8 驗證引擎行為：讀位元碼，不要讀文件
+
+#79-2 需要確認「`AddCommentCmd` 對**真正存在**的任務會不會也丟同樣的例外」。
+agent 用 `javap -p -c` 讀 `flowable-engine-7.2.0.jar` 的實際編譯產物，
+確認整個方法**只有兩處**拋 `FlowableObjectNotFoundException`（offset 50 與 128），
+都是「runtime 裡查不到」→ catch 子類**不會**誤捕其他引擎故障
+（暫停中的任務拋的是 `FlowableException`，不同類別）。
+
+**PM 獨立重跑了同一個位元碼探針，確認只有兩個拋出點。**
+
+⚠️ 但要分清哪些是**證據**、哪些是**推導**：位元碼證明「只有兩個拋出點」是證據；
+「這兩種狀態在正常流程下不可達」是**推導**（Flowable 結束流程實例時在同一個交易
+刪掉 task 與 pid 的列）。agent 有誠實標示這個區別。
 
 `feature/round2-hardening` = `29a7824`（#86 #79 #81 #87 #80 #83 全部合併），**未 push**。
 已完成 **#86 #79 #87 #81 #80 #83 #88 #89 #68(a/b/d)**、**#67 部分**。後端 **585** 測試全綠（**容器停止狀態下跑的**）、
