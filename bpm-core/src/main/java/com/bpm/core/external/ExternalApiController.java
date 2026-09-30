@@ -7,7 +7,9 @@ import com.bpm.core.model.ExternalSystem;
 import com.bpm.core.model.ProcessVariableSpec;
 import com.bpm.core.repository.ProcessVariableSpecRepository;
 import com.bpm.core.service.FormVersionLocker;
+import org.flowable.common.engine.api.FlowableObjectNotFoundException;
 import org.flowable.engine.HistoryService;
+import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.history.HistoricProcessInstance;
@@ -26,6 +28,7 @@ public class ExternalApiController {
     private final RuntimeService runtimeService;
     private final TaskService taskService;
     private final HistoryService historyService;
+    private final RepositoryService repositoryService;
     private final ProcessVariableSpecRepository specRepo;
     private final AuditEventPublisher auditPublisher;
     private final FormVersionLocker formVersionLocker;
@@ -41,13 +44,17 @@ public class ExternalApiController {
     private static final String OWNER_VAR = "_externalSystemId";
 
     public ExternalApiController(RuntimeService runtimeService, TaskService taskService,
-                                  HistoryService historyService, ProcessVariableSpecRepository specRepo,
+                                  HistoryService historyService, RepositoryService repositoryService,
+                                  ProcessVariableSpecRepository specRepo,
                                   AuditEventPublisher auditPublisher, FormVersionLocker formVersionLocker,
                                   ExternalSystemPolicy policy,
                                   com.bpm.core.service.OrgService orgService) {
         this.runtimeService = runtimeService;
         this.taskService = taskService;
         this.historyService = historyService;
+        // #80：注入只為了啟動路徑的存在性預先檢查（見 startProcess 的註解）。
+        // 在此之前，這個類別從未查過 RepositoryService —— 那是缺陷的成因。
+        this.repositoryService = repositoryService;
         this.specRepo = specRepo;
         this.auditPublisher = auditPublisher;
         this.formVersionLocker = formVersionLocker;
@@ -153,8 +160,47 @@ public class ExternalApiController {
         com.bpm.core.service.InitialAssigneeResolver.putIfPresent(variables, firstAssignee, firstGroups);
         if (callbackUrl != null) variables.put("_callbackUrl", callbackUrl);
 
+        // ── 存在性預先檢查（#80：#69 的同一個洞在此仍未修）────────────────
+        //
+        // 改動前這裡直接呼叫 startProcessInstanceByKey，而它對查不到的 key 會丟
+        // FlowableObjectNotFoundException → 裸 500。危害與 ProcessController 那條
+        // 完全相同（#69 的 commit 訊息）：呼叫端看到 500 的直覺是「再送一次」，
+        // 而外部系統的發起通常是計時批次，**重送會造成重複案件**。
+        //
+        // ⚠️ 這是本 repo 第三次為同一條規則補上檢查（前兩次是 ProcessController
+        // 與 R-20 的 key 缺席 400），而「規則只能有一份」正是 #69 記錄的教訓。
+        // 本方法的 @Transactional 讓它無法只靠 catch 收尾：見下方說明。
+        //
+        // 為什麼放在 403 之後：allowedProcessKeys 先擋。若順序顛倒，
+        // 一個只被授權 leave-approval 的系統就能用「403 變 404」的回答
+        // 探測出伺服器上到底部署了哪些流程定義 —— 那是把授權檢查變成枚舉工具。
+        //
+        // 為什麼放在 validateVariables 之後、startProcess 之前：
+        // 前面每一個 400／403 都在講「請求本身不完整或不被允許」，
+        // 呼叫端該改的是 payload；只有走到這裡才知道它<b>指向的資源不存在</b>。
+        // validateVariables 對不存在的 key 查不到規格會直接放行，所以放它之後
+        // 不會有人被「缺少必填變數」擋下，卻其實是 key 打錯了。
+        if (repositoryService.createProcessDefinitionQuery()
+                .processDefinitionKey(processDefKey).count() == 0) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "流程定義不存在: " + processDefKey);
+        }
+
         // Start process
-        ProcessInstance pi = runtimeService.startProcessInstanceByKey(processDefKey, businessKey, variables);
+        ProcessInstance pi;
+        try {
+            pi = runtimeService.startProcessInstanceByKey(processDefKey, businessKey, variables);
+        } catch (FlowableObjectNotFoundException e) {
+            // race window：預檢之後、真正啟動之前，管理員把定義刪了。
+            // 預先檢查消除不了這個窗口，沒有這一層它就會變回 500。
+            //
+            // ⚠️ 注意 Flowable 命令在外層交易中拋例外會把交易標成 rollback-only，
+            // 而本方法是 @Transactional —— 所以這裡只能「翻譯」例外，
+            // 不能試圖在同一個交易裡繼續做别的事（見 ProcessAccessGuard
+            // #initiatorOf 的同型註解）。
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "流程定義不存在: " + processDefKey, e);
+        }
 
         formVersionLocker.lockVersions(pi.getProcessInstanceId(), pi.getProcessDefinitionId());
 
