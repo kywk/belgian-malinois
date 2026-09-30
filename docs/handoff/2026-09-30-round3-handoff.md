@@ -1,4 +1,4 @@
-# 接手文件 — 2026-09-30 第二輪（#86 #79 #81 #87 #80 #83 #88，#68 進行中）
+# 接手文件 — 2026-09-30 第二輪完成（#86 #79 #81 #87 #80 #83 #88 #68）
 
 **寫給下一個接手的實作 agent。** 撰寫時間 2026-09-30。
 上一輪的交接見 `docs/handoff/2026-09-29-authorization-hardening-handoff.md`
@@ -49,7 +49,7 @@ backlog 原本寫「只要該 key 已有任何一筆規格，重複儲存必定�
 | 前端 | Vue 3.4 + Vite 5 + Element Plus |
 | DB | MSSQL 2022，**三個資料庫**：`bpm_core_db`／`bpm_audit_db`／`bpm_form_db` |
 | 其他 | RabbitMQ、Redis、MailHog。Docker 是 **OrbStack** |
-| 測試 | 後端 **534** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **66** 個（Vitest） |
+| 測試 | 後端 **543** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **80** 個（Vitest） |
 | 分支 | `feature/round2-hardening`，比 `main` 多 9 個 commit，**未 push** |
 | 部署 | **尚未部署，只有本機開發** |
 
@@ -269,6 +269,7 @@ export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
 | **#79-2** | 對**已完成**關卡留言仍是裸 500（`AddCommentCmd` 查不到 runtime task）。**改動前完全相同，非 #79 引入** | 404 或 409 屬 API 語意政策。守衛放行後才 500 對呼叫端有誤導 | 前端走不到這條路徑 |
 | **#88 政策 A** | **組織系統不可用時 fail-closed（回 400）** —— 已實作。代價是組織系統掛掉時外部系統**全部發不起流程**，且 400 通常**不會**被重試 | ⚠️ **建議改成 503 讓批次重試** —— 守衛在啟動流程之前，被拒時沒有任何東西被建立，**所以重試是安全的**。但那是狀態碼語意的政策決定，且會改變 `onBehalfOf` 的既有行為（今天就是 400） | 只影響錯誤路徑，無資料風險 |
 | **#88 政策 B** | **`firstTaskCandidateGroups` 刻意不驗證**（本工項最大的未完成項） | 需要裁決方向。候選群組有三個互質來源（部門代碼／權限碼／JWT authority），只有部門代碼有存在性 API → 要驗就得假設每個群組都是部門，那會**擋掉本專案自己的 BPMN 就會產生的形狀**。兩個危害：群組不存在 → 靜默卡死；丟進任意特權群組 → **授權範圍**問題 | 建議 `allowedCandidateGroups` 白名單（授權維度、零外部系統依賴），或權限中心補群組存在性 API |
+| **#68 政策** | **(b) 只顯示 `onBehalfOf`（人），不顯示 `initiator`（`system:<id>`）** | 維持不顯示 `initiator`。理由：它對「該問誰補件」毫無幫助，卻多一個揭露面（**哪一套外部系統把這張單送進來的**）。技術上隨時可加（已在 `/variables` 裡）。顯示端已濾掉 `system:*`，與 `ApplicantResolver` 同一條防線 | 若日後要顯示，需重新評估揭露範圍 |
 
 ---
 
@@ -386,6 +387,6 @@ git worktree list            # 確認每個 agent 一個
 ## 11. 現況一句話
 
 `feature/round2-hardening` = `29a7824`（#86 #79 #81 #87 #80 #83 全部合併），**未 push**。
-已完成 **#86、#79、#87、#81、#80、#83、#88**。後端 **534** 測試全綠（**容器停止狀態下跑的**）、
-前端 **66** 全綠、`acceptance-test.sh` PASS 7 / FAIL 0。工作樹乾淨。
+已完成 **#86、#79、#87、#81、#80、#83、#88、#68（a/b/d）**。後端 **543** 測試全綠（**容器停止狀態下跑的**）、
+前端 **80** 全綠、`acceptance-test.sh` PASS 7 / FAIL 0。工作樹乾淨。
 **待裁決：#79-2、#87-2、#87-3（見第 8 節）。尚未部署。**
