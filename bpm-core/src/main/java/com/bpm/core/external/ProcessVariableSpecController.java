@@ -26,7 +26,54 @@ public class ProcessVariableSpecController {
         this.auditor = auditor;
     }
 
-    // Admin API
+    /**
+     * 整批取代某個流程的變數規格。
+     *
+     * <h2>⚠️ 缺陷：重複儲存必定 500（#86）</h2>
+     *
+     * <p>改動前這裡是 {@code deleteByProcessDefinitionKey(key)}（衍生刪除）接著
+     * {@code saveAll}。衍生刪除是「SELECT 出 entity → {@code em.remove()}」，
+     * 而 {@code em.remove()} 只<b>排程</b>刪除；Hibernate 的 flush 順序固定是
+     * <b>INSERT 在 DELETE 之前</b>，於是同一個 flush 裡每一筆 INSERT 都撞上
+     * 尚未刪掉的同名舊列 →
+     * {@code Violation of UNIQUE KEY constraint 'uk_bpm_process_variable_spec_key_name'} → 500。
+     *
+     * <p><b>實測（修前）：</b>同一個 key 連續呼叫兩次（內容相同），
+     * 第一次 200、第二次 500。而 {@code ProcessVariableSpecAdmin.vue} 的
+     * 「儲存」按鈕正是走這條路徑 —— 管理頁第二次按儲存必定壞。
+     *
+     * <p><b>⚠️ 觸發條件比「key 已有資料」更窄。</b>必須是<b>新批次與既有規格
+     * 有同名變數</b>才會撞：INSERT 之所以失敗，是因為它寫進去的那個
+     * {@code (key, variableName)} 還被舊列佔著。實測（缺陷期間）：
+     * <ul>
+     *   <li>新舊有重疊（改內容、或原樣重存）→ <b>500</b></li>
+     *   <li>新舊完全不重疊（整批換成別的名字）→ 200，因為沒有任何一筆 INSERT
+     *       會撞到同名的舊列</li>
+     *   <li>送空陣列 → 200，因為沒有 INSERT</li>
+     * </ul>
+     * 這解釋了為什麼這個缺陷可以躲過「手動試一次看看」：剛建好規格時第一次存是好的，
+     * 而管理頁的正常使用流程（改設定 → 儲存）必然與既有變數重疊。
+     * 負向控制組也確認了這點 —— 缺陷期間紅的 4 條測試全部是「有重疊」形狀。
+     *
+     * <h2>修法：刪除改成原生 SQL（{@code deleteAllByProcessDefinitionKey}）</h2>
+     *
+     * <p>原生 SQL 在呼叫當下就送到資料庫，完全不進 Hibernate 的動作佇列，
+     * 所以「INSERT 排在 DELETE 前面」這個排序再也碰不到它。
+     * 該方法為什麼不能用衍生刪除寫在 repository 的註解裡。
+     *
+     * <p><b>不</b>選「衍生刪除後補 {@code flush()}」：那樣也能修好，
+     * 但規則會散在「刪除」與「記得 flush」兩處 —— 這正是這個缺陷的成因
+     * （create 與 update 對同一個參數有兩套規則那次也是同一個成因）。
+     * 讓刪除只有一種形狀比較重要。
+     *
+     * <h2>沒有處理的相鄰缺陷：同一批內重複變數名仍會 500</h2>
+     *
+     * <p>送 {@code [{"variableName":"x",…},{"variableName":"x",…}]} 仍然是 500，
+     * 那是<b>另一個</b>根因（呼叫端送了互相衝突的資料，而不是刪除與寫入的順序問題），
+     * 修法是輸入驗證而不是調整刪除方式。刻意不混在這個工項裡一起改：
+     * 兩者的驗證方式與回應狀態碼都不同，混在一起會讓「這個 500 修掉了嗎」
+     * 變成一個無法回答的問題。已開成獨立工項 #87。
+     */
     @PostMapping("/api/admin/process-definitions/{key}/variable-spec")
     @Transactional("primaryTransactionManager")
     public List<ProcessVariableSpec> batchSave(@PathVariable String key,
@@ -37,9 +84,11 @@ public class ProcessVariableSpecController {
         // 刪掉一個 required 變數等於放寬外部系統的輸入驗證。
         var removed = repo.findByProcessDefinitionKeyOrderByVariableName(key).stream()
                 .map(ProcessVariableSpec::getVariableName).sorted().toList();
-        repo.deleteByProcessDefinitionKey(key);
+        repo.deleteAllByProcessDefinitionKey(key);
         // 這個端點不在 security-audit 的 P0-4 清單內，但問題完全相同：
         // 以 entity 當 @RequestBody，夾帶 id 就會讓 saveAll 走 merge。
+        // ⚠️ 這個 setId(null) 也讓「只刪真正消失的那幾列」這種修法不可行 ——
+        // 保留舊 id 等於替夾帶 id 開一個繞道（理由見 repository 的註解）。
         specs.forEach(s -> {
             s.setId(null);
             s.setProcessDefinitionKey(key);
