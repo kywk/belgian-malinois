@@ -36,6 +36,18 @@ import java.util.Objects;
  * {@code allowedProcessKeys: ["leave-approval"] → ["leave-approval","purchase-approval"]}
  * —— 授權被擴大了什麼、什麼時候、由誰。所以只記錄實際變動的欄位與前後值。
  *
+ * <h2>⚠️ PUT 是整欄覆寫，而多數授權欄位的「空值」語意是「不限制」</h2>
+ *
+ * <p>{@code allowedProcessKeys}／{@code allowedActions}／{@code ipWhitelist}／
+ * {@code allowedCandidateGroups} 全部是自由文字的欄位，PUT 沒帶就是 {@code null}，
+ * 而 {@code null} 在 {@link ExternalSystemPolicy} 的規則裡是
+ * <b>{@code UNRESTRICTED}（不限制）</b>。也就是說
+ * <b>「PUT 少帶一個欄位 = 把該項授權放寬」</b>。
+ *
+ * <p>這是既有行為（{@code allowOnBehalfOf} 之所以顯式轉 boolean，是因為它
+ * 刻意選了相反的方向：欄位缺席 = 失去能力）。真正的修法是管理頁必須讓人
+ * 設定這些欄位 —— 見 {@code ExternalSystemAdmin.vue}。既有條目見 backlog R-21。
+ *
  * <h2>⚠️ 明文金鑰絕不可進稽核庫</h2>
  *
  * <p>API key 只在建立與輪換時回傳一次明文，之後只存雜湊。若把明文寫進
@@ -51,7 +63,11 @@ public class ExternalSystemAdminController {
             List.of("systemName", "contactEmail", "allowedProcessKeys", "allowedActions",
                     "callbackUrl", "ipWhitelist", "enabled",
                     // 授權變更：漏列的話，只改這一欄的 PUT 會被判定為「沒有變更」而不留痕。
-                    "allowOnBehalfOf");
+                    "allowOnBehalfOf",
+                    // #88 政策 B：候選群組白名單。漏列的話，擴大或縮小
+                    // 「這個系統能把單子丟進哪些待辦池」都不會留下軌跡，
+                    // 而那正是它屬於授權維度的理由。
+                    "allowedCandidateGroups");
 
     private final ExternalSystemRepository repo;
     private final AuditEventPublisher auditPublisher;
@@ -89,6 +105,7 @@ public class ExternalSystemAdminController {
                 "allowedProcessKeys", nullSafe(saved.getAllowedProcessKeys()),
                 "allowedActions", nullSafe(saved.getAllowedActions()),
                 "ipWhitelist", nullSafe(saved.getIpWhitelist()),
+                "allowedCandidateGroups", nullSafe(saved.getAllowedCandidateGroups()),
                 "allowOnBehalfOf", String.valueOf(saved.getAllowOnBehalfOf())));
 
         Map<String, Object> result = new HashMap<>();
@@ -127,6 +144,20 @@ public class ExternalSystemAdminController {
         sys.setCallbackUrl(req.getCallbackUrl());
         sys.setIpWhitelist(req.getIpWhitelist());
         sys.setEnabled(req.getEnabled());
+        // #88 政策 B：候選群組白名單。
+        //
+        // ⚠️ 與 allowedProcessKeys／allowedActions 同一個方向，這裡刻意
+        // <b>不做「未帶就保留舊值」的處理</b>：欄位缺席 → null → 不限制。
+        // 也就是說「PUT 少帶一個欄位 = 把授權放寬」，這是整欄覆寫語意的
+        // 必然結果，也是 R-21（寫入端應強制必填）記錄的既有風險。
+        //
+        // 為什麼不在這裡把它改成「方向固定為失去能力」（像 allowOnBehalfOf 那樣
+        // 明確轉 boolean）：因為「不限制」是這個欄位的預設語意（見
+        // ExternalSystemPolicy.Kind.UNRESTRICTED），把「沒設定」誤判成
+        // 「拒絕全部」會讓照 UI 正常流程建立的系統一個群組都不能用 ——
+        // 那比放寬更糟（既有整合全部被鎖死）。
+        // 真正的修法是管理頁必須讓人設定它，而那一半在 ExternalSystemAdmin.vue。
+        sys.setAllowedCandidateGroups(req.getAllowedCandidateGroups());
         // PUT 沒帶這個欄位時關閉 —— 錯誤的方向必須是「失去能力」而非「意外取得」。
         sys.setAllowOnBehalfOf(Boolean.TRUE.equals(req.getAllowOnBehalfOf()));
         ExternalSystem saved = repo.save(sys);
@@ -222,6 +253,10 @@ public class ExternalSystemAdminController {
         m.setIpWhitelist(s.getIpWhitelist());
         m.setEnabled(s.getEnabled());
         m.setAllowOnBehalfOf(s.getAllowOnBehalfOf());
+        // ⚠️ 必須複製：管理頁的 applyForm() 只從列資料挑 blankForm() 認得的鍵。
+        // 少了這行，編輯任一系統都會把白名單從 payload 裡弄丟，
+        // 而後端 PUT 是整欄覆寫 → 儲存一次就把白名單清成「不限制」。
+        m.setAllowedCandidateGroups(s.getAllowedCandidateGroups());
         m.setCreatedAt(s.getCreatedAt());
         m.setLastUsedAt(s.getLastUsedAt());
         return m;
@@ -237,6 +272,7 @@ public class ExternalSystemAdminController {
         m.put("ipWhitelist", nullSafe(s.getIpWhitelist()));
         m.put("enabled", String.valueOf(s.getEnabled()));
         m.put("allowOnBehalfOf", String.valueOf(s.getAllowOnBehalfOf()));
+        m.put("allowedCandidateGroups", nullSafe(s.getAllowedCandidateGroups()));
         return m;
     }
 

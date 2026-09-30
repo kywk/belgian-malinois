@@ -6,6 +6,7 @@ import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.dto.CommentRequest;
+import org.flowable.common.engine.api.FlowableObjectNotFoundException;
 import org.flowable.common.engine.api.FlowableTaskAlreadyClaimedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
@@ -20,6 +21,7 @@ import org.flowable.task.api.TaskQuery;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @RestController
@@ -29,9 +31,8 @@ public class TaskController {
     /**
      * 不可由呼叫端以任務變數改寫的變數名。
      *
-     * <p>{@code initiator} 是關鍵：兩支已部署的 BPMN 都用
-     * {@code ${orgService.getDirectManager(initiator)}} 解析主管、
-     * 用 {@code ${initiator}} 指派補件任務。申請人在完成自己的補件任務時
+     * <p>{@code initiator} 是關鍵：兩支已部署的 BPMN 解析第一關的主管時
+     * 會讀它（{@code assigneeResolver} 內部），申請人在完成自己的補件任務時
      * 附帶一個偽造的 initiator，下一輪主管審核就會派給他指定的人的主管
      * —— 等於簽核人自選審核者（security-audit P0-5）。
      *
@@ -61,6 +62,8 @@ public class TaskController {
     private final AuditEventPublisher auditPublisher;
     private final com.bpm.core.security.ProcessAccessGuard accessGuard;
     private final com.bpm.core.security.TaskHolderGuard holderGuard;
+    // #68b：待辦清單的「代某某發起」標示。
+    private final com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup;
 
     public TaskController(TaskService taskService, RuntimeService runtimeService,
                           RepositoryService repositoryService,
@@ -70,13 +73,15 @@ public class TaskController {
                           // 必須是同一條規則 —— 兩處各自維護時，只要有人改了
                           // 其中一處，就會出現「看得到、點進去被拒」那種組合
                           // 型式的差異，而那種差異比沒有檢查更難察覺。
-                          com.bpm.core.security.TaskHolderGuard holderGuard) {
+                          com.bpm.core.security.TaskHolderGuard holderGuard,
+                          com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup) {
         this.taskService = taskService;
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
         this.auditPublisher = auditPublisher;
         this.accessGuard = accessGuard;
         this.holderGuard = holderGuard;
+        this.onBehalfOfLookup = onBehalfOfLookup;
     }
 
     /**
@@ -169,9 +174,29 @@ public class TaskController {
         // 然後在 complete() 加上真正的檢查（拒絕而非隱藏），
         // 而不是在查詢端過濾。
 
+        // ── #68b：代發標示 ─────────────────────────────────────────
+        //
+        // 主管在待辦清單看到的是「主管審核」，而這張單的 initiator 是
+        // system:erp —— 畫面上沒有任何東西告訴他這是代誰發起的，
+        // 也就無從判斷該問誰補件。
+        //
+        // ⚠️ 授權面：呼叫端此刻已經是這個任務的持有者／候選人
+        // （上面那三個查詢），而同一個人讀這個案件的
+        // GET /api/process-instances/{id}/variables 早已拿到整包流程變數
+        // （含 onBehalfOf 與 initiator）。所以這不是新的揭露，
+        // 是把已經在瀏覽器裡的值放到它該出現的位置。
+        // 完整的政策說明見 OnBehalfOfLookup 的類別註解。
+        //
+        // ⚠️ 一次查詢：逐個任務查變數是 N+1（收件匣可有數十筆）。
+        final Map<String, String> onBehalfOf = onBehalfOfLookup.byProcessInstances(
+                taskMap.values().stream()
+                        .map(Task::getProcessInstanceId)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toSet()));
+
         return taskMap.values().stream()
                 .sorted(Comparator.comparing(Task::getCreateTime).reversed())
-                .map(this::toMap).toList();
+                .map(t -> toMap(t, onBehalfOf)).toList();
     }
 
     /**
@@ -295,8 +320,10 @@ public class TaskController {
             }
             case "complete" -> {
                 // 語意檢查（#77）：完成是持有者的權力，與其他 action 同一條守衛。
-                // leave-approval／purchase-approval 的補件關卡 assignee 是
-                // ${initiator}（申請人本人），所以申請人能簽自己的補件任務。
+                // leave-approval／purchase-approval 的補件關卡 assignee 由
+                // ${applicantResolver.resolve(execution)} 決定（#83 之前是 ${initiator}），
+                // 所以申請人能簽自己的補件任務；外部系統發起、沒有自然人申請人時
+                // 會派給權限碼 bpm:external:revision 指定的受理人。
                 //
                 // ⚠️ 引擎層的既有行為（非本次引入）：被 delegate 出去、尚處於
                 // PENDING 的任務不能被 complete —— TaskHelper.completeTask 會
@@ -390,15 +417,152 @@ public class TaskController {
         return Map.of("taskId", id, "status", "ok");
     }
 
+    /**
+     * 留言（#79：這裡原本<b>完全沒有</b>物件層授權）。
+     *
+     * <h2>缺陷（真實 JWT 線上實測）</h2>
+     *
+     * <p>{@code callerId} 從 R-01 起只用於稽核，<b>從未拿去與案件或任務比對</b>。
+     * 任何登入者只要知道 taskId 就能在別人的單上留言，稽核留下
+     * {@code TASK_COMMENT | operatorId = user002}。改動前 taskId 還能從
+     * {@code GET /api/history/tasks} 大量取得（那是 #76 修掉的發射台）。
+     *
+     * <h2>守衛：{@code requireTaskParticipant}（寫個案，不是動作任務）</h2>
+     *
+     * <p>批註不影響流程走向（spec §4.5），所以適用「寫個案」政策 ——
+     * {@code requireParticipant}，<b>不開稽核旁路</b>（稽核人員的職責是查閱，
+     * 不是替別人的案子補簽核意見）。規則與理由見 {@code ProcessAccessGuard}。
+     *
+     * <p>守衛<b>排在最前面</b>：與 {@link #updateTask} 不同，這個方法沒有
+     * 「請求形狀」檢查可排，而訊息為空不會改變任何東西（{@code message} 可為 null），
+     * 因此沒有理由讓未授權的呼叫端先走到資料層。
+     *
+     * <h2>連帶修掉：對不存在的 taskId 留言是<b>裸 500</b></h2>
+     *
+     * <p>負向控制組實測（把守衛整段拿掉之後）：
+     * {@code POST /api/tasks/{unknownId}/comments} →
+     * {@code FlowableObjectNotFoundException: Cannot find task with id …} → <b>500</b>。
+     * 引擎的 {@code AddCommentCmd} <b>確實會</b>驗任務存在，所以不會產生
+     * 孤兒批註（這點與「Flowable 不驗外鍵」的直覺相反，是實測確認的），
+     * 但那個例外沒有被翻成 {@code ResponseStatusException}，於是呼叫端拿到 500。
+     *
+     * <p>500 的後果與 #85 記錄過的同一個：修好之後呼叫端才會停止重試。
+     * 而更根本的問題是改動前<b>連「這個任務存不存在」都沒人問</b> ——
+     * 守衛先確認任務真的存在，這條路徑於是回 404，
+     * 與 {@link #updateTask} 對不存在任務的處理一致。
+     *
+     * <p>順帶一提，{@code processInstanceId} 現在由守衛回傳，
+     * 這也讓「pid 一定是真實的」變成結構性保證，而不是 {@code task != null} 的副產品。
+     *
+     * <h2>#79-2：對<b>已完成</b>的關卡留言由裸 500 改為 404</h2>
+     *
+     * <p>症狀：{@code POST} 到一個已結束的 taskId，授權會通過
+     * （守衛看得到歷史，所以 pid 找得到、關係人也成立），接著
+     * {@code AddCommentCmd} 因為 runtime 裡沒有這個任務而拋
+     * {@code FlowableObjectNotFoundException} → <b>500</b>。
+     *
+     * <p>這與 #79 改動前完全相同（改動前 {@code task == null} → pid 傳 null
+     * → 同一個例外），所以<b>不是</b> #79 引入的迴歸。但守衛放行之後才 500
+     * 對呼叫端更誤導：「你有權，但這件事做不成」被講成「伺服器壞了」，
+     * 而 500 的直覺是「再試一次」，重試<b>永遠不會成功</b>。
+     * 已由使用者裁決為 404（與其他「找不到東西」的回應一致，見
+     * {@code ProcessAccessGuard} 類別註解的枚舉政策）。
+     *
+     * <h3>⚠️ 為什麼 catch 這個例外不會把真實的引擎故障藏起來</h3>
+     *
+     * <p>這是本工項唯一的風險點：{@code AddCommentCmd} 若也會對
+     * <b>真正存在</b>的任務拋同一個例外，那麼「任務存在但引擎有問題」
+     * 就會被講成 404。已用 javap 逐一檢查 Flowable 7.2.0 的
+     * {@code AddCommentCmd.execute} 位元碼確認：它<b>只</b>在兩個地方丟
+     * {@code FlowableObjectNotFoundException}，兩者都是「runtime 裡查不到」——
+     * <ol>
+     *   <li>{@code taskId != null && taskService.getTask(taskId) == null}
+     *       → {@code "Cannot find task with id …"}</li>
+     *   <li>{@code processInstanceId != null && findById(pid) == null}
+     *       → {@code "Cannot find process instance with id …"}</li>
+     * </ol>
+     * 該方法沒有第三個拋出點。因此對一個<b>存在</b>的執行中任務，(1) 不可能觸發；
+     * (2) 要觸發必須是「runtime 的任務列還在、但流程實例列已經不見」——
+     * 而 Flowable 結束一個流程實例時是在<b>同一個交易</b>裡刪掉兩者，
+     * 這個狀態不可達。換句話說，這個例外在這條路徑上<b>只</b>代表
+     * 「目標不在 runtime」。
+     *
+     * <p>其他引擎故障<b>不會</b>被這個 catch 吃掉，刻意保留 500：
+     * 暫停中的任務／流程實例 → {@code FlowableException}
+     * （{@code AddCommentCmd} 對 {@code isSuspended()} 明確拋這個，不是本類別）；
+     * 資料庫／約束問題 → {@code DataIntegrityViolationException}。
+     *
+     * <h3>⚠️ 為什麼用 catch 而不是先查再留言</h3>
+     *
+     * <p>「先 {@code createTaskQuery().taskId(id).count() == 0} 就 404」
+     * 看起來更直觀，但它會在 controller 裡<b>再寫一份</b>「這個 taskId
+     * 有沒有在 runtime」的規則 —— 而
+     * {@link com.bpm.core.security.ProcessAccessGuard#processInstanceIdOfTask}
+     * 已經是那條規則（runtime 優先、歷史次之）。#84（create/update 對同一個
+     * 參數兩套規則）與 #86（刪除規則與「記得 flush」分在兩處）都是這麼長出來的，
+     * 所以本 repo 的硬規則是<b>規則只能有一份</b>。
+     *
+     * <p>而且預先檢查<b>消除不了</b>競態窗口：查完到真的留言之間，
+     * 關卡仍可能被完成。要關掉那個窗口終究還是需要同一層 catch。
+     * 引擎自己就是「在不在 runtime」的權威，把它翻譯成狀態碼既不會多一份規則，
+     * 也不會漏掉競態。同一個模式已用在
+     * {@code ProcessController.startProcess} 與 {@code ExternalApiController.startProcess}
+     * 的 {@code FlowableObjectNotFoundException} 轉譯上。
+     *
+     * <h3>⚠️ 為什麼不順手擋掉<b>讀</b>端</h3>
+     *
+     * <p>{@link #getComments} 與 {@code HistoryController} 的歷史讀端點讀的是
+     * {@code ACT_HI_COMMENT}，與任務是否還在 runtime <b>無關</b> ——
+     * 已結束關卡的簽核意見正是簽核軌跡的一部分，必須讀得到，
+     * 否則 {@code ApprovalTimeline.vue} 會在審結的案件上整段空白。
+     * 本工項刻意不動讀端，並以 {@code CommentAuthorizationTest} 的
+     * 「已完成任務的留言讀取仍然成功」把它釘死。
+     *
+     * <h3>⚠️ 為什麼這裡<b>不</b>補稽核紀錄</h3>
+     *
+     * <p>不變的是 {@code TASK_COMMENT} —— 沒有留言發生就不該宣稱有
+     * （與「被拒的請求不得寫出稽核」同一條原則）。刻意<b>不</b>補一筆
+     * {@code DATA_ACCESS denied}：那條紀錄的語意是「有人探測了他無權的案件」
+     * （{@code denyNonParticipant}），而呼叫端<b>確實</b>是關係人、
+     * 也<b>沒有</b>任何授權規則被違反。塞進去會污染「誰在試探別人的單」這個
+     * 訊號。未留痕並不難診斷：404 的訊息會說明是「已結束」。
+     * 而且兩種情況回的都是 404，不會因此多開一條枚舉管道。
+     *
+     * <h3>前端相容性（實查，非假設）</h3>
+     *
+     * <p>前端走不到這條路徑：{@code ApprovalTimeline.vue:44} 只對
+     * {@code t.endTime} 為真的 taskId 呼叫<b>歷史讀</b>端點
+     * （{@code /api/history/tasks/{id}/comments}）；兩個寫入端
+     * （{@code CommentPanel.vue:35}／{@code ActionDialog.vue:61}）的 taskId
+     * 都來自 {@code DocumentDetail.vue} 的 {@code route.params.taskId}，
+     * 而 {@code /tasks/:taskId} 只由 {@code TaskInbox.vue:43} 與
+     * {@code Dashboard.vue:33} 導向 —— 兩者都出自 {@code GET /api/tasks}
+     * 這個 runtime 待辦清單。也就是說寫入端的 taskId 必然還在執行中。
+     */
     @PostMapping("/{id}/comments")
     @Transactional("primaryTransactionManager")
     public Map<String, String> addComment(@PathVariable String id,
                                           @RequestBody CommentRequest req,
                                           @CallerId
                                           String callerId) {
-        Task task = taskService.createTaskQuery().taskId(id).singleResult();
-        String processInstanceId = task != null ? task.getProcessInstanceId() : null;
+        // 非關係人 → 404（不是 403），且留痕；任務不存在 → 404。理由見
+        // ProcessAccessGuard.requireTaskParticipant 與 denyNonParticipant。
+        String processInstanceId = accessGuard.requireTaskParticipant(id, callerId);
 
+        // ⚠️ 這裡的 fallback 現在是<b>死碼</b>，而且它「看起來安全」是巧合：
+        // 安全性完全建立在 firstNonBlank 的<b>參數順序</b>上 ——
+        // callerId 在前，所以 req.userId() 永遠輪不到（requireTaskParticipant
+        // 已保證 callerId 非空白，未認證會先被 404 擋下）。
+        //
+        // 刻意<b>不</b>在這裡改成 requireSelf(req.userId(), callerId, "userId")：
+        // 「身分欄位帶了別人的值 → 明確 400」是 #66／#72／#81 那一組規則，
+        // 套用在這裡會讓 body 帶 userId 的既有呼叫端（spec §4.5 的範例、
+        // 前端 ActionDialog.vue:61 與 CommentPanel.vue:35 都送
+        // {@code userId:'current_user'}）整個變成 400。那是政策性決定，
+        // 另案處理；這裡只把「順序是承重結構」這件事寫下來。
+        //
+        // 2026-09-30 線上實測（#79）：送 {"userId":"dir001"} 時，批註作者與
+        // 稽核 operatorId 都是實際的呼叫者 —— 冒用沒有成功。
         String author = firstNonBlank(callerId, req.userId());
 
         // 用 try/finally 還原原值：Authentication 存放在 ThreadLocal，
@@ -407,7 +571,26 @@ public class TaskController {
         String previous = Authentication.getAuthenticatedUserId();
         try {
             Authentication.setAuthenticatedUserId(author);
-            taskService.addComment(id, processInstanceId, req.message());
+            // #79-2：把「runtime 裡沒有這個任務」翻譯成 404。
+            //
+            // ⚠️ catch 的範圍刻意<b>只包住 addComment 這一行</b>：
+            // 稽核的 publish 留在外面。若把它包進去，fail-closed 的稽核失敗
+            // 會被翻成 404 —— 那是把「稽核寫不進去所以這筆調閱不該成功」
+            // （AuditFailClosedTest）講成「東西不存在」，把真實故障藏起來。
+            //
+            // 守衛查得到歷史、所以已結束的關卡會走到這裡；引擎只認 runtime。
+            // 完整理由（含「這個例外會不會在任務存在時也觸發」的位元碼查證）
+            // 見本方法的 javadoc。
+            try {
+                taskService.addComment(id, processInstanceId, req.message());
+            } catch (FlowableObjectNotFoundException e) {
+                // ⚠️ 本方法是 @Transactional，而 Flowable 命令在外層交易中
+                // 拋例外會把交易標成 rollback-only —— 所以這裡只能「翻譯」
+                // 例外，不能在同一個交易裡繼續做別的事（與
+                // ExternalApiController.startProcess 的同型註解）。
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "任務不存在或已結束，無法留言: " + id, e);
+            }
         } finally {
             Authentication.setAuthenticatedUserId(previous);
         }
@@ -423,8 +606,43 @@ public class TaskController {
         return null;
     }
 
+    /**
+     * 讀取批註（#79：這裡原本<b>完全沒有</b>任何檢查）。
+     *
+     * <h2>缺陷（真實 JWT 線上實測）</h2>
+     *
+     * <p>taskId {@code ba0454b0-…}（user001 的請假單，持有者 mgr001）上
+     * 掛著 mgr001 寫的「薪資調幅尚未報帳，請補附件後再簽」。
+     * 實測：{@code user001}／{@code user002}／{@code mgr002} 三個身分
+     * 全部 {@code GET 200}，也就是<b>完全無關的人讀得到簽核意見全文</b>。
+     * 這是整條鏈上<b>最後一扇還開著的門</b>：taskId 的發射台已由 #76 關掉，
+     * 但 taskId 仍可從稽核紀錄（{@code audit:log:read}）取得。
+     *
+     * <h2>守衛：{@code requireTaskReadAccess}（讀個案內容）</h2>
+     *
+     * <p>與 variables／form-data／附件／簽核軌跡<b>同一條</b>
+     * {@code requireReadAccess}：關係人 ∪ {@code audit:log:read}（旁路每次留痕），
+     * 非關係人 404。規則與「為什麼旁路留痕寫在守衛裡」見
+     * {@code ProcessAccessGuard.requireTaskReadAccess}。
+     *
+     * <p>⚠️ <b>刻意不新增 {@code @Transactional}</b>：唯讀查詢 ＋ 一次稽核寫入，
+     * 與 {@code ProcessController.getVariables}／{@code HistoryController.getHistoricTasks}
+     * 同一型（稽核失敗 → 503，見 {@code AuditFailClosedTest}）。
+     * 加交易反而會讓稽核掛在 beforeCommit，響應組裝階段的例外會讓它永遠寫不進去。
+     *
+     * <p>⚠️ <b>前端的相容性由構造保證</b>：{@code CommentPanel.vue:31} 呼叫本端點，
+     * 而它綁的 taskId 來自 {@code DocumentDetail.vue} 的待辦清單 ——
+     * 也就是呼叫者<b>持有或可認領</b>的任務，而 assignee／owner／candidateUser
+     * 全部落在 {@code isParticipant} 條件 2（{@code taskInvolvedUser}）的比對範圍內。
+     * 由 {@code CommentAuthorizationTest} 的兩條正向測試固定住：
+     * {@code taskHolderCanStillReadIt}、
+     * {@code reviewerCanStillTraverseTheWholeApprovalTimeline}。
+     */
     @GetMapping("/{id}/comments")
-    public List<Map<String, Object>> getComments(@PathVariable String id) {
+    public List<Map<String, Object>> getComments(@PathVariable String id,
+                                                 @CallerId
+                                                 String callerId) {
+        accessGuard.requireTaskReadAccess(id, callerId);
         return mapComments(taskService.getTaskComments(id));
     }
 
@@ -435,8 +653,15 @@ public class TaskController {
         return OperationType.TASK_APPROVE;
     }
 
+    /**
+     * 一筆任務的對外表示法。
+     *
+     * @param onBehalfOf 案件 id → 代發員工（見 {@code OnBehalfOfLookup}）。
+     *                   由呼叫端一次查好傳入，<b>不可</b>在這裡逐筆查 ——
+     *                   那是 N+1，而且會讓「一次查詢」的保證只存在於註解裡。
+     */
     @SuppressWarnings("unchecked")
-    private Map<String, Object> toMap(Task t) {
+    private Map<String, Object> toMap(Task t, Map<String, String> onBehalfOf) {
         Map<String, Object> m = new HashMap<>();
         m.put("taskId", t.getId());
         m.put("taskName", t.getName());
@@ -445,6 +670,11 @@ public class TaskController {
         m.put("createTime", t.getCreateTime());
         m.put("dueDate", t.getDueDate());
         m.put("formKey", t.getFormKey());
+        // #68b：審核人端原本看不到的代發標示。
+        // 缺席（null）= 這不是代發的案件；呼叫端因此可用「有沒有這個鍵」
+        // 判斷，不需要另外一個布林欄位。
+        m.put("onBehalfOf", t.getProcessInstanceId() != null
+                ? onBehalfOf.get(t.getProcessInstanceId()) : null);
         // Resolve locked formVersion from process variable
         try {
             Map<String, Integer> versions = (Map<String, Integer>)

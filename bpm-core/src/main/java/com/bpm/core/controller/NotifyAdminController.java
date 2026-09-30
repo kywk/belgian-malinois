@@ -135,10 +135,15 @@ public class NotifyAdminController {
      * <p>⚠️ 必須先檢查有沒有設定引用它（security-audit P2-4 施作時發現）。
      *
      * <p>原本是直接 {@code deleteById}。留下指向不存在模板的
-     * {@code NotifyConfig} 之後，{@code EmailConsumer} 取不到模板 →
-     * retry 後進 DLQ → 通知永久遺失，而同一個 config 之後每則通知都重踩。
-     * 那正是 P1-13 的失敗模式 —— P1-13 只在 create/update 擋住了錯誤的
-     * templateId，刪除這條路徑把同一個洞重新打開了。
+     * {@code NotifyConfig} 之後，{@code EmailConsumer} 每次發通知都取不到模板
+     * 而退回硬編的預設模板（見 {@link #requireExistingTemplate} 的註解），
+     * 而同一個 config 之後每則通知都重踩。那正是 P1-13 的失敗模式 ——
+     * <b>只是 delete 這條路徑把同一個洞重新打開了</b>。
+     *
+     * <p>（#84 補上 update 端的檢查之後，這句「P1-13 只在 create/update 擋住了
+     * 錯誤的 templateId」才是真的；補上前 {@code updateConfig} 沒有這道檢查。
+     * 註解描述一個不存在的檢查比沒有註解更糟 —— 它讓下一個人以為這條路徑
+     * 已經安全。）
      *
      * <p>另外原本對不存在的 id 是靜默的 no-op。回 404 才誠實 ——
      * 呼叫端以為刪掉了，而實際上什麼都沒發生。
@@ -152,7 +157,8 @@ public class NotifyAdminController {
         var referencing = configRepo.findByTemplateId(id);
         if (!referencing.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "仍有 %d 筆通知設定引用這個模板，刪掉會讓那些通知進入死信佇列而永久遺失。請先改掉或刪除引用它的設定：%s"
+                    "仍有 %d 筆通知設定引用這個模板，刪掉之後那些通知的模板會被靜默忽略"
+                            + "（EmailConsumer 只會記 WARN 而改用預設模板）。請先改掉或刪除引用它的設定：%s"
                             .formatted(referencing.size(),
                                     referencing.stream().map(NotifyConfig::getId).toList()));
         }
@@ -163,28 +169,60 @@ public class NotifyAdminController {
     }
 
     // Configs
+
+    /**
+     * templateId 必須指向實際存在的模板（security-audit P1-13；#84 補上 update 端）。
+     *
+     * <p><b>為什麼寫入端必須擋。</b>改動前 {@code createConfig} 與
+     * {@code updateConfig} 都不驗證，而 {@code NotifyConfig.templateId}
+     * 沒有 {@code nullable=false}。結果依消費端當時的防護分成兩種：
+     *
+     * <ul>
+     *   <li><b>消費端無防護時</b>（P1-13 的原始狀態）：
+     *       {@code findById(null)} 拋 {@code IllegalArgumentException} →
+     *       retry 3 次後進 {@code dlq.bpm} → 該通知<b>永久遺失</b>，
+     *       而且同一 config 之後每則通知都重踩同一個坑。</li>
+     *   <li><b>消費端已有防護時</b>（現況，{@code EmailConsumer} 記 WARN
+     *       並退回硬編預設模板）：通知不會遺失，但管理員設定的模板
+     *       <b>被靜默忽略</b> —— 收件人收到的是不含流程識別、不含表單內容的
+     *       通用句，而管理員在後台看到的是「設定成功」。稽核紀錄同樣會記下
+     *       {@code after.templateId = <不存在的 id>}，等於組態變更紀錄說了一套、
+     *       系統實際做的是另一套。</li>
+     * </ul>
+     *
+     * <p>後者危害小得多，但<b>更難察覺</b>：沒有例外、沒有錯誤訊息、
+     * 通知照常寄出，只有伺服器日誌裡一行 WARN。而「相關人員要知道自己有東西
+     * 該簽」正是這個平台的價值之一，模板被靜默忽略等同於簽核活動被悄悄降級。
+     * 所以擋在寫入端才是正確的位置 —— 消費端的防護是第二道，不是第一道。
+     *
+     * <p><b>為什麼是 400。</b>呼叫端送來一個指向不存在物件的參照，
+     * 是請求本身有誤。與 {@link #deleteTemplate} 擋到「仍被引用」時的 409
+     * 是不同的情況：那個模板確實存在，是「現在不能刪」的狀態衝突。
+     *
+     * <p><b>為什麼是共用方法而不是兩處各寫一份。</b>（理由與
+     * {@code ProcessAccessGuard} 類別註解相同 —— 不是 DRY，是
+     * <b>規則只能有一份</b>。）這個缺陷本身就是分散造成的：
+     * {@code createConfig} 有檢查、{@code updateConfig} 沒有，而
+     * {@code deleteTemplate} 的註解宣稱「create/update 都擋住了」——
+     * 註解描述的是<b>不存在的</b>行為。只要判斷散在不同方法裡，
+     * 下次補一條路徑就會再漏一次，而且漏的時候沒有測試會紅。
+     */
+    private void requireExistingTemplate(String templateId) {
+        if (templateId == null || templateId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "templateId 為必填");
+        }
+        if (!templateRepo.existsById(templateId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "templateId 指向不存在的模板: " + templateId);
+        }
+    }
+
     @PostMapping("/notify-configs")
     @Transactional("primaryTransactionManager")
     public NotifyConfig createConfig(@RequestBody NotifyConfig c,
                                      @CallerId String operatorId) {
         c.setId(null);
-        // ⚠️ templateId 必須指向存在的模板（security-audit P1-13）。
-        // 改動前完全不驗證，而 NotifyConfig 也沒有 nullable=false：
-        // 一筆 templateId 為 null（或指向不存在的模板）的設定，會讓
-        // EmailConsumer 的 findById(null) 拋 IllegalArgumentException →
-        // retry 3 次後進 dlq.bpm → 該通知永久遺失，
-        // 而且同一 config 之後每則通知都重踩同一個坑。
-        //
-        // 消費端已加上防護（改用預設模板並記錄警告），但錯誤設定不該
-        // 一開始就能存進去 —— 在寫入端擋掉才是正確的位置。
-        if (c.getTemplateId() == null || c.getTemplateId().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "templateId 為必填");
-        }
-        if (!templateRepo.existsById(c.getTemplateId())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "templateId 指向不存在的模板: " + c.getTemplateId());
-        }
+        requireExistingTemplate(c.getTemplateId());
         NotifyConfig saved = configRepo.save(c);
         auditor.record(operatorId, CONFIG, "create", saved.getId(), configDigest(saved));
         return saved;
@@ -197,12 +235,31 @@ public class NotifyAdminController {
         return configRepo.findAll();
     }
 
+    /**
+     * 修改通知設定。
+     *
+     * <p>⚠️ <b>templateId 與 create 端同樣必須驗證存在</b>（#84）。
+     * 改動前這一條路徑完全沒有檢查，而 {@link #deleteTemplate} 上方的註解
+     * 卻宣稱「P1-13 只在 create/update 擋住了錯誤的 templateId」——
+     * 註解寫的是一個不存在的行為。實測（修前）：
+     * {@code PUT} 帶不存在的 templateId 回 <b>200</b> 且資料真的被寫進資料庫，
+     * 同一個值走 {@code POST} 卻被擋成 <b>400</b>。
+     *
+     * <p>實測到的後果是「設定被靜默忽略」而不是「通知永久遺失」：
+     * {@code EmailConsumer} 已在 P1-13 補上消費端防護，會記 WARN 並退回
+     * 硬編預設模板。修補理由與 {@link #requireExistingTemplate} 相同。
+     *
+     * <p>順序：先驗 templateId 再碰 entity。擋下來之後交易回捲，
+     * 而且沒有任何 save 被執行 —— 「回 400 卻資料已被改掉」這種組合
+     * 會讓只斷言狀態碼的測試以為守衛有效。
+     */
     @PutMapping("/notify-configs/{id}")
     @Transactional("primaryTransactionManager")
     public NotifyConfig updateConfig(@PathVariable String id, @RequestBody NotifyConfig c,
                                      @CallerId String operatorId) {
         NotifyConfig existing = configRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        requireExistingTemplate(c.getTemplateId());
         var before = configDigest(existing);
         existing.setProcessDefinitionKey(c.getProcessDefinitionKey());
         existing.setEventType(c.getEventType());

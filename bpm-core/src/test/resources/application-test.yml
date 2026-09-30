@@ -44,6 +44,28 @@ bpm:
       trusted-proxies: 127.0.0.1
   upload:
     dir: ./target/test-uploads
+  webhook:
+    # ⚠️ 這裡刻意開一個例外：把 localhost 列入允許清單（#67）。
+    #
+    # WebhookUrlPolicy 預設拒絕 loopback/link-local/內網（security-audit P2-1），
+    # 那是正確的預設值。而 WebhookDeliveryWiringTest 必須讓投遞真的抵達一個
+    # HTTP 端點才能證明「webhook 有接上」——「沒有拋例外」證明不了任何事，
+    # 因為改動前的 WebhookTaskListener 就是一個什麼都不做卻從不報錯的實作。
+    #
+    # 該測試的接收端是 IntegrationTestBase 自己的那個 Tomcat，
+    # 與 MockOrgController／MockPermController 同一個 port，走同一條
+    # bpm.external.org-service-url 式的自我呼叫路徑。
+    #
+    # 「清單為空時不放行任何主機」這條預設行為由 WebhookUrlPolicyTest 守住，
+    # 而「不在清單內的位址會被擋」由同一個整合測試組用 127.0.0.1 守住
+    # （127.0.0.1 與 localhost 是不同的字面 host，而清單比對的就是字面 host）。
+    allowed-hosts: localhost
+  # ⚠️ 測試不得寫進原始碼樹。
+  # DeploymentController 會把部署的 XML 寫到這個目錄（production 的行為，
+  # 見該類別的 path traversal 防護註解），而主設定是相對路徑 ./bpmn-definitions
+  # —— 那是 repo 根底下的<b>未追蹤</b>目錄，跑一次測試就會留下檔案。
+  # 與 upload.dir 同樣指到 target/。
+  bpmn-definitions-dir: ./target/test-bpmn-definitions
   external:
     # ⚠️ org/perm 的 URL 刻意<b>不在這裡</b>設定。
     #

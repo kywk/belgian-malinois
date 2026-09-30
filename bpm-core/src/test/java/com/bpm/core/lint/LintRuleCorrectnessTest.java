@@ -8,10 +8,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -35,6 +37,7 @@ class LintRuleCorrectnessTest extends IntegrationTestBase {
     @Autowired private BpmnLintService lintService;
     @Autowired private ExternalSystemRepository externalSystemRepo;
     @Autowired private MockMvc mockMvc;
+    @Autowired private org.flowable.engine.RepositoryService repositoryService;
 
     private final List<String> created = new java.util.ArrayList<>();
 
@@ -149,9 +152,18 @@ class LintRuleCorrectnessTest extends IntegrationTestBase {
 
     // ── 規則 h：允許外部發起時不可用 initiator ─────────────────────
 
-    private void givenExternalSystemAllowing(String processKey) {
+    /**
+     * 建立一個<b>啟用中</b>且授權某流程的外部系統。
+     *
+     * <p>⚠️ {@code systemId} 帶亂數後綴，不是固定值：{@code uk_bpm_external_system_system_id}
+     * 是唯一約束，而「同時授權兩支 BPMN」正是 {@code seedDataDeployment...} 需要的形狀 ——
+     * 寫死 id 會讓那條測試在建第二筆時撞約束，而錯誤訊息（唯一約束違規）
+     * 完全指不出真正的問題。
+     */
+    private String givenExternalSystemAllowing(String processKey) {
         var sys = new ExternalSystem();
-        sys.setSystemId("lint-test-erp");
+        String systemId = "lint-test-erp-" + UUID.randomUUID().toString().substring(0, 8);
+        sys.setSystemId(systemId);
         sys.setSystemName("lint test");
         sys.setApiKey("irrelevant-hash");
         sys.setAllowedActions("[\"start_process\"]");
@@ -160,6 +172,7 @@ class LintRuleCorrectnessTest extends IntegrationTestBase {
         sys.setCreatedAt(Instant.now());
         externalSystemRepo.save(sys);
         created.add(sys.getSystemId());
+        return systemId;
     }
 
     private static String initiatorTaskXml() {
@@ -201,8 +214,8 @@ class LintRuleCorrectnessTest extends IntegrationTestBase {
     @Test
     @DisplayName("停用的外部系統不該觸發規則 h")
     void disabledExternalSystemDoesNotFireRuleH() {
-        givenExternalSystemAllowing("hruletest");
-        var sys = externalSystemRepo.findBySystemId("lint-test-erp").orElseThrow();
+        String systemId = givenExternalSystemAllowing("hruletest");
+        var sys = externalSystemRepo.findBySystemId(systemId).orElseThrow();
         sys.setEnabled(false);
         externalSystemRepo.save(sys);
 
@@ -215,6 +228,145 @@ class LintRuleCorrectnessTest extends IntegrationTestBase {
         givenExternalSystemAllowing("some-other-process");
 
         assertThat(ruleIds(initiatorTaskXml())).doesNotContain("external-initiator");
+    }
+
+    // ── 規則 h 升為 error（#68d）──────────────────────────────────
+
+    @Test
+    @DisplayName("#68d：規則 h 必須是 error —— 否則部署不會擋，缺陷會留到執行期")
+    void ruleHIsAnErrorNotAWarning() {
+        givenExternalSystemAllowing("hruletest");
+
+        var result = lintService.lint(initiatorTaskXml());
+        var ruleH = result.errors().stream()
+                .filter(e -> "external-initiator".equals(e.rule())).findFirst().orElseThrow();
+
+        assertThat(ruleH.severity())
+                .as("warning 不會讓 DeploymentController 擋下（它只檢查 severity == \"error\"），"
+                        + "於是這條規則仍然只是訊息文字")
+                .isEqualTo("error");
+        assertThat(result.valid())
+                .as("valid 必須是 false —— 這才是「部署會被擋」的實際條件")
+                .isFalse();
+    }
+
+    /**
+     * 上面那條「部署成功」<b>不能</b>被當成「升級是安全的」的理由 ——
+     * 它綠是因為出廠 BPMN 根本不觸發規則 h，而不是因為 severity 是什麼。
+     *
+     * <p>這一條把那個「根本不觸發」的原因釘死：出廠兩支 BPMN 的第一個
+     * UserTask 用的是 {@code ${assigneeResolver.resolve(execution)}}，
+     * <b>字串裡沒有 "initiator"</b>。而規則 h 的判準是
+     * {@code allExprs.contains("initiator")}。
+     *
+     * <p>為什麼值得單獨一條：負向控制組實測顯示，把 severity 改回 warning 時
+     * {@code seedDataDeploymentIsNotBlockedByTheSeverityUpgrade} <b>仍然是綠的</b> ——
+     * 也就是說那條測試證明不了 severity 升級的安全性，它證明的是
+     * 「出廠 BPMN 不觸發規則 h」。若日後有人把第一關改回
+     * {@code ${initiator}}（那正是 #83 修掉的形狀），這條會紅，
+     * 而那時 {@code seed-data.sh} 就真的會被擋下 —— 這正是要讓它先紅的原因。
+     */
+    @Test
+    @DisplayName("#68d：出廠 BPMN 的第一關不含 initiator 字樣 —— 這是 seed 不被擋的結構性原因")
+    void shippedBpmnFirstTaskDoesNotMentionInitiator() throws Exception {
+        for (String name : List.of("leave-approval", "purchase-approval")) {
+            String xml = new String(getClass().getClassLoader()
+                    .getResourceAsStream("processes/" + name + ".bpmn20.xml").readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8);
+
+            assertThat(xml)
+                    .as("%s 的第一關若出現 initiator，規則 h（現在是 error）會擋下部署，"
+                            + "而 seed-data.sh 正是部署這兩支 BPMN", name)
+                    .contains("assigneeResolver.resolve(execution)");
+            assertThat(firstUserTaskAssignee(xml))
+                    .as("%s 的第一個 UserTask 是規則 h 唯一檢查的對象", name)
+                    .doesNotContain("initiator");
+        }
+    }
+
+    /** 取出第一個（StartEvent 直接連出去的）UserTask 的 assignee。 */
+    private static String firstUserTaskAssignee(String xml) {
+        var doc = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+        try {
+            var d = doc.newDocumentBuilder()
+                    .parse(new java.io.ByteArrayInputStream(xml.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            var nodes = d.getElementsByTagName("*");
+            for (int i = 0; i < nodes.getLength(); i++) {
+                var el = (org.w3c.dom.Element) nodes.item(i);
+                if (!"userTask".equals(el.getLocalName())) continue;
+                var candidate = el.getAttributeNS("http://flowable.org/bpmn", "assignee");
+                if (candidate != null && !candidate.isBlank()) return candidate;
+            }
+            return "";
+        } catch (Exception e) {
+            throw new IllegalStateException("解析 BPMN 失敗", e);
+        }
+    }
+
+    /**
+     * ⚠️ 這一條是本工項最重要的驗證：<b>seed-data.sh 會不會被擋</b>。
+     *
+     * <p>{@code scripts/seed-data.sh} 呼叫 {@code POST /api/deployments} 部署兩支
+     * 出廠 BPMN，而該端點在 {@code lintResult.valid() == false} 時回 400 →
+     * {@code curl -sf} 失敗 → {@code fail()} → 腳本以 1 結束。
+     *
+     * <p>所以「升級前驗證過安全」不足以回答這個問題：那是<b>改動前</b>的驗證，
+     * 而且當時 rule h 的 severity 是 warning，{@code valid()} 本來就會是 true。
+     * 升級後必須重跑一次部署路徑本身。
+     *
+     * <p>這裡刻意走<b>真的部署端點</b>而不是只呼叫 {@code lintService.lint()}：
+     * 兩者之間還隔著「{@code valid()} 決定 HTTP 狀態碼」這一步，
+     * 而那一步正是本工項要改的東西。
+     *
+     * <p>⚠️ <b>負向控制組的實測結果必須記下來</b>：把 severity 改回 warning 時，
+     * 這條測試<b>仍然是綠的</b>。所以它不是「升級安全」的證明，
+     * 而是「出廠 BPMN 不觸發規則 h」的證明 —— 見上面那條把它釘死。
+     */
+    @Test
+    @DisplayName("#68d：即使有外部系統被授權，seed-data.sh 部署的兩支 BPMN 仍必須部署成功")
+    void seedDataDeploymentIsNotBlockedByTheSeverityUpgrade() throws Exception {
+        // 前置條件：外部系統真的被授權了（否則這條測試只是「什麼都沒觸發」）。
+        // ⚠️ 必須涵蓋兩支 BPMN 各自被授權的情形，而不只是其中一支。
+        givenExternalSystemAllowing("leave-approval");
+        givenExternalSystemAllowing("purchase-approval");
+
+        for (String name : List.of("leave-approval", "purchase-approval")) {
+            byte[] xml = getClass().getClassLoader()
+                    .getResourceAsStream("processes/" + name + ".bpmn20.xml").readAllBytes();
+
+            // 先確認 rule h 確實<b>沒有</b>被觸發 —— 否則下面的 200 是運氣。
+            var lint = lintService.lint(new String(xml, java.nio.charset.StandardCharsets.UTF_8));
+            assertThat(lint.errors().stream().map(BpmnLintService.LintError::rule))
+                    .as("%s 在「外部系統已授權」的情況下觸發了規則 h —— "
+                            + "seed-data.sh 會被擋，必須在升級前處理", name)
+                    .doesNotContain("external-initiator");
+            assertThat(lint.errors().stream()
+                    .filter(e -> "error".equals(e.severity()))
+                    .map(BpmnLintService.LintError::rule).toList())
+                    .as("%s 出現 error 級別的問題 → POST /api/deployments 會回 400", name)
+                    .isEmpty();
+
+            // 最後走真的部署端點 —— 這是 seed-data.sh 走的那條路徑。
+            MockMultipartFile file = new MockMultipartFile("file", name + ".bpmn20.xml",
+                    "text/xml", xml);
+            var res = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                            .multipart("/api/deployments")
+                            .file(file)
+                            .param("name", name)
+                            .header("X-User-Id", "admin001"))
+                    .andExpect(status().isOk())
+                    .andReturn();
+            // 收尾：刪掉這次部署。
+            // ⚠️ 測試共用同一個資料庫（IntegrationTestBase 的類別註解），
+            // 留下一個同名的新版本會改變其他測試 startProcessInstanceByKey
+            // 撿到的定義版本。內容雖然相同，但「測試之間不互相影響」
+            // 這條不變式不該靠「內容相同所以沒差」維持。
+            String deploymentId = res.getResponse().getContentAsString()
+                    .replaceAll(".*\"deploymentId\":\"([^\"]*)\".*", "$1");
+            if (!deploymentId.contains("\"") && !deploymentId.isBlank()) {
+                repositoryService.deleteDeployment(deploymentId, true);
+            }
+        }
     }
 
     // ── XML 解析入口的硬化 ────────────────────────────────────────

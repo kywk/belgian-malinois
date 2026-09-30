@@ -37,6 +37,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>身分來源與其他端點一致：優先取 {@code X-User-Id} 請求標頭
  * （前端共用 axios instance 一律附上、acceptance 腳本也用它），
  * 退回 body 的 {@code userId}。
+ *
+ * <h2>⚠️ #79：批註端點已加上案件關係人檢查</h2>
+ *
+ * <p>{@code POST /api/tasks/{id}/comments} 與兩個讀端點原本<b>零授權</b>，
+ * 任何登入者都能在別人的單上留言、讀到別人的簽核意見全文。
+ * 守衛是 {@code ProcessAccessGuard.requireTaskParticipant}（寫）與
+ * {@code requireTaskReadAccess}（讀）—— 也就是「必須是這個案件的關係人」。
+ *
+ * <p>因此本類別的 fixture <b>必須改成真實關係人</b>：原版本的
+ * {@link #multipleCommentersAreEachAttributed} 讓 dir001 在 user001 的
+ * 請假單上留言，那其實是在測缺陷。授權的負向斷言在
+ * {@code com.bpm.core.security.CommentAuthorizationTest}。
  */
 class CommentTcA02Test extends IntegrationTestBase {
 
@@ -54,40 +66,93 @@ class CommentTcA02Test extends IntegrationTestBase {
         return tasks.get(0);
     }
 
+    /**
+     * 啟動採購流程並讓主管關卡通過，產生 {@code financeReview}。
+     *
+     * <p>{@code financeReview} 的候選人是
+     * {@code ${permService.getUsersByPermission('finance:payment:approve')}} = dir001，
+     * 所以 dir001 對<b>這張</b>採購單是真實關係人（見
+     * {@code InvolvedInstancesTest.candidateUserFlowIsUnaffected}）。
+     */
+    private Task startPurchaseAndGetFinanceTask() {
+        var pi = runtimeService.startProcessInstanceByKey("purchase-approval",
+                Map.of("initiator", "user001", "amount", 5000, "itemName", "測試品項"));
+        List<Task> tasks = taskService.createTaskQuery().processInstanceId(pi.getId()).list();
+        taskService.complete(tasks.get(0).getId(), Map.of("approved", true, "rejected", false));
+        List<Task> finance = taskService.createTaskQuery().processInstanceId(pi.getId()).list();
+        assertThat(finance).hasSize(1);
+        assertThat(taskService.getIdentityLinksForTask(finance.get(0).getId()))
+                .as("前置條件：dir001 必須是這個候選任務的候選人，否則他不是關係人")
+                .anySatisfy(link -> assertThat(link.getUserId()).isEqualTo("dir001"));
+        return finance.get(0);
+    }
+
+    /**
+     * ⚠️ 這三個人必須<b>都是自己那張單的關係人</b>，否則這條測試會在測缺陷（#79）。
+     *
+     * <p>原版本是三個人全部留言在 user001 的請假單上，其中 dir001 與這張單
+     * 毫無關係（主管關卡的 assignee 是 mgr001）。他能留言只是因為當時
+     * {@code POST /api/tasks/{id}/comments} 零授權檢查（#79 修掉）。
+     *
+     * <p>現在改成兩張單各自留言：請假單上由申請人與主管留言（user001／mgr001），
+     * 採購單的財務關卡由 dir001 留言 —— 而 dir001 對那張採購單是真實關係人。
+     * 「多方意見」的功能意義（每筆都記得是誰說的）完全不打折。
+     *
+     * <p>「不相關的人留不留下批註」屬於授權，斷言在
+     * {@code com.bpm.core.security.CommentAuthorizationTest}。
+     */
     @Test
     @DisplayName("多人批註：每一筆都必須記錄是誰批的")
     void multipleCommentersAreEachAttributed() throws Exception {
-        Task task = startLeaveAndGetTask();
+        Task leaveManagerTask = startLeaveAndGetTask();
+        assertThat(leaveManagerTask.getAssignee())
+                .as("前置條件：請假單的主管關卡持有者是 mgr001")
+                .isEqualTo("mgr001");
+        Task purchaseFinanceTask = startPurchaseAndGetFinanceTask();
 
-        // 三個不同的人各批註一次。身分走 X-User-Id 標頭（與 acceptance 腳本相同）。
         for (String[] pair : new String[][]{
-                {"mgr001", "請確認交接事項"},
-                {"dir001", "金額偏高，請說明"},
-                {"user001", "已補充說明於附件"}}) {
-            mockMvc.perform(post("/api/tasks/{id}/comments", task.getId())
-                            .header("X-User-Id", pair[0])
+                {"leave", "user001", "請確認交接事項"},
+                {"leave", "mgr001", "金額偏高，請說明"},
+                {"purchase", "dir001", "已補充說明於附件"}}) {
+            String target = pair[0].equals("purchase")
+                    ? purchaseFinanceTask.getId() : leaveManagerTask.getId();
+            mockMvc.perform(post("/api/tasks/{id}/comments", target)
+                            .header("X-User-Id", pair[1])
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content("{\"message\":\"" + pair[1] + "\"}"))
+                            .content("{\"message\":\"" + pair[2] + "\"}"))
                     .andExpect(status().isOk());
         }
 
-        mockMvc.perform(get("/api/tasks/{id}/comments", task.getId()))
+        mockMvc.perform(get("/api/tasks/{id}/comments", leaveManagerTask.getId())
+                        .header("X-User-Id", "mgr001"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(3));
+                .andExpect(jsonPath("$.length()").value(2));
+        mockMvc.perform(get("/api/tasks/{id}/comments", purchaseFinanceTask.getId())
+                        .header("X-User-Id", "dir001"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
 
-        var comments = taskService.getTaskComments(task.getId());
-        assertThat(comments).hasSize(3);
+        var leaveComments = taskService.getTaskComments(leaveManagerTask.getId());
+        var purchaseComments = taskService.getTaskComments(purchaseFinanceTask.getId());
+        assertThat(leaveComments).hasSize(2);
+        assertThat(purchaseComments).hasSize(1);
 
         // 這是本測試的核心：作者不可以是 null／空字串。
         // 全空的話「多人批註」等於一堆無主的字串，無法分辨誰說了什麼。
-        assertThat(comments)
+        assertThat(leaveComments)
                 .as("每一筆批註都必須有作者 —— 全為 null 就是沒有設定 "
                         + "Flowable 的 Authentication")
                 .allSatisfy(c -> assertThat(c.getUserId()).isNotBlank());
+        assertThat(purchaseComments)
+                .as("同上：採購單那一筆也必須有作者")
+                .allSatisfy(c -> assertThat(c.getUserId()).isNotBlank());
 
-        assertThat(comments).extracting(org.flowable.engine.task.Comment::getUserId)
-                .as("三個批註者應各自被正確記錄")
-                .containsExactlyInAnyOrder("mgr001", "dir001", "user001");
+        assertThat(leaveComments).extracting(org.flowable.engine.task.Comment::getUserId)
+                .as("請假單的兩個批註者應各自被正確記錄")
+                .containsExactlyInAnyOrder("mgr001", "user001");
+        assertThat(purchaseComments).extracting(org.flowable.engine.task.Comment::getUserId)
+                .as("採購單那一筆的作者必須是 dir001（不是預設身分、不是空字串）")
+                .containsExactly("dir001");
     }
 
     /**
@@ -124,20 +189,36 @@ class CommentTcA02Test extends IntegrationTestBase {
                         .isEqualTo("user001"));
     }
 
+    /**
+     * 沒有在請求裡明寫身分時仍應成功（不得破壞 TC-L04）。
+     *
+     * <h2>⚠️ #79 之後這條測試的形狀必須說清楚</h2>
+     *
+     * <p>「完全沒有身分」指的是<b>請求裡沒有寫</b>，不是「SecurityContext 裡沒有」。
+     * {@code TestGatewayMockMvcCustomizer} 的 defaultRequest 會補上
+     * {@code X-User-Id: user001}，所以實際的身分是 user001 ——
+     * 也就是這張請假單的申請人（關係人）。因此守衛放行。
+     *
+     * <p>⚠️ <b>不要把這條當成「無需認證即可留言」的證據</b>：
+     * {@code SecurityConfig} 的 {@code authenticated()} 擋在 controller 之前，
+     * 未認證的請求到不了這裡；而 {@code requireTaskParticipant} 對
+     * 空白身分回 404（與 {@code requireParticipant} 同一政策）。
+     * 真正未認證的路徑由 {@code AuthenticationTest} 涵蓋。
+     */
     @Test
-    @DisplayName("批註：完全沒有身分時仍應成功（不得破壞 TC-L04）")
+    @DisplayName("批註：請求未明寫身分時仍應成功（defaultRequest 補 user001 = 申請人）")
     void anonymousCommentStillAccepted() throws Exception {
         Task task = startLeaveAndGetTask();
 
         // acceptance-test.sh 的 TC-L04 就是這個形狀：只有 X-User-Id 標頭、
-        // body 沒有 userId。此處測更極端的情況（兩者皆無）以確保不會 400。
+        // body 沒有 userId。此處連標頭都不寫，套用 defaultRequest 的 user001。
         mockMvc.perform(post("/api/tasks/{id}/comments", task.getId())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"message\":\"沒有身分的批註\"}"))
                 .andExpect(status().isOk());
 
         assertThat(taskService.getTaskComments(task.getId()))
-                .as("訊息仍須寫入（不可因為缺身分而拒絕，否則 TC-L04 會退步）")
+                .as("訊息仍須寫入（不可因為 body 沒帶 userId 而拒絕，否則 TC-L04 會退步）")
                 .hasSize(1);
     }
 }

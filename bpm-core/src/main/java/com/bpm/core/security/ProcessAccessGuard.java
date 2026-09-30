@@ -27,6 +27,14 @@ import java.util.Map;
  * 兩處各自維護 {@code isParticipant}，只要有人改了其中一處（例如加上
  * 「直屬主管也算關係人」），附件會拒絕而 variables 放行 —— 那個組合型式的
  * 差異比沒有檢查更難察覺，因為兩邊單獨看起來都是合理的。
+ *
+ * <p><b>2026-09-29（#79）追加</b>：簽核意見的三個端點是以 <b>taskId</b> 為入口的，
+ * 而它們的規則就是「這個案件能不能讀」—— 所以本類別多了一組
+ * {@code requireTaskReadAccess}／{@code requireTaskParticipant}／{@code processInstanceIdOfTask}，
+ * 連「taskId 屬於哪個案件」這個查詢也收在這裡，而不是散在兩個 controller。
+ * 唯讀端點的簽核軌跡（{@code HistoryController.getHistoricTasks}）本來就走
+ * {@link #requireReadAccess}，加上這組之後，<b>審核軌跡與審核意見的授權是同一條規則</b> ——
+ * 這正是「規則只能有一份」要防的那件事。
  */
 @Component
 public class ProcessAccessGuard {
@@ -136,6 +144,138 @@ public class ProcessAccessGuard {
         if (callerHoldsAuditRead()) return true;
         denyNonParticipant(processInstanceId, userId);
         return false; // 不會執行到：denyNonParticipant 一定拋例外
+    }
+
+    /**
+     * 以 <b>taskId</b> 為入口的讀端授權（#79：簽核意見）。
+     *
+     * <h2>為什麼需要這一層，而不能讓呼叫端自己解 pid</h2>
+     *
+     * <p>簽核意見有三個端點共同一份資料（{@code taskService.getTaskComments}）：
+     * {@code GET /api/tasks/{id}/comments}、{@code GET /api/history/tasks/{taskId}/comments}，
+     * 以及寫入端 {@code POST /api/tasks/{id}/comments}。三處<b>都沒有</b>任何檢查。
+     *
+     * <p>危害不是「多看到一則訊息」：審核意見是這個平台上<b>目前唯一</b>還能讀到
+     * 「誰審的、審核意見原文」的地方 —— 退回理由、駁回原因、薪資調幅等。
+     * 修掉 {@code GET /api/history/tasks}（#76）只是關掉了 taskId 的<b>發射台</b>，
+     * taskId 仍可從稽核紀錄（{@code audit:log:read}）取得，
+     * 這三個端點因此仍可被逐筆列出。
+     *
+     * <p>規則必須<b>只有一份</b>（見類別註解）：若讓每個 controller 自己去
+     * 「task → pid → requireReadAccess」，三處遲早會長出不一致的版本，
+     * 而那種組合型式的差異比沒有檢查更難察覺。所以連「taskId 屬於哪個案件」
+     * 這個查詢也收在這裡。
+     *
+     * <h2>⚠️ 為什麼稽核旁路的留痕寫在<b>這裡</b>而不是讓呼叫端寫</h2>
+     *
+     * <p>{@link #requireReadAccess} 回傳 boolean，現有的呼叫端
+     * （{@code ProcessController.getVariables}、{@code AttachmentController.list}／
+     * {@code download}、{@code HistoryController.getHistoricTasks}）都是自己
+     * {@code if (bypass) publish(...)}。那種寫法有個結構性弱點：
+     * 「旁路必留痕」是<b>政策</b>，但它的落點散在每個呼叫端 ——
+     * 新增端點時忘了寫，policy 測試不會紅，而稽核紀錄裡就是少了那一筆。
+     *
+     * <p>簽核意見的資料完全相同（三個端點讀同一張表），所以 action 名稱可以
+     * 直接固定成 {@code get_task_comments}，不必讓呼叫端自己命名。
+     * 把它收在守衛裡，「旁路沒留痕」這個狀態就<b>結構上不可能</b>發生。
+     * 用 {@link AuditEventPublisher#publish}（fail-closed）而非
+     * {@code publishDetached}：與其餘讀端端點同一政策 —— 稽核寫不進去的話，
+     * 這筆調閱就不該成功。
+     *
+     * <h2>⚠️ 為什麼「任務不存在」也是 404</h2>
+     *
+     * <p>改動前 {@code taskService.getTaskComments(unknownId)} 回 {@code 200 + []} ——
+     * 「查不到」與「沒權看」塌成同一個回應，正是 {@link InstanceState}
+     * 存在的理由：呼叫端看到空集合時完全無法分辨該怎麼處理，而這兩種情況
+     * 該做的事正好相反（前者是資料問題、後者是權限問題）。
+     * 回 404 同時也讓「不存在」與「不是你的」無法分辨（見類別註解的政策）。
+     *
+     * <p>寫入端同樣受益，但它的原症狀不同：{@code POST} 到不存在的 taskId
+     * 會由 {@code AddCommentCmd} 拋 {@code FlowableObjectNotFoundException} → <b>裸 500</b>。
+     * 負向控制組實測確認過（見 {@code CommentAuthorizationTest} 內的說明）。
+     */
+    public void requireTaskReadAccess(String taskId, String userId) {
+        String pid = processInstanceIdOfTask(taskId);
+        if (pid == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "任務不存在: " + taskId);
+        }
+        if (requireReadAccess(pid, userId)) {
+            auditPublisher.publish(new AuditEvent(OperationType.DATA_ACCESS.name(), userId,
+                    pid, taskId,
+                    Map.of("action", "get_task_comments", "auditBypass", true)));
+        }
+    }
+
+    /**
+     * 以 <b>taskId</b> 為入口的寫端授權（#79：留言），並回傳所屬案件。
+     *
+     * <h2>為什麼是 {@code requireParticipant} 而不是 {@code requireHolder}</h2>
+     *
+     * <p>批註是「在這張單上留一句話」，<b>不改變任務狀態</b>（spec §4.5：
+     * 「批註為任務留言功能，不影響流程走向」），所以它屬於「寫個案」而不是
+     * 「動作任務」—— 後者指的是 complete／delegate／resolve／reassign 那一類
+     * 會推進流程的動作。
+     *
+     * <p>而 {@code requireParticipant} 是 {@code requireHolder} 的<b>超集</b>：
+     * {@link #isParticipant} 的條件 2（{@code taskInvolvedUser}）比對
+     * {@code ACT_RU_IDENTITYLINK}／{@code ACT_HI_IDENTITYLINK} 的
+     * {@code USER_ID_}，assignee、owner、candidateUser 的 identity link 都在裡面，
+     * 所以<b>每一個能簽這個任務的人一定通過這一道</b>。
+     * 這正是 {@link TaskHolderGuard} 類別註解要求的方向：超集只往「多算」長。
+     * 反過來說用 {@code requireHolder} 會平白擋掉申請人 —— 他是關係人，
+     * 卻不是主管審核關卡的持有者。
+     *
+     * <h2>⚠️ 為什麼「已結束的關卡」<b>刻意</b>放行到這裡</h2>
+     *
+     * <p>{@link #processInstanceIdOfTask} 是 runtime 優先、歷史次之，
+     * 所以對一個已結束的關卡仍然解析得出 pid，於是守衛<b>放行</b>，
+     * 由 {@code TaskController.addComment} 把 {@code AddCommentCmd} 丟出的
+     * {@code FlowableObjectNotFoundException} 翻成 404（#79-2）。
+     *
+     * <p><b>不要在這裡擋掉它</b>：同一個 pid 也是<b>讀</b>端的輸入，
+     * 而已結束關卡的簽核軌跡必須讀得到（{@code ApprovalTimeline.vue}）。
+     * 在守衛裡加一道「任務必須在 runtime」的檢查，等於為了寫入端去打死讀取端。
+     * 而且那會是<b>第三份</b>「這個 taskId 存不存在」的規則 ——
+     * 本 repo 的硬規則是規則只能有一份。
+     * 這裡判斷的是<b>關係人</b>（授權），runtime 存不存在是<b>狀態</b>，兩件事。
+     *
+     * <h2>⚠️ 為什麼不開稽核旁路</h2>
+     *
+     * <p>稽核人員的職責是<b>查閱</b>，不是替別人的案件補簽核意見。
+     * 旁路的理由（{@link #requireReadAccess}）不適用於寫入 ——
+     * 與 {@code requireParticipant} 在附件上傳的立場相同。
+     *
+     * @return 這個任務所屬的 processInstanceId（呼叫端要寫進稽核與
+     *         {@code taskService.addComment}，順便省掉一次重複查詢）
+     */
+    public String requireTaskParticipant(String taskId, String userId) {
+        String pid = processInstanceIdOfTask(taskId);
+        if (pid == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "任務不存在: " + taskId);
+        }
+        requireParticipant(pid, userId);
+        return pid;
+    }
+
+    /**
+     * 這個 taskId 屬於哪一個案件；查不到回 {@code null}。
+     *
+     * <p><b>runtime 優先、歷史次之</b>，與 {@link #initiatorOf} 同一個理由：
+     * 執行中的任務在 runtime 查得到，已結束的只剩下歷史。兩個都查不到
+     * 就是「這個 taskId 不存在」—— 而「不存在」與「沒權看」在這個平台上一律
+     * 回 404（見類別註解）。
+     *
+     * <p>⚠️ <b>不可改成「catch 例外後回 null」</b>：Flowable 命令在外層交易中
+     * 拋例外會把交易標成 rollback-only（見 {@link #initiatorOf} 的說明），
+     * 而 {@code POST .../comments} 是 {@code @Transactional} 的。
+     */
+    public String processInstanceIdOfTask(String taskId) {
+        if (taskId == null || taskId.isBlank()) return null;
+        var task = taskService.createTaskQuery().taskId(taskId).singleResult();
+        if (task != null) return task.getProcessInstanceId();
+        var historic = historyService.createHistoricTaskInstanceQuery()
+                .taskId(taskId).singleResult();
+        return historic == null ? null : historic.getProcessInstanceId();
     }
 
     /** 拒絕別人的案件，並留下「有人嘗試存取」的稽核。 */
