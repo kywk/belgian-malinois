@@ -1,4 +1,4 @@
-# 接手文件 — 2026-09-30 第二輪（#86 #79 #81 #87 #80 已完成，#83 進行中）
+# 接手文件 — 2026-09-30 第二輪完成（#86 #79 #81 #87 #80 #83）
 
 **寫給下一個接手的實作 agent。** 撰寫時間 2026-09-30。
 上一輪的交接見 `docs/handoff/2026-09-29-authorization-hardening-handoff.md`
@@ -34,7 +34,7 @@ backlog 原本寫「只要該 key 已有任何一筆規格，重複儲存必定�
 | 前端 | Vue 3.4 + Vite 5 + Element Plus |
 | DB | MSSQL 2022，**三個資料庫**：`bpm_core_db`／`bpm_audit_db`／`bpm_form_db` |
 | 其他 | RabbitMQ、Redis、MailHog。Docker 是 **OrbStack** |
-| 測試 | 後端 **482** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **66** 個（Vitest） |
+| 測試 | 後端 **509** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **66** 個（Vitest） |
 | 分支 | `feature/round2-hardening`，比 `main` 多 9 個 commit，**未 push** |
 | 部署 | **尚未部署，只有本機開發** |
 
@@ -249,6 +249,26 @@ export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
 | #87 | `bdddb9d`／`c1bb853`／`7c13a4b` | 同批重複變數名回 **400 並指名衝突**。⚠️ **「重複」不能用 `Set<String>` 判斷** —— 定序是 `SQL_Latin1_General_CP1_CI_AS`，PM 獨立實查確認 `Amount`/`amount`、`amount`/`amount `、全形`Ａ`/半形`A` 在 DB 層面就是衝突（`SELECT CASE WHEN N'Amount'=N'amount'` 回 1，INSERT 真的撞約束）。只做 `Set<String>` 的話**使用者最常見的失敗形狀擋不住** |
 | #81 | `ec4f3a5`（已合併 `4112e99`） | `POST /api/forms` 的 `createdBy` 改由登入身分決定。⚠️ **後果比 backlog 描述嚴重**：實測**省略** `createdBy` 時原本存的是 `null` —— 不只是「可冒用」，而是**正常呼叫下這欄根本是空的，每一張經 `POST /api/forms` 建立的審核表都沒有作者**（`FormDefinition.createdBy` 無預設值、無 `nullable=false`，`FormService.create()` 完全不碰它）。與 `createNextDraft`（v2 有設）的不一致方向是「其中一條壞掉」。**但稽核從未被污染** —— `audit("FORM_UPDATE", userId, …)` 傳的一直是 `@CallerId`，與 #66／#72 的「operatorId 一起被冒用並被 hash chain 永久固定」性質不同，**不要用 #66 的嚴重性去描述它** |
 | #80 | `28e44ef`（已合併 `29f9605`） | 三個端點接既有守衛（`bpmn-xml` 與 `documents/{id}` → `requireReadAccess`，`documents` 列表 → `requireSelf`）。**連帶修掉兩項原描述未提到的**：`GET /api/documents/{id}` 同樣零檢查（只修列表等於沒修）、`ExternalApiController` 啟動不存在 key 的裸 500（#69 條目自己指名留給本工項） |
+| #83 | `b97e10a`／`e49ec46`（已合併 `29a7824`） | 新增 `ApplicantResolver` bean，3 個補件 UserTask 的 assignee 改用它。三段：`onBehalfOf` → `initiator`（是人的話）→ 權限碼 `bpm:external:revision` 指定的受理人。**找不到受理人時拋例外而非回 null**（回 null 是換一種方式製造同一個靜默卡死）。另修掉 `UnreachableTaskListener` 的告警繞過 |
+
+**#83 的兩個關鍵設計**：
+
+- **`TaskHolderGuard` 經 `git diff` 確認只有註解變更、零邏輯改動。** 這個工項最誘人的錯誤修法是「放寬持有者條件讓它能簽」——
+  agent 沒有走，並在註解裡說明理由：根因能從路由層徹底修掉，就不必用授權放寬來換。
+  PM 驗證過這個 diff，這是本輪最重要的一個「該拒絕的誘惑」。
+- **候選人救不了這種任務**：`Flowable` 的 `taskCandidateUser` 帶 `ASSIGNEE_ IS NULL`，
+  assignee 一旦非 null 候選人就看不到 —— **兩個條件互斥而非互補**。
+  想靠加候選人來補救會完全無效。
+- **`system:` 前綴的比對不區分大小寫**：`firstTaskAssignee` 是 body 裡自由指定的
+  字串且無任何驗證，可以送 `SYSTEM:x` 繞過只比小寫的檢查。
+
+**#83 的線上實測（決定性）**：
+```
+外部系統發起 → mgr001 退回 → 補件關卡 assignee = dir001（不再是 system:<id>）
+→ 無關的 user002 簽 → 404（守衛未鬆）
+→ dir001 簽 → 200，流程回到「主管審核」給 mgr001
+```
+**整條回路打通 = 案件不再靜默卡死的實證。**
 
 **#80 的一個設計值得學**：它的 404 預先檢查**刻意排在 403 之後**。
 順序顛倒的話，一個只被授權 `leave-approval` 的系統能用「403 變 404」
@@ -334,8 +354,7 @@ git worktree list            # 確認每個 agent 一個
 
 ## 11. 現況一句話
 
-`feature/round2-hardening` = 待合併 #83 中，比 `main` 多 14 個 commit，**未 push**。
-已完成 **#86、#79、#87、#81、#80**。後端 **482** 測試全綠（**容器停止狀態下跑的**）、
+`feature/round2-hardening` = `29a7824`（#86 #79 #81 #87 #80 #83 全部合併），**未 push**。
+已完成 **#86、#79、#87、#81、#80、#83**。後端 **509** 測試全綠（**容器停止狀態下跑的**）、
 前端 **66** 全綠、`acceptance-test.sh` PASS 7 / FAIL 0。工作樹乾淨。
-**#83 進行中（獨立 worktree `/tmp/gh-83`）。**
 **待裁決：#79-2、#87-2、#87-3（見第 8 節）。尚未部署。**
