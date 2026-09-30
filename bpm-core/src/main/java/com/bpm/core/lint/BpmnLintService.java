@@ -84,8 +84,15 @@ public class BpmnLintService {
      * <p>只看啟用中的：停用的系統無法發起流程，拿它來觸發規則 h 只是噪音。
      *
      * <p>讀不到資料時回 {@code false}（不觸發規則 h）。這個方向是刻意的 ——
-     * 規則 h 的 severity 是 warning，而 lint 不該因為讀不到外部系統設定
-     * 就對每個流程噴一堆無法處理的警告。
+     * 規則 h 檢查的是一個外部系統的授權設定，而授權設定讀不到時，
+     * 噴一整頁「你不能用 initiator」是噪音：管理員此刻無法解決它
+     * （他連外部系統清單都看不到），而部署該擋的是<b>已知不合法</b>的 BPMN。
+     *
+     * <p>⚠️ 但這也代表：<b>授權設定讀不到時，規則 h 不會擋任何人</b>。
+     * 那是刻意選的一邊（見上），因為反過來（讀不到就擋）會讓
+     * bpm-core 啟動順序或資料庫逾時變成「所有人都不能部署流程」。
+     * 後果只是漏放，不是誤擋 —— 而誤擋會逼人繞過 lint，
+     * 連帶讓<b>所有</b>規則一起失效（見 LintRuleCorrectnessTest 的類別註解）。
      */
     private boolean isExternallyStartable(String processKey) {
         if (processKey == null || processKey.isBlank()) return false;
@@ -272,11 +279,32 @@ public class BpmnLintService {
         }
 
         // Rule h: external-initiated process, first UserTask should not use initiator EL
+        //
+        // ⚠️ severity 由 warning 升為 error（#68d）。
+        //
+        // 為什麼必須是 error 而不只是警告：它描述的後果是
+        // **靜默卡死**。外部系統發起時 initiator 是 system:<id>，不是人，
+        // 組織系統查不到它的主管 —— 第一關的 assignee 會是 null 或一個
+        // 沒有人能持有的值，而流程看起來「啟動成功」。
+        // 警告的話，唯一的保護是部署者恰好有在讀警告列表；
+        // 升成 error 之後 {@code POST /api/deployments} 會直接擋下，
+        // 也就是讓它在<b>還沒造成任何案件</b>的時候就失敗。
+        //
+        // 與規則 h 同一個理由的是 UnreachableTaskListener（#83）：
+        // 那個是執行期的告警，而這個是部署前的閘門 —— 兩者互補，不可互相取代。
+        //
+        // ⚠️ 升級前已驗證（見 LintRuleCorrectnessTest 的 regressionTests）：
+        //   bpm_external_system 沒有 seed SQL（乾淨庫上 isExternalAllowed 恆為 false）、
+        //   兩支出廠 BPMN 的第一個 UserTask 都是 ${assigneeResolver.resolve(execution)}
+        //   （字串裡沒有 "initiator"）、沒有任何測試斷言這個 severity。
+        // 前兩項讓 scripts/seed-data.sh 不受影響 —— 那一條是用整合測試
+        // 實際跑過部署路徑確認的，不是推論。
         if (externalAllowed && isFirstUserTask(ut, process)) {
             String allExprs = (assignee != null ? assignee : "") + candidateUsers + candidateGroups;
             if (allExprs.contains("initiator")) {
                 errors.add(new LintError(ut.getId(), ut.getName(), "external-initiator",
-                        "允許外部發起的流程，第一個 UserTask 不可使用 initiator EL 函數", "warning"));
+                        "允許外部發起的流程，第一個 UserTask 不可使用 initiator EL 函數",
+                        "error"));
             }
         }
     }
