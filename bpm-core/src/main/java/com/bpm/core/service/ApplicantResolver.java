@@ -33,7 +33,8 @@ import org.springframework.stereotype.Service;
  *   <li><b>{@code onBehalfOf} 有值 → 那位員工。</b>
  *       這是 backlog #68c <b>已定調</b>的規則（{@code ExternalApiController}
  *       在啟動時已驗證 {@code onBehalfOf} 是組織系統認識的人，
- *       見 {@code startProcess} 的 try/catch → 400）。
+ *       見 {@link com.bpm.core.external.ExternalActorGuard} —— #88 起
+ *       {@code onBehalfOf} 與 {@code firstTaskAssignee} 共用那一條規則）。
  *       必須是第一段：代員工發起時 {@code initiator} 仍然是
  *       {@code system:<id>}，不先取 {@code onBehalfOf} 就會把員工自己的單
  *       派給一個無關的收件人。</li>

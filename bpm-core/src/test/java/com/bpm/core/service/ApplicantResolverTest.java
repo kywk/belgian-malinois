@@ -109,8 +109,9 @@ class ApplicantResolverTest {
         when(permService.getFirstAvailableUser(ApplicantResolver.PERM_EXTERNAL_REVISION))
                 .thenReturn("dir001");
 
-        // firstTaskAssignee 是外部系統自由指定的字串且沒有驗證，
-        // 所以大小寫不同的系統身分真的可能被寫進來（見 ExternalActorIdentity）。
+        // #88 起外部 API 已在輸入端擋掉 system: 形狀（ExternalActorGuard），
+        // 但本方法仍是第二層：BPMN 字面值與其他寫入路徑仍可能產生它，
+        // 而大小寫不敏感是「不漏報」的方向（見 ExternalActorIdentity）。
         assertThat(resolve("SYSTEM:erp", null)).isEqualTo("dir001");
         verify(permService).getFirstAvailableUser(ApplicantResolver.PERM_EXTERNAL_REVISION);
     }
