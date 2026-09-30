@@ -179,7 +179,7 @@
 | 77 | 表單 schema 改寫無 ADMIN 限制 | ✅ **2026-09-29 完成**（`cc530df`）。`/api/forms/**` 掛在 `/api/** → authenticated()`，任何登入者能三步改版並發布全公司審核表。⚠️ 依 spec §8.5（欄位 id == 變數名）能改 schema 就能加一個欄位叫 `approved`。新增權限碼 `bpm:form:design`（**非** ADMIN，因會擋掉「業務人員自行設計」的產品定位），讀維持登入即可 | ~0.5d | ✅ |
 | 78 | 稽核的 ROLE_ADMIN 旁路是側門 | ✅ **2026-09-29 完成**（`cc530df`）。`SecurityConfig` 讓 `/api/audit-logs/**` 接受 ADMIN，但 `AuditEvent.detail` 帶整包流程變數，而 `ProcessAccessGuard` 明確拒絕 ADMIN 讀同一批資料 → 側門。已移除。⚠️ **之後讀稽核要用 `dev-token.sh dir001`**，不要用 `admin001 admin` | 0.2d | ✅ |
 | 79 | 簽核意見零授權 | ✅ **2026-09-30 完成**。三個端點（`GET /api/tasks/{id}/comments`、`GET /api/history/tasks/{taskId}/comments`、`POST /api/tasks/{id}/comments`）新增 `ProcessAccessGuard.requireTaskReadAccess`／`requireTaskParticipant` —— **規則與時間軸／variables／附件完全同一條**（關係人 ∪ `audit:log:read`，旁路必留痕；寫入端不開旁路）。連「taskId → 哪個案件」都收進守衛，理由是授權規則只能有一份。線上實測：`user002`／`mgr002` 由 200 變 404，審核人逐筆讀完自己參與案件的完整軌跡（含 assignee 不是自己的補件關卡）。**⚠️ 原描述「`userId` 靠 `firstNonBlank` 順序僥倖」經實測<b>不成立</b>**：`req.userId()` 從未生效（`callerId` 優先，且守衛保證它非空白），冒用沒有成功 —— 真正的缺陷只是授權缺失。`userId` 欄位維持現狀，屬 #66／#72／#81 同型的另案。**⚠️ 連帶修掉**：對不存在的 taskId 留言由裸 500 → 404。**新發現（已回報 PM）**：對**已完成**的關卡留言仍是裸 500（`AddCommentCmd` 的既有行為，改動前完全相同），404 還是 409 待政策決定 | ~~1d~~ | ✅ |
-| 80 | `GET /api/process-instances/{id}/bpmn-xml` 與 `GET /api/documents` | 🟠 兩者零檢查。`bpmn-xml` 的 `activeIds` 洩漏「這張單現在卡在哪一關」——**能精準指導後續攻擊的情報**，比單純 id 枚舉價值高。`GET /api/documents` 不帶參數即 `findAll()`（回傳全部公文含 processInstanceId，是 pid 的第二個枚舉來源），與 #71 修掉的 `GET /api/process-instances` 同型。兩者的修法都只是 `requireReadAccess`／`requireSelf`（已存在且被用過） | 0.5d | ⬜ |
+| 80 | `GET /api/process-instances/{id}/bpmn-xml` 與 `GET /api/documents` | ✅ **2026-09-30 完成**（`28e44ef`）。`bpmn-xml` 與 `GET /api/documents/{id}` 接 `ProcessAccessGuard.requireReadAccess`（關係人 ∪ `audit:log:read`，旁路必留痕，非關係人 **404**）；`GET /api/documents` 接 `requireSelf`。**規則與 variables／附件／表單資料／簽核軌跡完全同一條**——沒有新造第四組。⚠️ **政策決定（已實作，待 PM 追認）**：`/api/documents` 選**自己建立的**而非「自己參與的」：省略 `createdBy` = 呼叫者、帶他人 = 400。放棄了「全公司公文清單」與稽核旁路（稽核職能改走 `/api/audit-logs` 的 `PROCESS_START` 事件或 `GET /api/documents/{id}` 的旁路）。**關鍵前提：沒有任何前端呼叫這個端點**（`grep` 零命中），所以收斂範圍不會讓畫面壞掉；日後若需要應**新增** `/api/documents/involved` 而非把這個放寬回去。**連帶修掉兩項原描述未提到的**：(1) `GET /api/documents/{id}` **同樣零檢查**——只修列表等於沒修，documentId 仍可從稽核紀錄取得逐筆列出；(2) `ExternalApiController` 啟動不存在的流程 key 的**裸 500**（#69 條目自己指名留給本工項的別名，`allowedProcessKeys` 是自由文字無必填驗證 → 管理員打錯一個字就踩到，而批次重試住列會無限重試）。⚠️ **bpmn-xml 對「已結案」維持 200 + 空圖**（`ProcessDiagram.vue:23` 依賴它顯示「無流程圖資料」；「從未存在」已由守衛擋成 404）。⚠️ **孤兒公文**（`processInstanceId` 為 null，`create()` 先存檔再啟流程的失敗殘留）**只有建立人讀得到**——它沒有案件可「參與」。負向控制組：三個 controller 整份還原 → bpmn/documents **19 條中 12 條紅**（綠的 7 條逐條記在測試 javadoc，其中「`?createdBy=自己` 缺陷期間本來就正確」證明壞的只有兩個分支，支撐了收斂成單一規則的決定）、external **4 條中 1 條紅**。後端 **473** 測試全綠（基線 450 + 新增 23）。⚠️ **線上實測待 PM 進行** | ~~0.5d~~ | ✅ |
 | 81 | `POST /api/forms` 的 `createdBy` 可冒用 | 🟠 與 #66／#72 同型但落在 `FormDefinition` 而非流程。`FormDefinition.createdBy` 有 setter（**非** READ_ONLY）且 `FormService.create()` **完全不碰它**（只用 `@CallerId` 餵稽核）。對照 `POST /{formKey}/revisions` → `createNextDraft` 有 `setCreatedBy`，**兩個端點不一致**。後果：「這張審核表是誰做的」不可信 | 0.3d | ⬜ |
 | 82 | 前端沒有權限碼的概念 | 🟠 **`bpm:form:design` 在 UI 上看不到效果**。`bpm-frontend/src/services/session.js` 只讀 JWT 的 `roles` claim，而權限中心的權限碼**不在 token 裡**；`router/index.js:24,28` 的 `/admin/form-editor` 與 `/admin/forms` 是 `requiresRole: 'admin'`。所以只持有 `bpm:form:design` 的業務人員後端放行但前端擋掉。這不是 #77 的 regression（那兩條路由本來就要求 admin），但它讓產品價值看不到。修法需要新的資料來源：後端 `/api/me/authorities` 端點，或 IdP 簽發時把權限碼放進 token —— **架構決定** | 1.5d | ⬜ |
 | 83 | assignee 為 `system:<id>` 的任務沒有人能簽 | 🟠 **#74 造成的行為變化**（安全方向正確但功能壞掉）。外部系統發起 → 主管退回 → 補件關卡 assignee 是 `${initiator}` = `system:<id>` → 四個持有者條件全不命中 → 案件永久卡死。改動前是「任何人都能簽」，現在是「沒有人能簽」。**根本解法在 BPMN／路由層**：`initiator` 不是人時改指 `onBehalfOf` 或系統設定的受理人。`ExternalApiController.completeTask` 是 server-to-server 路徑有 `verifyRunningOwnership`，不受影響；缺口只在「人工去簽補件」 | 1d | ⬜ |
@@ -207,8 +207,8 @@
 | 基礎設施 | 4 | 0 | 2 | 2 | 3.5d |
 | Form Service | 6 | 2 | 2 | 2 | 6d |
 | 跨服務整合 | 6 | 1 | 4 | 1 | 17d |
-| 2026-09-29 新增 | 22 | 16 | 0 | 6 | 26.7d |
-| **合計** | **87** | **38** | **21** | **28** | **~113 人天** |
+| 2026-09-29 新增 | 22 | 17 | 0 | 5 | 26.2d |
+| **合計** | **87** | **39** | **21** | **27** | **~112.5 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -218,6 +218,8 @@
 > 2026-09-30 更新：#84、#85、#86 完成（+1 項新發現 #87）。統計表已重算
 > （「2026-09-29 新增」實際是 21 項，不是先前誤植的 8 項）。
 > 2026-09-30：#79、#87 完成（後端測試 450、前端 66）。
+> 2026-09-30：#80 完成（後端測試 **473**，基線 450 + 新增 23）。**未做線上實測**
+> （在獨立 worktree 中進行，同機器另有兩個 agent，資源會衝突）—— 待 PM 統一進行。
 > ⚠️ **測試數只有 `mvn verify` 輸出的 `Tests run: N` 是真的** ——
 > `target/surefire-reports` 不涵蓋 `@Nested` 內類別，逐類加總會少 34 條；
 > 併行跑測試時該目錄還會被互相覆寫。

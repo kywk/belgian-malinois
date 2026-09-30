@@ -178,7 +178,7 @@ command cp bpm-core/target/<dir>/<file> <file>   # 還原（cp 被 alias 成互�
 |---|---|---|
 | **#83** | `system:<id>` 的任務沒有人能簽 | **#74 造成的行為變化**。外部系統發起 → 主管退回 → 補件關卡 assignee 是 `${initiator}` = `system:<id>` → 四個持有者條件全不命中 → **案件永久卡死**。根本解法在 BPMN／路由層 |
 | **#82** | 前端沒有權限碼的概念 | `session.js` 只讀 JWT 的 `roles` claim，權限中心的權限碼不在 token 裡。**架構決定**，要先問使用者 |
-| #80 | `bpmn-xml` 與 `documents` 零檢查 | `bpmn-xml` 的 `activeIds` 洩漏「卡在哪一關」；`GET /api/documents` 不帶參數即 `findAll()` |
+| ~~#80~~ | ~~`bpmn-xml` 與 `documents` 零檢查~~ | ✅ **2026-09-30 完成**。`activeIds` 洩漏「卡在哪一關」已關閉；`GET /api/documents` 的 `findAll()` 已收斂成「自己建立的」 |
 | #81 | `POST /api/forms` 的 `createdBy` | 與 #66／#72 同型 |
 | — | 被委派任務送 `complete` 是裸 500 | **既有引擎行為**，委派能走完的動作是 `resolve` |
 | — | `isParticipant` 不涵蓋候選群組 | Flowable 的 `taskInvolvedUser` 只比對 `USER_ID_`。**使用者已明確決定維持現狀** |
@@ -235,6 +235,9 @@ export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
 | **#79-2** | 對**已完成**的關卡留言仍是裸 500（`AddCommentCmd` 查不到 runtime task）。**改動前完全相同，非本輪引入**。守衛放行之後才 500 對呼叫端是誤導的。修成 404（任務已結束）還是 409（狀態衝突）屬 API 語意政策。已用測試釘住現狀。前端走不到這條路徑 |
 | **#87-2** | **空白 `variableName` 該不該擋？** 現況：單一空白名 → 200（已用測試釘住），兩個空白名互相衝突 → 400。**#87 的建議是擋**：`variableName` 就是外部系統要塞進流程的 key（spec §8.5），一個叫 `""` 的變數永遠比對不到任何東西 —— 設定它的人看不到異常，但輸入驗證等同少了一項；`required=true` 的空白名則讓**每一次**外部發起都回 400。擋的話改動很小 |
 | **#87-3** | `variableName: null` 仍 500（NOT NULL 約束）。刻意未擋，屬空白名稱政策的一部分，建議與 #87-2 一起裁決 |
+| **#80-1** | **`GET /api/documents` 應列出「自己參與的」還是「自己建立的」？**（已實作為**自己建立的**，待追認）。省略 `createdBy` = 呼叫者、帶他人 = 400。**放棄了**「全公司公文清單」與稽核旁路。關鍵前提是**沒有任何前端呼叫這個端點**（`grep` 零命中），所以現在收斂零成本；日後若要「我參與的公文」應**新增** `/api/documents/involved`（走 `ProcessInvolvementService` + `requireReadAccess`），而不是把這個放寬回去。完整理由見 `DocumentController.list` 的 javadoc |
+| **#80-2** | **`bpmn-xml` 對「已結案」的案件仍回 200 + 空圖**（`pi == null` 的分支刻意未改）。`ProcessDiagram.vue:23` 依賴它顯示「無流程圖資料」，改成 404 會讓審結的單在畫面上變成錯誤訊息。分開「已結案」與「從未存在」需要改變回應契約（已結案的單突然有流程圖），屬產品決定。**「從未存在」已由守衛擋成 404**，所以不存在枚舉管道 |
+| **#80-3** | **#80 未做線上實測**（獨立 worktree 作業，同機器另有兩個 agent，8080/Testcontainers 會衝突）。狀態碼斷言已全部走真實 HTTP 的整合測試，但**真實 JWT + curl 與 `acceptance-test.sh` 待 PM 統一進行** |
 
 ---
 
