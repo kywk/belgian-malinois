@@ -85,6 +85,28 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code user002} 是一個<b>真實登入者</b>、與該案無關 —— 後者才是實測報告裡的
  * 攻擊者，也是最危險的取樣。兩個都取樣，因為它們失敗的方式不同：
  * 前者可能只是「沒這個人」，後者是「有這個人但他不該看」。
+ *
+ * <h2>#79-2：對已結束關卡留言由 500 改為 404 —— 本組新增的三條是<b>對照組</b></h2>
+ *
+ * <p>使用者的裁決是回 404（與其他「找不到東西」的回應一致，呼叫端不會再重試）。
+ * 但「回 404」本身有兩種截然不同的實作，必須用測試把它們分開：
+ * <ul>
+ *   <li><b>正確</b>：只有「runtime 裡沒有這個任務」才 404。
+ *       由 {@link #commentingOnARunningTaskStillWorksAfterTheFix} 釘住。</li>
+ *   <li><b>錯誤，且所有負向測試都會綠</b>：把 catch 寫得太寬
+ *       （{@code catch (Exception)}）或直接在守衛擋掉，導致<b>所有</b>留言都 404。
+ *       {@link #commentingOnAFinishedTaskIsNotFound} 一樣會通過。
+ *       唯一能分辨的證據就是那條「執行中仍然 200 + 批註筆數 +1 + 稽核 +1」。</li>
+ *   <li><b>第三種錯誤</b>：連<b>讀</b>端一起擋掉。
+ *       已結束關卡的簽核意見屬於 {@code ACT_HI_COMMENT}，與 runtime 無關，
+ *       擋掉會讓 {@code ApprovalTimeline} 在審結案件上整段空白 ——
+ *       而且它 {@code catch} 成 {@code []}，<b>不會報錯</b>。
+ *       由 {@link #readingCommentsOfAFinishedTaskStillWorksAfterTheFix} 釘住。</li>
+ * </ul>
+ *
+ * <p>三條都另外驗「批註筆數沒變」與「稽核沒寫」：狀態碼對了不代表
+ * 「什麼都沒發生」被驗過，而 404 最大的風險就是
+ * 「回應看起來合理，但資料其實寫了一半」。
  */
 class CommentAuthorizationTest extends IntegrationTestBase {
 
@@ -451,36 +473,135 @@ class CommentAuthorizationTest extends IntegrationTestBase {
     }
 
     /**
-     * ⚠️ <b>這條不是授權的負向對照</b>，它固定的是一個<b>既有</b>缺陷。
+     * #79-2：對<b>已完成</b>的關卡留言由裸 500 改為 404（使用者已裁決）。
      *
-     * <p>2026-09-30 線上實測：對一個<b>已完成</b>的 taskId 留言，
+     * <p>2026-09-30 線上實測（改動前）：對一個已完成的 taskId 留言，
      * 授權會通過（守衛查得到歷史，所以 pid 找得到、關係人也成立），
      * 接著 {@code AddCommentCmd} 因為 runtime 裡沒有這個任務而拋
      * {@code FlowableObjectNotFoundException} → 500。
      *
      * <p>改動前完全相同（{@code task == null} → pid 傳 null → 同一個例外），
-     * 所以不是本工項的迴歸。修法（404 還是 409、「審完能不能補留言」）
-     * 屬於 API 語意的政策性決定，已回報 PM。
+     * 所以不是 #79 的迴歸。但「你有權，但這件事做不成」被講成「伺服器壞了」，
+     * 而 500 讓呼叫端一直重試 —— 那個重試永遠不會成功。
      *
-     * <p>寫成測試是為了讓它<b>被看見</b>：現在它是綠的（斷言 500），
-     * 因此不會被誤認為「已處理」—— 狀態碼一旦被改成 404 或 409，這條就會紅。
+     * <p>⚠️ <b>這條測試本身不足以證明修法正確</b>：把整個守衛拿掉、
+     * 讓每個 taskId 都回 404，它的斷言一樣會過。真正的對照是
+     * {@link #commentingOnARunningTaskStillWorksAfterTheFix} —— 執行中
+     * 的任務仍然必須留言成功。
      */
     @Test
-    @DisplayName("#79（已知限制）：對已完成的關卡留言仍是 500，不是 404")
-    void commentingOnAFinishedTaskIsStillTheEnginesFiveHundred() throws Exception {
+    @DisplayName("#79-2：對已完成的關卡留言是 404，不是裸 500")
+    void commentingOnAFinishedTaskIsNotFound() throws Exception {
         ReturnedCase c = finishedCaseWithComments();
         assertThat(taskService.createTaskQuery().taskId(c.managerTaskId()).count())
                 .as("前置條件：這個關卡必須已經結束，否則測的是別的東西").isZero();
+        truncateAuditLog();
 
         var res = post("/api/tasks/" + c.managerTaskId() + "/comments", "mgr001",
                 "{\"message\":\"事後附註\"}");
 
         assertThat(res.statusCode())
-                .as("既有行為：授權通過後 AddCommentCmd 拋 FlowableObjectNotFoundException → 500。"
-                        + "改為 404／409 需要 PM 的政策決定")
-                .isEqualTo(500);
+                .as("改動前這裡是 500（FlowableObjectNotFoundException 未被翻譯）。"
+                        + "404 與其他「找不到東西」的回應一致，呼叫端不會再重試")
+                .isEqualTo(404);
+        assertThat(res.body())
+                .as("404 的回應不得把引擎例外或簽核意見原文送出去")
+                .doesNotContain(SENSITIVE);
+
+        // 非空斷言：狀態碼對了不代表「什麼都沒發生」被驗過。
         assertThat(commentCount(c.managerTaskId()))
-                .as("500 不得留下半筆資料").isEqualTo(1);
+                .as("被拒的留言不得寫進去 —— 只看狀態碼會漏掉這個")
+                .isEqualTo(1);
+        assertThat(taskService.getTaskComments(c.managerTaskId()))
+                .allSatisfy(x -> assertThat(x.getFullMessage()).isEqualTo(SENSITIVE));
+        assertThat(auditCountFor("mgr001", "TASK_COMMENT"))
+                .as("沒有留言發生就不該宣稱有 —— 與「被拒的請求不得寫出稽核」同一條原則")
+                .isZero();
+    }
+
+    /**
+     * ⚠️ <b>#79-2 的必要對照：不能把「所有留言都 404」當成修好。</b>
+     *
+     * <p>這是本工項最危險的失敗形狀：例外轉譯如果寫得太寬
+     * （例如 {@code catch (Exception)}），會把<b>執行中</b>的任務也打成 404，
+     * 而所有「已完成 → 404」的測試仍然全綠。
+     *
+     * <p>因此這條必須同時斷言三件事，缺一不可：
+     * <ol>
+     *   <li>狀態碼是 200；</li>
+     *   <li>批註筆數真的 +1（不是「碰巧沒被擋掉但也沒寫進去」）；</li>
+     *   <li>稽核真的寫出一筆 {@code TASK_COMMENT} —— 這一條同時讓上面
+     *       {@link #commentingOnAFinishedTaskIsNotFound} 的「稽核沒寫」
+     *       斷言不是空轉。</li>
+     * </ol>
+     */
+    @Test
+    @DisplayName("#79-2：執行中（未完成）的任務仍然留言成功 —— 404 不得擴散到正常路徑")
+    void commentingOnARunningTaskStillWorksAfterTheFix() throws Exception {
+        Case c = commentedRunningCase("user001");
+        assertThat(taskService.createTaskQuery().taskId(c.managerTaskId()).count())
+                .as("前置條件：這個任務必須還在執行中").isEqualTo(1);
+        truncateAuditLog();
+
+        var res = post("/api/tasks/" + c.managerTaskId() + "/comments", "mgr001",
+                "{\"message\":\"執行中補一句\",\"userId\":\"current_user\"}");
+
+        assertThat(res.statusCode())
+                .as("修法只該影響「runtime 裡沒有這個任務」；CommentPanel.vue:35 與 "
+                        + "ActionDialog.vue:61 綁的都是待辦清單裡的執行中任務，"
+                        + "把它們打成 404 就是把整個前端留言功能打死")
+                .isEqualTo(200);
+        assertThat(commentCount(c.managerTaskId()))
+                .as("真的寫進去了 —— 只斷言 200 會讓「200 但沒寫入」也通過")
+                .isEqualTo(2);
+        assertThat(taskService.getTaskComments(c.managerTaskId()).get(1).getUserId())
+                .as("作者仍是實際的呼叫者")
+                .isEqualTo("mgr001");
+        assertThat(auditCountFor("mgr001", "TASK_COMMENT"))
+                .as("正向下端必須真的寫出稽核，否則「稽核沒寫」的負向斷言是空的")
+                .isEqualTo(1);
+    }
+
+    /**
+     * ⚠️ <b>#79-2 的第二個對照：讀端完全不受影響。</b>
+     *
+     * <p>本工項只動寫入端。若連讀端一起擋掉，已結束關卡的簽核軌跡就看不到了 ——
+     * {@code ApprovalTimeline.vue:44} 正是對 {@code t.endTime} 為真的 taskId
+     * 呼叫<b>歷史讀</b>端點，畫面上會整段空白，而且它會把錯誤
+     * {@code catch} 成 {@code []}（{@code ApprovalTimeline.vue:45}），
+     * <b>不會報錯</b> —— 「測試全綠但畫面上少了簽核意見」是最難察覺的一種迴歸。
+     *
+     * <p>所以這條同時驗<b>兩個</b>讀端點對已結束關卡都必須讀得到，
+     * 而且批註筆數與內容不得因為讀取而改變。
+     */
+    @Test
+    @DisplayName("#79-2：已完成任務的簽核意見仍然讀得到（兩個讀端點）")
+    void readingCommentsOfAFinishedTaskStillWorksAfterTheFix() throws Exception {
+        ReturnedCase c = finishedCaseWithComments();
+        assertThat(taskService.createTaskQuery().taskId(c.managerTaskId()).count())
+                .as("前置條件：這個關卡必須已經結束").isZero();
+
+        var live = get("/api/tasks/" + c.managerTaskId() + "/comments", "mgr001");
+        var history = get("/api/history/tasks/" + c.managerTaskId() + "/comments", "mgr001");
+
+        assertThat(live.statusCode())
+                .as("getTaskComments 讀的是 ACT_HI_COMMENT，與任務是否還在 runtime 無關 —— "
+                        + "把它擋掉會讓審結案件的簽核軌跡在 ApprovalTimeline 上整段消失，"
+                        + "而 ApprovalTimeline.vue:45 把錯誤 catch 成 []，不會報錯")
+                .isEqualTo(200);
+        assertThat(history.statusCode())
+                .as("ApprovalTimeline.vue:44 對已結束關卡呼叫的就是這個端點")
+                .isEqualTo(200);
+        assertThat(live.body()).contains(SENSITIVE);
+        assertThat(history.body()).contains(SENSITIVE);
+
+        // 補件那一關（assignee 是 user001 而非 mgr001）也要讀得到，
+        // 否則「只看得見自己審過的關卡」這種收斂會悄悄發生。
+        assertThat(get("/api/history/tasks/" + c.revisionTaskId() + "/comments", "mgr001")
+                .statusCode()).isEqualTo(200);
+
+        assertThat(commentCount(c.managerTaskId()))
+                .as("讀取不得動到批註").isEqualTo(1);
     }
 
     @Test
