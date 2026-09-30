@@ -29,9 +29,8 @@ public class TaskController {
     /**
      * 不可由呼叫端以任務變數改寫的變數名。
      *
-     * <p>{@code initiator} 是關鍵：兩支已部署的 BPMN 都用
-     * {@code ${orgService.getDirectManager(initiator)}} 解析主管、
-     * 用 {@code ${initiator}} 指派補件任務。申請人在完成自己的補件任務時
+     * <p>{@code initiator} 是關鍵：兩支已部署的 BPMN 解析第一關的主管時
+     * 會讀它（{@code assigneeResolver} 內部），申請人在完成自己的補件任務時
      * 附帶一個偽造的 initiator，下一輪主管審核就會派給他指定的人的主管
      * —— 等於簽核人自選審核者（security-audit P0-5）。
      *
@@ -295,8 +294,10 @@ public class TaskController {
             }
             case "complete" -> {
                 // 語意檢查（#77）：完成是持有者的權力，與其他 action 同一條守衛。
-                // leave-approval／purchase-approval 的補件關卡 assignee 是
-                // ${initiator}（申請人本人），所以申請人能簽自己的補件任務。
+                // leave-approval／purchase-approval 的補件關卡 assignee 由
+                // ${applicantResolver.resolve(execution)} 決定（#83 之前是 ${initiator}），
+                // 所以申請人能簽自己的補件任務；外部系統發起、沒有自然人申請人時
+                // 會派給權限碼 bpm:external:revision 指定的受理人。
                 //
                 // ⚠️ 引擎層的既有行為（非本次引入）：被 delegate 出去、尚處於
                 // PENDING 的任務不能被 complete —— TaskHelper.completeTask 會

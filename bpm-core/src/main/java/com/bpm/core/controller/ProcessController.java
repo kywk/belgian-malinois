@@ -34,10 +34,11 @@ public class ProcessController {
      *
      * <ul>
      *   <li><b>簽核人</b>：兩支已部署的 BPMN 都用
-     *       {@code ${assigneeResolver.resolve(execution)}}（內部讀
-     *       {@code initiator}）決定第一關受理人，於是冒用 initiator
+     *       {@code ${assigneeResolver.resolve(execution)}} 決定第一關受理人
+     *       （該 resolver 內部讀 {@code initiator}），於是冒用 initiator
      *       等於把單子送到共犯的主管手上。</li>
-     *   <li><b>補件任務的 assignee</b>：{@code ${initiator}}。</li>
+     *   <li><b>補件任務的 assignee</b>：{@code applicantResolver}（#83 之前
+     *       是直接 {@code ${initiator}}）。</li>
      *   <li><b>通知信的申請人</b>。</li>
      *   <li><b>稽核的 operatorId</b> —— 這一項最惡劣：它會被 hash chain
      *       永久固定成一筆「可信」的紀錄，之後再談竊取者都無法從紀錄裡分辨。</li>
