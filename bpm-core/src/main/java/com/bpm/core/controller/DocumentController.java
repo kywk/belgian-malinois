@@ -2,8 +2,10 @@ package com.bpm.core.controller;
 
 import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.audit.AuditEventPublisher;
+import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.security.CallerId;
+import com.bpm.core.security.ProcessAccessGuard;
 import com.bpm.core.model.DocumentRequest;
 import com.bpm.core.repository.DocumentRequestRepository;
 import com.bpm.core.service.OrgService;
@@ -30,16 +32,22 @@ public class DocumentController {
     private final RuntimeService runtimeService;
     private final OrgService orgService;
     private final AuditEventPublisher auditPublisher;
+    private final ProcessAccessGuard accessGuard;
     private final TransactionTemplate numberingTx;
 
     public DocumentController(DocumentRequestRepository docRepo, RuntimeService runtimeService,
                               OrgService orgService, AuditEventPublisher auditPublisher,
+                              ProcessAccessGuard accessGuard,
                               @Qualifier("primaryTransactionManager")
                               PlatformTransactionManager primaryTransactionManager) {
         this.docRepo = docRepo;
         this.runtimeService = runtimeService;
         this.orgService = orgService;
         this.auditPublisher = auditPublisher;
+        // #80：授權判斷不寫在 controller 裡。放在這裡就會有第二份
+        // isParticipant（第一份在 ProcessAccessGuard），而兩份規則各自演化
+        // 出來的差異比沒有檢查更難察覺 —— 見該類別註解「規則只能有一份」。
+        this.accessGuard = accessGuard;
         // 見 saveWithUniqueNumber：每次取號嘗試必須是獨立交易。
         this.numberingTx = new TransactionTemplate(primaryTransactionManager);
         this.numberingTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -178,15 +186,137 @@ public class DocumentController {
                 "公文編號連續 " + MAX_NUMBER_ATTEMPTS + " 次撞號，請重試", last);
     }
 
+    /**
+     * 公文詳情（#80：補上物件層授權）。
+     *
+     * <h2>改動前是什麼</h2>
+     *
+     * <p>{@code docRepo.findById(id).orElseThrow(404)} —— 沒有 {@code @CallerId}、
+     * 沒有任何檢查。任何登入者拿任一 documentId 就拿得到整筆公文，
+     * <b>包含 {@code processInstanceId}</b>。
+     *
+     * <p>它與 {@link #list} 是同一個洞的兩面，而<b>只修 {@code list} 等於沒修</b>：
+     * 列表被收斂成「我的公文」之後，documentId 仍然可從稽核紀錄
+     * （{@code PROCESS_START} 的 detail 帶 {@code documentNumber}／{@code title}）
+     * 與任何已知或猜測到的 id 取得，然後逐筆列出來。那正是本 repo 反覆記錄過的
+     * 「在沒有門牌的地址上加門鎖」（見 {@code HistoryController} 的類別註解）。
+     *
+     * <h2>守衛：{@code requireReadAccess}，與 attachments／variables 同一條</h2>
+     *
+     * <p>公文是「一張單的內容」，而且它的 {@code processInstanceId}
+     * 就是通往那張單的鑰匙 —— 與 {@code AttachmentController.download}
+     * 由 {@code att.getProcessInstanceId()} 取守衛對象是<b>完全相同</b>的形狀。
+     * 因此規則只有一份：關係人，<b>或</b>持有 {@code audit:log:read} 的稽核人員，
+     * 且旁路每次留痕；其餘 404（非 403 —— 403 會確認這筆公文存在）。
+     *
+     * <h2>⚠️ 沒有關聯案件的公文（{@code processInstanceId} 為 null）</h2>
+     *
+     * <p>這種資料列真的存在：{@link #create} 是<b>先存公文、再啟動流程</b>
+     * （見該方法註解第 2 點，為的是不留下看不見的孤兒流程），
+     * 因此流程啟動失敗時會留下一筆 {@code processInstanceId} 為空的公文。
+     *
+     * <p>它沒有案件可以「參與」，所以 {@code requireReadAccess} 無從套用
+     * （傳 null 進去會讓守衛去查一個不存在的實例，然後對每個人都回 404 ——
+     * 連建立人自己也看不到，那筆資料就永遠沒有人能清理）。
+     * 因此這個分支的規則是：<b>只有建立人本人讀得到</b>。
+     * 這不是第四組政策，而是「這個物件不屬於任何案件」時唯一還成立的關係。
+     *
+     * <p>拒絕時走 {@link ProcessAccessGuard#denyNonParticipant}（404 ＋ 留痕）
+     * 而不是自己寫 {@code throw}：拒絕的<b>形狀</b>必須只有一種，
+     * 否則稽核上會出現兩種「被拒絕」而沒有人知道它們其實是同一件事。
+     */
     @GetMapping("/{id}")
-    public DocumentRequest getById(@PathVariable String id) {
-        return docRepo.findById(id)
+    public DocumentRequest getById(@PathVariable String id, @CallerId String callerId) {
+        DocumentRequest doc = docRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        requireReadable(doc, callerId);
+        return doc;
     }
 
+    /** 公文的讀取授權。見 {@link #getById} 的說明。 */
+    private void requireReadable(DocumentRequest doc, String callerId) {
+        String pid = doc.getProcessInstanceId();
+        if (pid == null || pid.isBlank()) {
+            // 沒有案件的公文：唯一成立的關係是建立人本人。見 getById 的說明。
+            if (callerId != null && callerId.equals(doc.getCreatedBy())) return;
+            accessGuard.denyNonParticipant(pid, callerId);
+            return; // 不會執行到：denyNonParticipant 一定拋例外
+        }
+        if (accessGuard.requireReadAccess(pid, callerId)) {
+            // 參與者讀自己案件的公文不留痕（那是日常操作）；稽核旁路必須留痕。
+            auditPublisher.publish(new AuditEvent(OperationType.DATA_ACCESS.name(), callerId,
+                    pid, null,
+                    Map.of("action", "get_document", "documentId", doc.getId(),
+                            "auditBypass", true)));
+        }
+    }
+
+    /**
+     * 公文列表（#80：補上物件層授權）。
+     *
+     * <h2>改動前是什麼</h2>
+     *
+     * <p>{@code if (createdBy != null) …; return docRepo.findAll();} ——
+     * <b>不帶參數就是 {@code findAll()}</b>，回傳<b>全公司</b>所有公文，
+     * 每筆都含 {@code processInstanceId}、{@code documentNumber}、{@code title}、
+     * {@code urgencyLevel}。
+     *
+     * <p>{@code ?createdBy=} 也不是身分檢查 —— 帶任何人的 id 都會回傳那個人的全部公文。
+     * 所以這裡有<b>兩個</b>缺口，而它們是同一個政策問題的兩種表現。
+     *
+     * <h2>政策決定：列出「自己參與的」還是「全部」→ 選<b>自己建立的</b></h2>
+     *
+     * <p>理由，逐條：
+     *
+     * <ol>
+     *   <li><b>它就是 pid 的第二個枚舉來源，而枚舉來源必須關掉。</b>
+     *       這正是本工項存在的理由。#71 關掉的是第一個來源
+     *       （{@code GET /api/process-instances}），本端點是第二個。
+     *       只要它還在，#71 的成果就只關掉一半。</li>
+     *   <li><b>{@code createdBy} 是「身分欄位」，不是篩選條件。</b>
+     *       本 repo 對這類參數的既定政策是 {@code requireSelf}（#71 定義）：
+     *       帶了與自己不符的值 → 明確 400；省略 → 呼叫者自己。
+     *       另一個選項是「對每筆公文各跑一次 {@code requireReadAccess}」，
+     *       但那是 N+1（每筆 1 次實例查詢 ＋ 1 次變數 ＋ 2 次任務計數），
+     *       而且會讓回應<b>部分可見</b> —— 呼叫端分不出「我沒有這些公文」
+     *       與「這些公文被過濾掉了」，那是比全開更難察覺的失敗型態。</li>
+     *   <li><b>「審核人看得到自己審的那張單的公文」這個需求已經被滿足了</b>，
+     *       走的是另一條路：{@code GET /api/process-instances/involved}
+     *       列出我參與的案件（同一條 {@code isParticipant}），
+     *       再用 {@link #getById} 逐筆取公文（守衛相同）。
+     *       換句話說<b>不需要為它發明第四組政策</b>。</li>
+     *   <li><b>沒有任何前端呼叫這個端點</b>
+     *       （{@code grep -rn "api/documents" bpm-frontend/src} 零命中），
+     *       所以收斂範圍不會讓任何畫面壞掉 —— 這是「先關再議」的關鍵前提。
+     *       若日後有人要用，它是<b>新增</b>一個端點（例如
+     *       {@code /api/documents/involved}），而不是把這個放寬回去。</li>
+     * </ol>
+     *
+     * <h2>不開稽核旁路（與 {@code GET /api/process-instances} 同一個理由）</h2>
+     *
+     * <p>本端點的回應<b>永遠是「呼叫者自己建立的公文」</b>，不是別人的資料。
+     * 稽核人員要查別人的案件請走稽核 API（{@code PROCESS_START} 事件帶
+     * {@code documentNumber} 與 {@code title}）或
+     * {@link #getById}（那裡有旁路且每次留痕）。在「我的清單」上開旁路等於
+     * 給稽核職能一個沒有對應需求的讀取權，而稽核人員的職責是<b>查閱</b>不是<b>代覽</b>。
+     *
+     * <h2>⚠️ 空白 {@code createdBy} 的行為變了（空白視同省略）</h2>
+     *
+     * <p>改動前 {@code ?createdBy=}（空字串）會走進 repository 查一個空字串，
+     * 回 {@code []} —— 那是一個看起來像「我沒有公文」的<b>謊話</b>
+     * （實際上只是查錯了）。改動後它等同省略，回傳呼叫者自己的公文。
+     * 這與 {@code ProcessAccessGuard.requireSelf} 對空白的處理一致
+     * （空白不可能指向別人，拒絕它只製造無意義的破壞）。
+     *
+     * <h2>刻意不加 {@code @Transactional}</h2>
+     *
+     * <p>唯讀查詢 ＋ 最多一次稽核寫入（只有稽核旁路才有，而本端點不開旁路），
+     * 與 {@link ProcessAccessGuard} 的其他讀端呼叫端同一型。
+     */
     @GetMapping
-    public List<DocumentRequest> list(@RequestParam(required = false) String createdBy) {
-        if (createdBy != null) return docRepo.findByCreatedByOrderByCreatedAtDesc(createdBy);
-        return docRepo.findAll();
+    public List<DocumentRequest> list(@RequestParam(required = false) String createdBy,
+                                     @CallerId String callerId) {
+        String self = accessGuard.requireSelf(createdBy, callerId, "createdBy");
+        return docRepo.findByCreatedByOrderByCreatedAtDesc(self);
     }
 }

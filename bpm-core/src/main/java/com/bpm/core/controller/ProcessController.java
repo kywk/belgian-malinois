@@ -429,10 +429,94 @@ public class ProcessController {
         return runtimeService.getVariables(id);
     }
 
+    /**
+     * 案件流程圖：流程定義的 BPMN XML ＋ <b>目前點亮的活動 id</b>（#80：補上物件層授權）。
+     *
+     * <h2>改動前是什麼</h2>
+     *
+     * <p>整個方法<b>沒有 {@code @CallerId}、沒有任何檢查</b>：
+     * <pre>
+     *   public Map&lt;String, Object&gt; getBpmnXml(@PathVariable String id)
+     * </pre>
+     * 任何登入者拿任一 pid 就拿得到流程圖，而<b>回應裡的 {@code activeIds}
+     * 洩漏的是「這張單現在卡在哪一關」</b>。
+     *
+     * <h2>為什麼這個情報比 id 枚舉更值錢</h2>
+     *
+     * <p>純粹的 id 枚舉只能證明「某張單存在」，拿到之後還得逐個端點試。
+     * 而 {@code activeIds} 直接回答了攻擊者最需要的那一個問題：
+     * <b>「現在輪到誰審」。</b> 拿到之後，後續動作就可以針對那個人
+     * （社交工程、釣魚信、猜他的待辦網址），而不是對整間公司廣撒網。
+     * 換句話說它把「我該攻擊誰」從搜尋問題變成查表問題。
+     *
+     * <p>而且這條路徑是<b>刻意留下來的</b>：#76 關掉了
+     * {@code GET /api/history/tasks} 這個 taskId 發射台，#71 關掉了
+     * {@code GET /api/process-instances}，但 pid 仍然可從
+     * {@code GET /api/documents}（#80 一併修）與稽核紀錄取得 ——
+     * 而本端點是 pid 進去、<b>情報出來</b>的轉換器。
+     *
+     * <h2>守衛：{@code requireReadAccess}，與 variables／附件／表單資料同一條</h2>
+     *
+     * <p>資料是「一張單的內容」（流程路徑與目前位置），
+     * 因此走既定的讀端政策：<b>關係人，<b>或</b>持有 {@code audit:log:read}
+     * 的稽核人員，且旁路每次留痕</b>，非關係人 404。
+     *
+     * <p>不新造一條規則的理由不是 DRY，而是<b>規則只能有一份</b>：
+     * 這份資料與 {@code .../{id}/variables}（薪資欄位）、附件、
+     * {@code /api/form-data/{pid}}、簽核軌跡是同一批的同一個層級。
+     * 讓本端點自己寫一份 {@code isParticipant}，就會出現
+     * 「variables 拒絕、bpmn-xml 放行」那種組合型式的差異 ——
+     * 而那種差異比沒有檢查更難察覺，因為兩邊單獨看起來都合理。
+     *
+     * <h2>⚠️ 為什麼「實例不存在」仍然是 200 + 空圖（未改）</h2>
+     *
+     * <p>{@code pi == null} 有兩種成因，而<b>本方法刻意不分辨它們</b>：
+     * <ul>
+     *   <li><b>已結案</b>：runtime 查不到，但案件確實存在。關係人有權看，
+     *       而 {@code ProcessDiagram.vue:23} 依賴 {@code 200 + xml:""}
+     *       來顯示「無流程圖資料」。改成 404 會讓審結的單在畫面上變成
+     *       {@code el-empty} 的錯誤訊息。</li>
+     *   <li><b>從未存在</b>：此時呼叫者必然不是關係人
+     *       （{@code isParticipant} 三個條件都查不到任何东西），
+     *       <b>已經在守衛那裡被擋成 404</b>。</li>
+     * </ul>
+     *
+     * <p>所以剩下的 200 + 空圖只有「稽核旁路」與「已結案的關係人」兩種，
+     * 兩者都沒有再洩漏任何東西。用歷史查詢把這兩種情形分開需要改變
+     * 回應契約（已結案的單突然有流程圖），那是產品決定，不屬於本工項 ——
+     * 已回報 PM。
+     *
+     * <h2>稽核旁路留痕</h2>
+     *
+     * <p>與 {@link #getVariables} 同一政策：<b>只記旁路</b>，不記關係人讀取。
+     * 因為開一張單就會讀一次流程圖，把日常操作全部留痕等於要為它建立
+     * 另一套行為稽核；而「誰以稽核身分調閱了哪些案件的流程圖」這件事本身
+     * 被記錄下來就足以追查。用 {@code publish}（fail-closed）而非
+     * {@code publishDetached}：稽核寫不進去的話，這次調閱就不該成功。
+     *
+     * <h2>刻意不加 {@code @Transactional}</h2>
+     *
+     * <p>唯讀查詢 ＋ 一次稽核寫入，與 {@link #getVariables}、
+     * {@code AttachmentController.list}、{@code HistoryController.getHistoricTasks}
+     * 同一型（稽核失敗 → 503，見 {@code AuditFailClosedTest}）。
+     * 加交易反而會讓稽核掛在 {@code beforeCommit}，
+     * 而回應組裝階段的例外會讓它永遠寫不進去。
+     */
     @GetMapping("/{id}/bpmn-xml")
-    public Map<String, Object> getBpmnXml(@PathVariable String id) throws Exception {
+    public Map<String, Object> getBpmnXml(@PathVariable String id,
+                                          @CallerId String callerId) throws Exception {
+        // 授權先於存在性檢查：沒有權限的人不該靠狀態碼分辨
+        // 「這個 id 不存在」與「我不該看這個 id」（兩者都必須是 404）。
+        if (accessGuard.requireReadAccess(id, callerId)) {
+            // 關係人讀自己案件的流程圖不留痕（那是日常操作）；稽核旁路必須留痕。
+            auditPublisher.publish(new AuditEvent(OperationType.DATA_ACCESS.name(), callerId,
+                    id, null,
+                    Map.of("action", "get_bpmn_xml", "auditBypass", true)));
+        }
+
         ProcessInstance pi = runtimeService.createProcessInstanceQuery()
                 .processInstanceId(id).singleResult();
+        // 見上方「為什麼實例不存在仍然是 200 + 空圖」：已結案的單前端要能開。
         if (pi == null) return Map.of("xml", "", "activeIds", List.of());
 
         var pd = repositoryService.getProcessDefinition(pi.getProcessDefinitionId());
