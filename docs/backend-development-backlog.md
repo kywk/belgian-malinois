@@ -19,7 +19,7 @@
 - **audit-log-service**：已於 2026-04-24 併入 bpm-core；稽核為 fail-closed（寫不進就回滾）
 - **認證**：平台層 JWT 驗證＋信任閘道已完成（R-01）；個案層級授權仍由各 controller 負責
 - **外圍系統整合（組織／權限）仍以 Mock 替代**，真正的權限中心見 `docs/rbac-enterprise-backlog.md`
-- **測試**：後端 551 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 80 個（Vitest）
+- **測試**：後端 585 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 87 個（Vitest）
 - 安全與正確性修復（P0／P1／P2、R 編號）另見 `docs/plan/2026-09-28-security-audit.md`、
   `docs/plan/2026-09-28-remediation-backlog.md`，已完成部分列在 `docs/backend-completed-items.md` 第八節
 
@@ -165,7 +165,7 @@
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
 | 66 | 內部發起流程的 initiator 改由 JWT 決定 | ✅ **2026-09-29 完成**（`0b3e7d8`／`4d6dd98`）。`@CallerId` 決定 initiator 與稽核 operatorId；body 帶 initiator 明確 400（對齊 R-20）；`variables` 套用 `TaskController` 的 deny-list，擋掉夾帶 `onBehalfOf`（繞過 R-20 授權）與 `_externalSystemId`（繞過 R-09）；`DocumentController.createdBy` 同步修 | ~~1d~~ | ✅ |
-| 67 | Webhook 投遞接線 |**三段各自獨立斷線**（非一段）：(A) 沒有任何程式碼設定 `__webhookUrl`（自 2026-04-17 起從未存在過設定端）；(B) `WebhookTaskListener` 未被 BPMN 引用、也不在 `setBeans()`；(C) 前端 `WebhookProps.js` 寫進 BPMN `documentation`，後端零讀取。⚠️ 三種格式互不相通：spec 說 `extensionElements`、前端寫 `documentation`、consumer 期待 Rabbit payload 欄位。#25 缺 `task.timeout` 與候選人/operatorName/comment 欄位。規模 8～12 檔案，原估 2d 偏低。**已決策：仍是需求；設定來源待定（建議 `extensionElements`）** | 2d→4d | 🟡 見下 |
+| 67 | Webhook 投遞接線 | 🟡 **2026-09-30 節點層完成、流程層未接**（`2ed262e`）。**開工前實測 Flowable 保留未知 extension element**（部署→`getResourceAsStream`→`getBpmnModel()`→`convertToXML()` 四層都驗過），所以讀取走 `RepositoryService.getBpmnModel()`，不用自己解析 `ACT_GE_BYTEARRAY`。<br>**三段斷線全接**：**(A)** 新增 `WebhookConfigResolver`，listener 逐筆設定 `__webhookUrl`，**讀不到設定就完全不發訊息**（改動前是發一則沒有 URL 的訊息交給 consumer 丟掉，會讓 DLQ 混著從來不該投遞的訊息）；**(B)** 兩支出廠 BPMN 的每個 UserTask 加 `event="all"` 的 `webhookTaskListener`、`setBeans()` 加入它（`notifyTaskListener` 未動、`EL_WHITELIST` 未動）；**(C)** 前端改寫 `extensionElements`（spec §11.3 的格式），舊 `documentation` 格式保留相容性。⚠️ **投遞位址改來自業務人員可編輯的 BPMN，`WebhookUrlPolicy` 從「可有可無」變成「安全相依」** —— 設定 URL 的人與決定送什麼資料出去的人可能是不同人。⚠️ **向後相容的關鍵決定**：「有 `<flowable:webhooks>` 元素就是權威（即使內容是空）」而非「非空才是權威」，否則使用者在設計器刪掉最後一筆後回頭讀舊 documentation，**剛刪掉的設定會立刻復活**。⚠️ **連帶修掉一個原描述未提到的既有缺陷**：`flowableModdle.js` 的 `TaskListener` 型別缺 `superClass: ['Element']`，實測**用 bpmn-js 匯出一次出廠 BPMN，兩個 taskListener 全部消失** —— 出廠流程的通知機制本來就會在設計器存檔一次後消失。**PM 線上實測已完成**（主樹 **585** 全綠、前端 **87** 全綠、acceptance-test PASS 7/FAIL 0；且加了 `webhookTaskListener` 之後 `seed-data.sh` 仍能部署 —— 那是本工項最大的迴歸風險）。**端到端**：注入帶 `flowable:webhooks` 的 BPMN → 啟動流程 → listener 排入佇列 → `Webhook delivered`，payload 含 11 個欄位，**HMAC 簽章由接收端重算驗證通過**、重放偵測標頭齊全。**⚠️ 同時線上證實 SSRF 閘門真的生效**：URL 設 `127.0.0.1` 時被拒（`拒絕 loopback 位址`）。❌ **未完成**：`ProcessCompletedListener` 的流程級 webhook 仍無投遞設定來源（斷線 A 的**第四個實例**，spec §11.4 只定義節點層）→ 需裁決；#25 的 payload 缺口（`task.timeout` 事件、候選人、`operatorName`、`comment`）未補；**前端 `modeling.updateProperties(element, { extensionElements })` 那一步沒有自動化測試覆蓋**（寫法與 bpmn-js 官方的 `addExtensionElements` 相同，但這格是空白） | 2d→4d | 🟡 |
 
 **#67 實作結果（2026-09-30，`feature-67`）—— A/B/C 三段全部接上，但有兩件事沒做**
 
@@ -236,8 +236,8 @@
 | 基礎設施 | 4 | 0 | 2 | 2 | 3.5d |
 | Form Service | 6 | 2 | 2 | 2 | 6d |
 | 跨服務整合 | 6 | 1 | 4 | 1 | 17d |
-| 2026-09-29 新增 | 27 | 20 | 0 | 7 | 28d |
-| **合計** | **92** | **42** | **21** | **29** | **~114.3 人天** |
+| 2026-09-29 新增 | 28 | 20 | 1 | 7 | 24d |
+| **合計** | **92** | **42** | **21** | **29** | **~110.3 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 

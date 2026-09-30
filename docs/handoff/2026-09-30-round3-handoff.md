@@ -1,4 +1,4 @@
-# 接手文件 — 2026-09-30 第二輪（#86 #79 #81 #87 #80 #83 #88 #89 #68，#67 進行中）
+# 接手文件 — 2026-09-30 第二輪完成（含 #67 節點層）
 
 **寫給下一個接手的實作 agent。** 撰寫時間 2026-09-30。
 上一輪的交接見 `docs/handoff/2026-09-29-authorization-hardening-handoff.md`
@@ -49,7 +49,7 @@ backlog 原本寫「只要該 key 已有任何一筆規格，重複儲存必定�
 | 前端 | Vue 3.4 + Vite 5 + Element Plus |
 | DB | MSSQL 2022，**三個資料庫**：`bpm_core_db`／`bpm_audit_db`／`bpm_form_db` |
 | 其他 | RabbitMQ、Redis、MailHog。Docker 是 **OrbStack** |
-| 測試 | 後端 **551** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **80** 個（Vitest） |
+| 測試 | 後端 **585** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **87** 個（Vitest） |
 | 分支 | `feature/round2-hardening`，比 `main` 多 9 個 commit，**未 push** |
 | 部署 | **尚未部署，只有本機開發** |
 
@@ -417,6 +417,6 @@ git worktree list            # 確認每個 agent 一個
 ## 11. 現況一句話
 
 `feature/round2-hardening` = `29a7824`（#86 #79 #81 #87 #80 #83 全部合併），**未 push**。
-已完成 **#86、#79、#87、#81、#80、#83、#88、#89、#68（a/b/d）**。後端 **551** 測試全綠（**容器停止狀態下跑的**）、
-前端 **80** 全綠、`acceptance-test.sh` PASS 7 / FAIL 0。工作樹乾淨。
+已完成 **#86 #79 #87 #81 #80 #83 #88 #89 #68(a/b/d)**、**#67 部分**。後端 **585** 測試全綠（**容器停止狀態下跑的**）、
+前端 **87** 全綠、`acceptance-test.sh` PASS 7 / FAIL 0。工作樹乾淨。
 **待裁決：#79-2、#87-2、#87-3（見第 8 節）。尚未部署。**
