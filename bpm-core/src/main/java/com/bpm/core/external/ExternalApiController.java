@@ -81,10 +81,10 @@ public class ExternalApiController {
         // 案件是以那位員工的名義發起的。
         if (body.containsKey("initiator")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "initiator 由伺服器決定（system:" + systemId + "），不可由呼叫端指定。"
+                    "initiator 由伺服器決定（" + ExternalActorIdentity.of(systemId) + "），不可由呼叫端指定。"
                             + "代員工發起請改用 onBehalfOf（需管理員為此系統開啟授權）。");
         }
-        String initiator = "system:" + systemId;
+        String initiator = ExternalActorIdentity.of(systemId);
         String onBehalfOf = (String) body.get("onBehalfOf");
         if (onBehalfOf != null && onBehalfOf.isBlank()) onBehalfOf = null;
         String firstAssignee = (String) body.get("firstTaskAssignee");
@@ -222,7 +222,7 @@ public class ExternalApiController {
             }
         }
 
-        auditPublisher.publish(new AuditEvent("EXTERNAL_API_CALL", "system:" + systemId,
+        auditPublisher.publish(new AuditEvent("EXTERNAL_API_CALL", ExternalActorIdentity.of(systemId),
                 "external_api", processDefKey, pi.getProcessInstanceId(), null, businessKey,
                 Map.of("action", "start_process", "processDefinitionKey", processDefKey,
                         "onBehalfOf", onBehalfOf != null ? onBehalfOf : ""),
@@ -255,7 +255,7 @@ public class ExternalApiController {
         // Search in history (covers both running and completed)
         return historyService.createHistoricProcessInstanceQuery()
                 .processInstanceBusinessKey(businessKey)
-                .variableValueEquals("initiator", "system:" + systemId)
+                .variableValueEquals("initiator", ExternalActorIdentity.of(systemId))
                 .orderByProcessInstanceStartTime().desc().list().stream()
                 .map(hp -> buildStatusFromHistory(hp))
                 .toList();
@@ -281,7 +281,7 @@ public class ExternalApiController {
 
         taskService.complete(taskId, vars);
 
-        auditPublisher.publish(new AuditEvent("EXTERNAL_API_CALL", "system:" + systemId,
+        auditPublisher.publish(new AuditEvent("EXTERNAL_API_CALL", ExternalActorIdentity.of(systemId),
                 "external_api", null, task.getProcessInstanceId(), taskId, null,
                 Map.of("action", "complete_task", "variables", vars),
                 java.time.Instant.now()));
@@ -400,7 +400,7 @@ public class ExternalApiController {
             }
             // 向後相容：本次改動前啟動的實例沒有 _externalSystemId
             Object initiator = variableOf(pid, "initiator");
-            if (initiator != null && initiator.toString().equals("system:" + systemId)) return;
+            if (initiator != null && initiator.toString().equals(ExternalActorIdentity.of(systemId))) return;
 
             pid = superProcessInstanceIdOf(pid);
         }

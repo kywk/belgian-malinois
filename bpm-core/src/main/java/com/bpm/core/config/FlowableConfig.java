@@ -44,6 +44,10 @@ public class FlowableConfig {
      * 都是 bean 上明確指定的名稱而非預設的類別名。兩份清單若漂移，
      * 會出現「lint 過了但執行期炸掉」或反之的狀況。
      *
+     * <p>⚠️ {@code applicantResolver}（#83）也在這兩份清單裡 ——
+     * {@code BpmnExpressionBeanScopeTest} 直接從 {@code EL_WHITELIST} 推導
+     * 測試對象，所以只加其中一邊就會被那個測試擋下來。
+     *
      * <h2>這不是完整的修補</h2>
      *
      * <p>{@code setBeans()} 限制的是「哪些 bean 在命名空間內」，<b>不會</b>
@@ -57,6 +61,7 @@ public class FlowableConfig {
             com.bpm.core.engine.UnreachableTaskListener unreachableTaskListener,
             OrgService orgService,
             com.bpm.core.service.InitialAssigneeResolver assigneeResolver,
+            com.bpm.core.service.ApplicantResolver applicantResolver,
             BpmPermissionService permService,
             BpmQueryService bpmQueryService,
             NotifyTaskListener notifyTaskListener) {
@@ -69,6 +74,13 @@ public class FlowableConfig {
                     // 第一個任務的受理人判斷（P2-7）。BPMN 的 managerReview 由它決定，
                     // 因為 initiator 在外部系統發起時是 system:<id>，不是人。
                     "assigneeResolver", assigneeResolver,
+                    // ⚠️ 補件關卡（#83）。三個 UserTask（leave-approval 的
+                    // applicantRevision、purchase-approval 的 revisionFromManager
+                    // 與 revisionFromFinance）原本寫死 ${initiator}，而外部系統發起時
+                    // 那是 system:<id> —— 不是人，於是 TaskHolderGuard 的四個條件
+                    // 全部不命中，沒有任何人能簽，案件靜默卡死。
+                    // 必須與 BpmnLintService.EL_WHITELIST 同一份內容。
+                    "applicantResolver", applicantResolver,
                     // ⚠️ 不可移除：purchase-approval 的 delegateExpression 依賴它
                     "notifyTaskListener", notifyTaskListener));
         };

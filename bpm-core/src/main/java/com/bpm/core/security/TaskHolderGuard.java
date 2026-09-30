@@ -107,23 +107,28 @@ import java.util.Set;
  * 風險與啟動路徑上既有的組織查詢同級，且 {@code OrgService} 有 60 分鐘 TTL
  * 快取把它壓到極低頻率。
  *
- * <h2>⚠️ 已知缺口：{@code assignee = system:<id>} 的任務沒有人是持有者</h2>
+ * <h2>✅ 曾經的缺口：{@code assignee = system:<id>} 的任務沒有人是持有者</h2>
  *
  * <p>外部系統發起的案件 {@code initiator} 是 {@code system:<id>}（不是人，
  * 見 {@code ExternalApiController}），而兩支 BPMN 的補件關卡
  * （{@code applicantRevision}／{@code revisionFromManager}／
- * {@code revisionFromFinance}）都用 {@code flowable:assignee="${initiator}"}。
+ * {@code revisionFromFinance}）原本都用 {@code flowable:assignee="${initiator}"}。
  * 主管把那張單退回時，補件任務的 assignee 就會是 {@code system:erp} ——
  * 四個條件都不會命中（assignee 不是人、owner 為 null、沒有候選人、沒有候選群組），
  * <b>因此誰都不能簽，案件卡在那裡</b>。
  *
- * <p>本次刻意<b>不</b>順手修，理由有兩條。其一，外部 API 那條路徑是
- * server 之間的呼叫（{@code ExternalApiController.completeTask}），
- * 有它自己的擁有權檢查，不受這個 controller 影響，缺口只在「人工去簽
- * 補件」這一條路。其二，正確的修法是讓補件關卡在 {@code initiator}
- * 不是人時改指給 {@code onBehalfOf}（代發的員工）或系統設定的受理人 ——
- * 那是 BPMN 與簽核路由語意的決定，不該在一個授權守衛裡順帶改掉。
- * 標在這裡是為了讓下一次有人看到「案件卡住」時，知道它從哪裡來。
+ * <p><b>已於 2026-09-30（#83）修掉。</b>三個補件關卡改用
+ * {@code ${applicantResolver.resolve(execution)}}（見
+ * {@link com.bpm.core.service.ApplicantResolver}）：
+ * {@code onBehalfOf} → {@code initiator}（是人的話）→ 權限碼
+ * {@code bpm:external:revision} 指定的系統受理人。
+ *
+ * <p>本類別<b>刻意不</b>為了這個缺口放寬任何一個條件。理由與上面
+ * 「為什麼超集只往多算的方向長」相反，這裡是往<b>少算</b>的方向：
+ * 放寬會讓「持有者」不再是持有者 —— 而根因（補件關卡派給一個沒有人能持有的
+ * 身分）是可以從路由層徹底修掉的，不必用授權放寫來換。
+ * 另外，{@link com.bpm.core.engine.UnreachableTaskListener} 也一併修成
+ * 會對這種 assignee 告警，所以下一次再發生時不會是靜默的。
  */
 @Component
 public class TaskHolderGuard {
@@ -141,7 +146,6 @@ public class TaskHolderGuard {
     }
 
     // ── 讀端：一次撈回「我的待辦」的三個查詢 ────────────────────────
-
     /**
      * 讀端的三個查詢條件，與 {@link #isHolder} 走的是同一組查詢建構子。
      *

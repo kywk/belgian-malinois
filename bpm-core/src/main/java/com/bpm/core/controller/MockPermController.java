@@ -78,6 +78,27 @@ public class MockPermController {
         // （每個人都會用 admin001 測，然後以為權限碼沒生效）。
         PERM_USERS.put("bpm:form:design",         List.of("mgr001"));
 
+        // ⚠️ 補件關卡受理權（#83）。**不是**一個可以隨手拿掉的 fixture 條目 ——
+        //
+        // leave-approval 的 applicantRevision 與 purchase-approval 的
+        // revisionFromManager／revisionFromFinance 都用
+        // ${applicantResolver.resolve(execution)} 指派，而該 resolver 在
+        // 「發起人是 system:<id>（不是人）且沒有 onBehalfOf」時會查這個權限碼
+        // （見 ApplicantResolver 的第三段）。
+        //
+        // MockPermController 刻意 fail-closed：查不到的權限碼回 404 而不是
+        // 捏造一個人（見類別註解）。所以少了這一條，外部系統發起的案件
+        // **連「退回」都會失敗**（500），而且錯誤訊息指向「權限碼不存在」
+        // 而不是「這張單沒有申請人」—— 那正是本註解要防的那種誤導。
+        //
+        // 正式環境對接真實權限中心時，同一個權限碼必須在那裡指派給
+        // 「承辦外部系統案件的人」。這是本專案對真實權限中心新增的一項要求。
+        //
+        // 刻意只給 dir001（總監）一個人：在測試裡「被派給受理人」必須是
+        // 一個明確、可與審核人（mgr001）區別開的身分，否則斷言分辨不出
+        // 「resolver 生效了」與「剛好指給同一個審核人」。
+        PERM_USERS.put("bpm:external:revision",  List.of("dir001"));
+
         USER_PERMS.put("mgr001", List.of("hr:leave:approve", "finance:payment:approve", "purchase:order:approve",
                                           // 表單設計權，見上方 PERM_USERS 的說明
                                           "bpm:form:design"));
@@ -85,7 +106,9 @@ public class MockPermController {
         USER_PERMS.put("dir001", List.of("hr:leave:approve", "finance:payment:approve", "purchase:order:approve",
                                           "legal:contract:review", "purchase:self:approve",
                                           // 稽核檢視權，見上方 PERM_USERS 的說明
-                                          "audit:log:read"));
+                                          "audit:log:read",
+                                          // 補件關卡受理權，見上方 PERM_USERS 的說明（#83）
+                                          "bpm:external:revision"));
         // admin001 刻意只有通配權限 *，不逐一列出 —— 這樣「* 不等於具名權限碼」
         // 這件事在 fixture 裡就成立。SecurityConfig 的稽核規則因此不接受
         // ROLE_ADMIN；要讀稽核必須由權限中心明確指派 audit:log:read。
