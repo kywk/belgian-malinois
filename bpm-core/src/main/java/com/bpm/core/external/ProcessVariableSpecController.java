@@ -181,24 +181,37 @@ public class ProcessVariableSpecController {
     private static void requireDistinctVariableNames(List<ProcessVariableSpec> specs) {
         // LinkedHashMap：重複的名字要照「送出順序」報，而不是照雜湊順序 ——
         // 呼叫端是照畫面上由上而下的順序在對照錯誤訊息。
-        Map<String, String> firstSeen = new LinkedHashMap<>();
-        List<String> duplicated = new ArrayList<>();
+        // 值是同一個比較鍵底下的**所有寫法**（照送出順序、不去重），
+        // 而不只是第一個：最常見的失敗形狀是 Amount 與 amount，
+        // 只報其中一個的話，使用者看到訊息仍然不知道自己打錯了哪一個。
+        Map<String, List<String>> byComparisonKey = new LinkedHashMap<>();
         for (ProcessVariableSpec spec : specs) {
             String raw = spec.getVariableName();
             // null 不在這裡擋：那會是「空白名稱」的同一個政策性決定
-            // （目前單一空白名稱是允許的，見類別常數的說明），不該由這個工項代做。
+            // （目前單一空白名稱是允許的），不該由這個工項代做。
             // null 的既有行為（由 NOT NULL 約束擋成 500）保持不變。
             if (raw == null) continue;
-            String first = firstSeen.putIfAbsent(dbComparisonKey(raw), raw);
-            // 只報一次：第三筆以上同名時，報同一個名字三次沒有任何新資訊。
-            if (first != null && !duplicated.contains(first)) duplicated.add(first);
+            byComparisonKey.computeIfAbsent(dbComparisonKey(raw), k -> new ArrayList<>()).add(raw);
         }
+        // 出現兩次以上才算重複（同一個寫法送三次也是重複）。
+        // 顯示時才把完全相同的寫法收斂成一個 —— 報三次「a、a、a」沒有任何新資訊。
+        List<String> duplicated = byComparisonKey.values().stream()
+                .filter(spellings -> spellings.size() >= 2)
+                .map(ProcessVariableSpecController::describeCollisions)
+                .toList();
         if (!duplicated.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "同一個流程底下變數名稱不得重複: " + String.join("、", duplicated)
                             + "。資料庫以不分大小寫、不分全形半形、忽略尾端空白的方式比對名稱，"
                             + "請把重複的名稱改成不同的之後再送出。");
         }
+    }
+
+    /** 把互相衝突的寫法寫成一句人看得懂的話，例如 {@code Amount／amount}。 */
+    private static String describeCollisions(List<String> spellings) {
+        return spellings.stream().distinct()
+                .map(raw -> raw.isBlank() ? "（空白）" : raw)   // 空白印出來會是看不見的東西
+                .collect(java.util.stream.Collectors.joining("／"));
     }
 
     /**

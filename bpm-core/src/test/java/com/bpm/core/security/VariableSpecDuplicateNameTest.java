@@ -87,14 +87,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 「必須 400」的測試全綠。所以 {@link #namesTheDatabaseKeepsDistinctAreStillAccepted()}
  * 與 {@link #singleBlankNameIsStillAccepted()} 是必要的對照組。
  *
- * <h2>負向控制組的實測結果：10 條中紅 7 條、綠 3 條</h2>
+ * <h2>負向控制組的實測結果：11 條中紅 8 條、綠 3 條</h2>
  *
  * <p>把整個 controller 還原成 HEAD 版本（也就是缺陷期間的樣子）後重跑：
  * <ul>
- *   <li><b>紅（7）</b>：{@code exactDuplicateInOneBatchIsRejected}、
+ *   <li><b>紅（8）</b>：{@code exactDuplicateInOneBatchIsRejected}、
  *       {@code caseInsensitiveDuplicateIsRejected}、
  *       {@code trailingSpaceDuplicateIsRejected}、
  *       {@code fullwidthDuplicateIsRejected}、
+ *       {@code messageNamesEveryCollidingSpelling}、
  *       {@code singleBlankNameIsStillAccepted}（後半段）、
  *       {@code rejectedBatchLeavesExistingSpecsUntouched}、
  *       {@code updateRenamingOntoAnotherVariableIsRejected}。</li>
@@ -119,6 +120,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>它們仍然要留著：一旦有人把驗證移到 {@code deleteAllBy…} 之後，
  * 而呼叫鏈上有別人把例外吃掉（{@code @Transactional} 的回捲就失效了），
  * 這些斷言是唯一會出聲的。但要誠實地知道它們對<b>本缺陷</b>沒有鑑別力。
+ *
+ * <p>同一組觀察也解釋了 {@code singleBlankNameIsStillAccepted} 為什麼紅：
+ * 它紅在<b>後半段</b>（「兩個空白名稱互相衝突 → 400」），
+ * 前半段（單一空白名 → 200）在缺陷期間本來就成立。
  */
 class VariableSpecDuplicateNameTest extends IntegrationTestBase {
 
@@ -278,6 +283,49 @@ class VariableSpecDuplicateNameTest extends IntegrationTestBase {
     }
 
     // ── ③ 非空性：驗證不得過度阻擋 ─────────────────────────────────
+
+    @Test
+    @DisplayName("#87：400 的訊息必須把互相衝突的「兩種寫法」都列出來")
+    void messageNamesEveryCollidingSpelling() throws Exception {
+        // 只報「第一個看到的」不夠：最常見的形狀是 Amount 與 amount，
+        // 使用者看到「重複: Amount」仍然不知道自己打錯了哪一個。
+        String key = freshKey();
+        var res = post(key, batch(spec("Amount", "string", true),
+                spec("amount", "string", false)));
+
+        assertThat(res.statusCode()).isEqualTo(400);
+        assertThat(res.body())
+                .as("兩種寫法都要出現，呼叫端才知道資料庫是怎麼判它們相同的")
+                .contains("Amount").contains("amount");
+
+        // 同一個寫法送三次只報一次 —— 報三次「a、a、a」沒有任何新資訊。
+        String thrice = freshKey();
+        var again = post(thrice, batch(spec("a", "string", true),
+                spec("a", "string", false), spec("a", "string", true)));
+        assertThat(again.statusCode()).isEqualTo(400);
+        assertThat(countOccurrences(again.body(), "：a"))
+                .as("同一個寫法重複出現時只報一次").isLessThanOrEqualTo(1);
+
+        // 兩個重複群組都要報，不能只報第一個。
+        String twoGroups = freshKey();
+        var multi = post(twoGroups, batch(spec("a", "string", true),
+                spec("b", "string", false), spec("a", "string", false),
+                spec("b", "string", true)));
+        assertThat(multi.statusCode()).isEqualTo(400);
+        assertThat(multi.body())
+                .as("兩個群組都要報 —— 只報一個會讓使用者修完再按一次才看到下一個")
+                .contains("a").contains("b");
+    }
+
+    private static int countOccurrences(String text, String needle) {
+        int n = 0;
+        int i = text.indexOf(needle);
+        while (i >= 0) {
+            n++;
+            i = text.indexOf(needle, i + needle.length());
+        }
+        return n;
+    }
 
     @Test
     @DisplayName("#87：資料庫分得開的名稱必須照常儲存（不得誤擋合法資料）")
