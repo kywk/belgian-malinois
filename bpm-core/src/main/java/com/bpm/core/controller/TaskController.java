@@ -20,6 +20,7 @@ import org.flowable.task.api.TaskQuery;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @RestController
@@ -60,6 +61,8 @@ public class TaskController {
     private final AuditEventPublisher auditPublisher;
     private final com.bpm.core.security.ProcessAccessGuard accessGuard;
     private final com.bpm.core.security.TaskHolderGuard holderGuard;
+    // #68b：待辦清單的「代某某發起」標示。
+    private final com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup;
 
     public TaskController(TaskService taskService, RuntimeService runtimeService,
                           RepositoryService repositoryService,
@@ -69,13 +72,15 @@ public class TaskController {
                           // 必須是同一條規則 —— 兩處各自維護時，只要有人改了
                           // 其中一處，就會出現「看得到、點進去被拒」那種組合
                           // 型式的差異，而那種差異比沒有檢查更難察覺。
-                          com.bpm.core.security.TaskHolderGuard holderGuard) {
+                          com.bpm.core.security.TaskHolderGuard holderGuard,
+                          com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup) {
         this.taskService = taskService;
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
         this.auditPublisher = auditPublisher;
         this.accessGuard = accessGuard;
         this.holderGuard = holderGuard;
+        this.onBehalfOfLookup = onBehalfOfLookup;
     }
 
     /**
@@ -168,9 +173,29 @@ public class TaskController {
         // 然後在 complete() 加上真正的檢查（拒絕而非隱藏），
         // 而不是在查詢端過濾。
 
+        // ── #68b：代發標示 ─────────────────────────────────────────
+        //
+        // 主管在待辦清單看到的是「主管審核」，而這張單的 initiator 是
+        // system:erp —— 畫面上沒有任何東西告訴他這是代誰發起的，
+        // 也就無從判斷該問誰補件。
+        //
+        // ⚠️ 授權面：呼叫端此刻已經是這個任務的持有者／候選人
+        // （上面那三個查詢），而同一個人讀這個案件的
+        // GET /api/process-instances/{id}/variables 早已拿到整包流程變數
+        // （含 onBehalfOf 與 initiator）。所以這不是新的揭露，
+        // 是把已經在瀏覽器裡的值放到它該出現的位置。
+        // 完整的政策說明見 OnBehalfOfLookup 的類別註解。
+        //
+        // ⚠️ 一次查詢：逐個任務查變數是 N+1（收件匣可有數十筆）。
+        final Map<String, String> onBehalfOf = onBehalfOfLookup.byProcessInstances(
+                taskMap.values().stream()
+                        .map(Task::getProcessInstanceId)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toSet()));
+
         return taskMap.values().stream()
                 .sorted(Comparator.comparing(Task::getCreateTime).reversed())
-                .map(this::toMap).toList();
+                .map(t -> toMap(t, onBehalfOf)).toList();
     }
 
     /**
@@ -541,8 +566,15 @@ public class TaskController {
         return OperationType.TASK_APPROVE;
     }
 
+    /**
+     * 一筆任務的對外表示法。
+     *
+     * @param onBehalfOf 案件 id → 代發員工（見 {@code OnBehalfOfLookup}）。
+     *                   由呼叫端一次查好傳入，<b>不可</b>在這裡逐筆查 ——
+     *                   那是 N+1，而且會讓「一次查詢」的保證只存在於註解裡。
+     */
     @SuppressWarnings("unchecked")
-    private Map<String, Object> toMap(Task t) {
+    private Map<String, Object> toMap(Task t, Map<String, String> onBehalfOf) {
         Map<String, Object> m = new HashMap<>();
         m.put("taskId", t.getId());
         m.put("taskName", t.getName());
@@ -551,6 +583,11 @@ public class TaskController {
         m.put("createTime", t.getCreateTime());
         m.put("dueDate", t.getDueDate());
         m.put("formKey", t.getFormKey());
+        // #68b：審核人端原本看不到的代發標示。
+        // 缺席（null）= 這不是代發的案件；呼叫端因此可用「有沒有這個鍵」
+        // 判斷，不需要另外一個布林欄位。
+        m.put("onBehalfOf", t.getProcessInstanceId() != null
+                ? onBehalfOf.get(t.getProcessInstanceId()) : null);
         // Resolve locked formVersion from process variable
         try {
             Map<String, Integer> versions = (Map<String, Integer>)

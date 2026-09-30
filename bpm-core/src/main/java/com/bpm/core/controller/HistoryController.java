@@ -29,16 +29,20 @@ public class HistoryController {
     private final ProcessAccessGuard accessGuard;
     private final ProcessInvolvementService involvementService;
     private final AuditEventPublisher auditPublisher;
+    // #68b：簽核軌跡的「代某某發起」標示。
+    private final com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup;
 
     public HistoryController(HistoryService historyService, TaskService taskService,
                              ProcessAccessGuard accessGuard,
                              ProcessInvolvementService involvementService,
-                             AuditEventPublisher auditPublisher) {
+                             AuditEventPublisher auditPublisher,
+                             com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup) {
         this.historyService = historyService;
         this.taskService = taskService;
         this.accessGuard = accessGuard;
         this.involvementService = involvementService;
         this.auditPublisher = auditPublisher;
+        this.onBehalfOfLookup = onBehalfOfLookup;
     }
 
     /**
@@ -168,8 +172,24 @@ public class HistoryController {
         // 呼叫端沒權看的。
         if (pid == null || explicitAssignee) query.taskAssignee(self);
         if (pid != null) query.processInstanceId(pid);
-        return query.orderByHistoricTaskInstanceEndTime().desc().list().stream()
-                .map(this::taskToMap).toList();
+        List<HistoricTaskInstance> tasks = query.orderByHistoricTaskInstanceEndTime().desc().list();
+
+        // ── #68b：代發標示 ─────────────────────────────────────────
+        //
+        // 軌跡上每個關卡的審核人已經是看得到的（否則「誰審的」就答不出來），
+        // 而「這張單是代誰發起的」是同一張單的同一層事實。
+        // 授權面：帶 pid 時上面已 requireReadAccess；不帶 pid 時結果是
+        // 呼叫者自己審過的關卡 —— 兩條路徑的讀者都已經能從
+        // GET /api/process-instances/{id}/variables 讀到 onBehalfOf。
+        // 政策說明見 OnBehalfOfLookup 的類別註解。
+        final Map<String, String> onBehalfOf = onBehalfOfLookup.byProcessInstances(
+                tasks.stream()
+                        .map(HistoricTaskInstance::getProcessInstanceId)
+                        .filter(java.util.Objects::nonNull)
+                        .collect(java.util.stream.Collectors.toSet()));
+
+        return tasks.stream()
+                .map(t -> taskToMap(t, onBehalfOf)).toList();
     }
 
     /**
@@ -324,7 +344,14 @@ public class HistoryController {
                 }).toList();
     }
 
-    private Map<String, Object> taskToMap(HistoricTaskInstance t) {
+    /**
+     * 一筆已完成任務的對外表示法。
+     *
+     * @param onBehalfOf 案件 id → 代發員工（見 {@code OnBehalfOfLookup}）。
+     *                   由呼叫端一次查好傳入，<b>不可</b>在這裡逐筆查 ——
+     *                   那是 N+1（Dashboard 會列出呼叫者所有已完成的關卡）。
+     */
+    private Map<String, Object> taskToMap(HistoricTaskInstance t, Map<String, String> onBehalfOf) {
         Map<String, Object> m = new HashMap<>();
         m.put("id", t.getId());
         m.put("name", t.getName());
@@ -332,6 +359,9 @@ public class HistoryController {
         m.put("processInstanceId", t.getProcessInstanceId());
         m.put("startTime", t.getStartTime());
         m.put("endTime", t.getEndTime());
+        // #68b：與 TaskController.toMap 同一個鍵名，兩端共用同一條規則。
+        m.put("onBehalfOf", t.getProcessInstanceId() != null
+                ? onBehalfOf.get(t.getProcessInstanceId()) : null);
         return m;
     }
 

@@ -2,6 +2,23 @@
   <div style="padding: 20px">
     <el-page-header @back="$router.back()" title="返回" :content="task?.taskName || '任務詳情'" />
 
+    <!--
+      ⚠️ #68b：審核人原本在這裡看不到「這張單是代誰發起的」。
+      R-20 規定外部系統發起時 initiator 一律是 system:<id>、員工記在 onBehalfOf，
+      所以主管打開案件只看到一個沒有申請人的單 —— 無從判斷該問誰補件。
+      放在表單卡片「上方」而不是欄位之間：它是這一頁的**解讀前提**
+      （下面每一欄的資料都是那位員工的），不是表單裡的一個欄位。
+    -->
+    <el-alert
+      v-if="task?.onBehalfOf"
+      type="warning"
+      show-icon
+      :closable="false"
+      style="margin-bottom:16px"
+      :title="`本案件由外部系統代 ${task.onBehalfOf} 發起`"
+      description="表單內容與補件關卡都是這位員工的。退回時請以本系統的資料為準，或退回要求系統端補正。"
+    />
+
     <el-row :gutter="20" style="margin-top: 20px">
       <el-col :span="16">
         <el-card>
