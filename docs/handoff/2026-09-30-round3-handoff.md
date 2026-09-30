@@ -34,8 +34,8 @@ backlog 原本寫「只要該 key 已有任何一筆規格，重複儲存必定�
 | 前端 | Vue 3.4 + Vite 5 + Element Plus |
 | DB | MSSQL 2022，**三個資料庫**：`bpm_core_db`／`bpm_audit_db`／`bpm_form_db` |
 | 其他 | RabbitMQ、Redis、MailHog。Docker 是 **OrbStack** |
-| 測試 | 後端 **422** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **59** 個（Vitest） |
-| 分支 | `feature/round2-hardening`，比 `main` 多 4 個 commit，**未 push** |
+| 測試 | 後端 **450** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **66** 個（Vitest） |
+| 分支 | `feature/round2-hardening`，比 `main` 多 9 個 commit，**未 push** |
 | 部署 | **尚未部署，只有本機開發** |
 
 ```bash
@@ -117,13 +117,34 @@ command cp bpm-core/target/<dir>/<file> <file>   # 還原（cp 被 alias 成互�
 **之前**，結果 deny-list 反過來擋掉一切、12 個測試全綠——等於沒驗到。
 **改用整份還原**才得到有效結果。
 
-### 4.5 兩個 agent 同時工作 → 用隔離 worktree
-共用 working tree 時，一方在 `mvn verify` 期間改檔會汙染對方的建置。
-解法：從 HEAD 建獨立 worktree 做負向控制，**主樹全程不動**。
-（⚠️ 注意：併行跑多份 `mvn verify` 會各自起一組 Testcontainers，
-24GB 機器上四份同時跑有記憶體風險。）
+### 4.5 🔴 兩個 agent 共用 working tree → **2026-09-30 實測造成實際損失**
 
-### 4.6 稽核的「多記而非漏記」是刻意取捨，不是缺陷
+上一版 handoff 寫「共用 working tree 會汙染對方的**建置**」。
+2026-09-30 實際派兩個 subagent 並行後，後果比「建置被汙染」嚴重得多：
+
+- **#79 的 agent 用 `git add`（非明確路徑）時把 #87 agent 的 4 個檔案捲進自己的
+  commit**，造成那些檔案在他的樹裡被刪除。事後用 `git commit --amend` 修正。
+- **#87 agent 的 backlog 修改被整份還原掉**，必須重做。
+- 兩人都靠 `git add`／`git reset --soft` 收拾殘局，任何一步出錯就是資料遺失。
+
+**同一輪的 handoff 裡已寫過「用獨立 worktree」，但沒有落實 —— 因為 PM 在分派時
+沒把「每個 agent 一個 worktree」寫進 prompt。教訓記在這裡，也記在第 10 節。**
+
+另外兩個併行才會遇到的問題：
+
+- **不要讀 `bpm-core/target/surefire-reports` 判斷測試結果**。併行的 `mvn verify`
+  會互相覆寫，#87 的 agent 一度讀到 #79 的失敗報告。
+  **只信任當次 `mvn verify` 自己印出來的最後一行。**
+- **不要用 surefire 報告加總來算測試總數**。報告檔不涵蓋 `@Nested` 內類別
+  （PM 實測：逐類加總 416，實際 450，差 34 條全在 `@Nested`）。
+  **唯一的真相是 `mvn verify` 輸出的 `Tests run: N`。**
+
+### 4.6 記憶體：併行跑 `mvn verify` 的真實風險
+24GB 機器上每份 `mvn verify` 會各起一組 Testcontainers（MSSQL 就要 1.5GB）。
+四份同時跑有 OOM 風險 —— 實際上兩位 agent 都選擇**等對方的 maven 結束**才跑完整套件，
+等於序列化。**若要真正並行，測試階段必須排程序列化。**
+
+### 4.7 稽核的「多記而非漏記」是刻意取捨，不是缺陷
 #86 缺陷期間，失敗的請求仍留下一筆 `replace` 稽核，宣稱「刪掉 reason、
 放寬所有必填」，而資料其實完全沒變。
 這**不是**缺陷——`AuditEventPublisher` 的類別註解已記載這是 fail-closed
@@ -207,9 +228,53 @@ export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
 
 ---
 
-## 8. 現況一句話
+## 8. 待使用者裁決（2026-09-30 新增）
 
-`feature/round2-hardening` = `68de3ff`，比 `main` 多 4 個 commit，**未 push**。
-#86 完成（`f6df3fb`）。後端 422 測試全綠（**容器停止狀態下跑的**）、
-前端 59 全綠、`acceptance-test.sh` PASS 7 / FAIL 0。工作樹乾淨。
-**#79 與 #87 進行中（兩個 subagent 並行）。尚未部署。**
+| 事項 | 說明 |
+|---|---|
+| **#79-2** | 對**已完成**的關卡留言仍是裸 500（`AddCommentCmd` 查不到 runtime task）。**改動前完全相同，非本輪引入**。守衛放行之後才 500 對呼叫端是誤導的。修成 404（任務已結束）還是 409（狀態衝突）屬 API 語意政策。已用測試釘住現狀。前端走不到這條路徑 |
+| **#87-2** | **空白 `variableName` 該不該擋？** 現況：單一空白名 → 200（已用測試釘住），兩個空白名互相衝突 → 400。**#87 的建議是擋**：`variableName` 就是外部系統要塞進流程的 key（spec §8.5），一個叫 `""` 的變數永遠比對不到任何東西 —— 設定它的人看不到異常，但輸入驗證等同少了一項；`required=true` 的空白名則讓**每一次**外部發起都回 400。擋的話改動很小 |
+| **#87-3** | `variableName: null` 仍 500（NOT NULL 約束）。刻意未擋，屬空白名稱政策的一部分，建議與 #87-2 一起裁決 |
+
+---
+
+## 9. 2026-09-30 已完成（#79、#87）
+
+| # | commit | 摘要 |
+|---|---|---|
+| #79 | `235ab30` | 簽核意見三端點接 `ProcessAccessGuard.requireTaskReadAccess`／`requireTaskParticipant`。**連 taskId→pid 的查詢都收進守衛**（授權規則只能有一份）。`TaskHolderGuard` 完全沒動 —— 留言不改變任務狀態。線上實測：`user002`／`mgr002` 由 200 變 404，審核人逐筆讀完完整軌跡（含 assignee 不是自己的補件關卡） |
+| #87 | `bdddb9d`／`c1bb853`／`7c13a4b` | 同批重複變數名回 **400 並指名衝突**。⚠️ **「重複」不能用 `Set<String>` 判斷** —— 定序是 `SQL_Latin1_General_CP1_CI_AS`，PM 獨立實查確認 `Amount`/`amount`、`amount`/`amount `、全形`Ａ`/半形`A` 在 DB 層面就是衝突（`SELECT CASE WHEN N'Amount'=N'amount'` 回 1，INSERT 真的撞約束）。只做 `Set<String>` 的話**使用者最常見的失敗形狀擋不住**。連帶修掉 `update` 改名撞同流程其他變數 → 500 |
+
+**PM 的獨立驗證**（不依賴 subagent 報告）：
+- `mvn verify` **450 全綠**（基線 422 + #79 的 17 + #87 的 11），容器停止狀態下跑
+- 前端 **66 全綠**（基線 59 + 7）
+- `acceptance-test.sh` PASS 7 / FAIL 0（⚠️ 容器剛重建、seed 完**立刻**跑會全失敗，
+  再跑一次就過 —— 這是 seed 的時序問題，**不是本輪改動引入**，但下一個人會踩到）
+- #79：`user002`／`mgr002` → 404，**404 回應不含意見內容**；關係人（申請人 `user001`）
+  與稽核職能 `dir001` → 200；被拒的 POST 零痕跡（批註筆數不變、稽核無紀錄）
+- #87：9 種形狀全部符合預期；#86 的行為無回歸（原樣重存 200、空陣列清空、夾帶 id 仍被清 null）
+
+---
+
+## 10. 下一輪若要並行 subagent —— 必須先做這件事
+
+**每個 agent 一個獨立 git worktree。** 2026-09-30 兩個 agent 共用主樹時，
+實際發生了檔案被捲進對方 commit、backlog 被整份還原掉的資料損失（見 4.5）。
+
+```bash
+git worktree add /tmp/gh-<工項號> <base-commit>
+# 給 agent 的 prompt 要明講：cd /tmp/gh-<工項號>，且 git add 必須用明確路徑
+git worktree remove /tmp/gh-<工項號> --force
+```
+
+⚠️ **worktree 必須是 agent 唯一的操作對象**，PM 不得對它做 `git worktree remove`
+（2026-09-30 PM 就在基線驗證跑一半時把 worktree 移除了，測試被殺掉、拿到假結果）。
+
+---
+
+## 11. 現況一句話
+
+`feature/round2-hardening` = `7c13a4b`，比 `main` 多 9 個 commit，**未 push**。
+#86、#79、#87 完成。後端 **450** 測試全綠（**容器停止狀態下跑的**）、
+前端 **66** 全綠、`acceptance-test.sh` PASS 7 / FAIL 0。工作樹乾淨。
+**待裁決：#79-2、#87-2、#87-3（見第 8 節）。尚未部署。**
