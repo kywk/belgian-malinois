@@ -113,6 +113,26 @@ public class ExternalApiController {
                     "此系統未被授權啟動流程: " + processDefKey);
         }
 
+        // ── #88 政策 B：候選群組必須在該系統的白名單內 ────────────────
+        //
+        // 為什麼排在兩個 403 之後、requireKnownPerson 之前：
+        //  * 它<b>是授權檢查</b>，與 allowedProcessKeys 同類，必須與它們
+        //    一起排在身分檢查之前。否則一個未授權的群組會先撞上
+        //    「你的員工編號有問題」的 400 —— 呼叫端會去改一個
+        //    根本不是問題來源的欄位，而真正的問題（它沒有這個群組的權限）
+        //    要等到它換完 id 再送一次才會浮現。
+        //  * 必須在 startProcessInstanceByKey 之前：擋在啟動之後就會留下
+        //    一個已經存在、卻沒有人能簽的案件。
+        //
+        // 這一段原本是一整段「刻意不驗證」的註解（#88 的未完成項）。
+        // 為什麼那時不能驗、為什麼現在驗的是「授權」而不是「存在」，
+        // 見 ExternalSystemPolicy.isCandidateGroupAllowed 的 javadoc。
+        //
+        // ⚠️ 用回傳值而不是自己再 split 一次 —— 驗證過的清單必須就是
+        // 實際寫進 identity link 的那一份，否則「規則只有一份」不成立。
+        List<String> firstCandidateGroups =
+                actorGuard.requireAllowedCandidateGroups(sys, firstGroups);
+
         // 代員工發起（2026-09-29 決策：依系統授權，預設不允許）。
         if (onBehalfOf != null) {
             if (!Boolean.TRUE.equals(sys.getAllowOnBehalfOf())) {
@@ -178,10 +198,26 @@ public class ExternalApiController {
         // 在外部系統設定檔加一個 allowedCandidateGroups 白名單
         // （授權維度、零外部系統依賴），或由權限中心提供群組存在性 API。
         // 在那之前，維持現狀是唯一不會擋掉合法用法的選擇。
+        //
+        // ✅ **2026-09-30 已實作（#88 政策 B）**：授權面（越權）改由
+        // actorGuard.requireAllowedCandidateGroups 的白名單根治，
+        // 見上方呼叫處。存在性面（卡死）仍未根治 —— 沒有那個 API，
+        // 理由不變（會擋掉權限碼與 JWT authority 兩種合法用法）。
+        //
+        // ⚠️ 未根治的那一半已回報 PM：`firstTaskCandidateGroups: " , "`
+        // 這種只送分隔符的 payload，改動前會產生空字串的候選群組而
+        // 讓 UnreachableTaskListener 不告警；現在空項目被丟棄，
+        // 「至少有一個」規則因此會看到「沒有群組」而回 400（見下）。
 
         // 沒有受理人、沒有候選群組、也不是代員工發起 → 無從推導簽核人。
         // initiator 是 system:<id>，不是人，組織系統查不到它的主管。
-        if (firstAssignee == null && firstGroups == null && onBehalfOf == null) {
+        //
+        // ⚠️ 比對的是**解析後**的清單而不是原始字串。改動前比對 raw：
+        // `firstTaskCandidateGroups: " , "` 非 null 而通過，但實際上
+        // 沒有任何群組會被掛到任務上 → 第一關沒有 assignee 也沒有候選人
+        // → 靜默卡死，且 listener 因為看到空字串 identity link 而不告警。
+        // 用解析後的清單是讓這條**既有規則**看到事實，不是新增一條規則。
+        if (firstAssignee == null && firstCandidateGroups.isEmpty() && onBehalfOf == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "外部系統發起流程必須指定 firstTaskAssignee、firstTaskCandidateGroups，"
                             + "或（已授權時）onBehalfOf");
@@ -272,10 +308,10 @@ public class ExternalApiController {
         Task firstTask = firstTasks.isEmpty() ? null : firstTasks.get(0);
         if (firstTask != null) {
             if (firstAssignee != null) taskService.setAssignee(firstTask.getId(), firstAssignee);
-            if (firstGroups != null) {
-                for (String g : firstGroups.split(",")) {
-                    taskService.addCandidateGroup(firstTask.getId(), g.trim());
-                }
+            // ⚠️ 用守衛回傳的那一份清單（已驗過授權、已 trim、已丟棄空白），
+            // 不可在這裡再 split 一次 —— 驗證過的與實際寫入的必須是同一份。
+            for (String g : firstCandidateGroups) {
+                taskService.addCandidateGroup(firstTask.getId(), g);
             }
         }
 

@@ -144,4 +144,43 @@ public class ExternalSystemPolicy {
         return allowed(sys.getIpWhitelist(), clientIp == null ? null : clientIp.trim(),
                 "ipWhitelist", sys.getSystemId());
     }
+
+    /**
+     * 候選群組是否在 {@code allowedCandidateGroups} 內（精確比對）。
+     *
+     * <h2>為什麼是白名單而不是「驗證群組存在」（#88 政策 B）</h2>
+     *
+     * <p>{@code firstTaskCandidateGroups} 有兩種危害，性質完全不同：
+     * <ul>
+     *   <li><b>卡死</b>：群組不存在 → 群組成員看不到任務 → 靜默卡死。
+     *       這個形狀<b>無法</b>用白名單根治 —— 見下一節。</li>
+     *   <li><b>越權</b>：把案件丟進任意<b>特權</b>群組的待辦池。白名單直接根治它。</li>
+     * </ul>
+     *
+     * <h2>為什麼不驗證群組存在性</h2>
+     *
+     * <p>候選群組名稱在本 repo 有<b>三個互質的來源</b>（見
+     * {@code CandidateGroupMembership} 類別註解）：① 部門代碼 ② 權限碼
+     * （{@code hr:leave:approve}）③ JWT roles claim 帶進來的 authority。
+     * 只有 ① 能用 {@code getDeptMembers} 驗，而 ②③ <b>沒有任何
+     * 「這群組存在嗎」的 API</b>（權限中心只能由人反查權限清單，列不出權限碼全集）。
+     * 也就是說：要驗就必須<b>假設每個群組都是部門</b>，那會擋掉 ②③ 這兩種
+     * 合法用法，而本專案自己產生的 BPMN 就用 ②。
+     * <b>一個會擋掉合法用法的驗證比沒有驗證更糟。</b>
+     *
+     * <p>換句話說這兩個危害要用兩種不同的工具，而「存在性」那一半目前沒有
+     * 工具 —— <b>不該用一個做不到的檢查去假裝解決了問題</b>。
+     * 它的可行替代是權限中心提供群組存在性 API，屬跨系統工程。
+     *
+     * <h2>⚠️ 欄位為空代表「不限制」</h2>
+     *
+     * <p>沿用 {@link Kind#UNRESTRICTED}，與 {@code allowedProcessKeys} 完全一致 ——
+     * <b>規則只能有一份</b>，而四態分類（不限制／拒絕全部／清單／格式錯誤）
+     * 已經把「空」與「空清單」分開了。見 {@code allowedProcessKeys} 關於
+     * 「管理員照 UI 正常流程建立的系統預設是可啟動任何流程」的警告。
+     */
+    public boolean isCandidateGroupAllowed(ExternalSystem sys, String group) {
+        return allowed(sys.getAllowedCandidateGroups(), group,
+                "allowedCandidateGroups", sys.getSystemId());
+    }
 }

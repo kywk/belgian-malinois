@@ -113,6 +113,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link Passes#permissionCodeGroupIsAccepted} 是它的對照：若有人日後
  * 補上「把每個群組都當部門驗」的實作，這一條會紅 ——
  * 那正是本專案自己產生的 BPMN 會用的形狀（{@code hr:leave:approve}）。
+ *
+ * <h2>2026-09-30 政策裁決後的分工</h2>
+ *
+ * <p>本檔守的是「<b>firstTaskAssignee 必須是人</b>」這條規則。裁決後另外兩件事
+ * 有自己的檔案，不要把它們的測試塞回本檔：
+ * <ul>
+ *   <li>組織系統<b>故障</b> → 503（與「查無此人」分開）→ {@code ExternalOrgSystemFailureTest}</li>
+ *   <li>候選群組<b>授權白名單</b> → {@code ExternalCandidateGroupWhitelistTest}</li>
+ * </ul>
+ * 本檔唯一因此修改的是 {@code unknownAssigneeIsRejected} 的訊息斷言：
+ * 裁決前 400 的訊息必須同時點名「payload 不對」與「組織系統可能不可用」，
+ * 現在後者已經是 503，訊息若仍混入「請稍後重試」會讓呼叫端對一個
+ * 永遠不會成功的請求一直重試。
  */
 class ExternalFirstTaskAssigneeTest extends IntegrationTestBase {
 
@@ -278,9 +291,12 @@ class ExternalFirstTaskAssigneeTest extends IntegrationTestBase {
 
             assertRejectedWithoutSideEffect(res, before, audits);
             assertThat(res.body())
-                    .as("必須點名『不是組織系統認識的人員』，"
-                            + "且同時點名組織系統可能不可用 —— 否則運維會去查呼叫端參數")
-                    .contains("不是組織系統認識的人員").contains("fail-closed");
+                    .as("⚠️ 2026-09-30 政策裁決後，這句訊息<b>不再</b>需要點名「組織系統可能不可用」："
+                            + "組織系統故障現在走 503（見 ExternalOrgSystemFailureTest），"
+                            + "而 400 的訊息若仍混入「請稍後重試」會讓呼叫端對一個"
+                            + "永遠不會成功的請求一直重試")
+                    .contains("不是組織系統認識的人員")
+                    .doesNotContain("請稍後重試");
         }
 
         @Test
