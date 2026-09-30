@@ -6,6 +6,12 @@
              xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
              targetNamespace="http://bpm.com/purchase">
 
+  <!--
+    event="all" 的理由見 leave-approval.bpmn20.xml 內的同一段註解（#67）：
+    設計器的四個 webhook 事件選項（create／complete／timeout／reject）
+    都要真的能觸發，只宣告 create 與 complete 會讓「timeout」
+    變成一個設定成功但永遠不發生的選項。
+  -->
   <process id="purchase-approval" name="採購審核流程" isExecutable="true">
 
     <startEvent id="start" flowable:initiator="initiator"
@@ -18,6 +24,7 @@
               flowable:formKey="purchase-review">
       <extensionElements>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
+        <flowable:taskListener event="all" delegateExpression="${webhookTaskListener}"/>
       </extensionElements>
     </userTask>
 
@@ -39,6 +46,7 @@
               flowable:formKey="purchase-request">
       <extensionElements>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
+        <flowable:taskListener event="all" delegateExpression="${webhookTaskListener}"/>
       </extensionElements>
     </userTask>
 
@@ -50,6 +58,7 @@
               flowable:formKey="purchase-review">
       <extensionElements>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
+        <flowable:taskListener event="all" delegateExpression="${webhookTaskListener}"/>
       </extensionElements>
     </userTask>
 
@@ -71,6 +80,7 @@
               flowable:formKey="purchase-request">
       <extensionElements>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
+        <flowable:taskListener event="all" delegateExpression="${webhookTaskListener}"/>
       </extensionElements>
     </userTask>
 
