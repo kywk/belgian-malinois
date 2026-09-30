@@ -7,6 +7,15 @@
         <template #default="{ row }">
           {{ row.taskName }}
           <el-tag v-if="row.taskName?.startsWith('加簽')" size="small" type="warning" style="margin-left:4px">加簽</el-tag>
+          <!--
+            ⚠️ #68b：沒有這個標籤，主管看到的就是一張沒有申請人的單
+            （initiator = system:<id>，員工記在 onBehalfOf）。
+            標在任務名稱旁邊而不是另開一欄：待辦清單的寬度有限，
+            而「代誰發起」改變的是**這一列的解讀方式**，不是另一個維度。
+          -->
+          <el-tag v-if="row.onBehalfOf" size="small" type="warning" style="margin-left:4px">
+            代 {{ row.onBehalfOf }} 發起
+          </el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="assignee" label="審核人" width="120" />

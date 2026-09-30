@@ -68,7 +68,7 @@ public class ProcessInvolvementService {
      * 其 processInstanceId 清單會直接超過這個數 → SQL 錯誤 → 整個端點 500。
      * 所以分批是<b>正確性需求</b>，不是效能優化。
      */
-    private static final int ID_BATCH = 1000;
+    public static final int ID_BATCH = 1000;
 
     private final TaskService taskService;
     private final RuntimeService runtimeService;
@@ -207,7 +207,14 @@ public class ProcessInvolvementService {
         return out;
     }
 
-    /** 依 {@link #ID_BATCH} 分批。空集合回空清單（{@code IN ()} 會讓 MSSQL 直接報錯）。 */
+    /**
+     * 依 {@link #ID_BATCH} 分批。空集合回空清單（{@code IN ()} 會讓 MSSQL 直接報錯）。
+     *
+     * <p>package-private 是刻意的：{@link OnBehalfOfLookup} 與本類別同包，
+     * 直接沿用<b>同一份</b>分批大小。那是正確性需求（MSSQL 2100 個參數上限），
+     * 兩處各寫一個常數等於兩份答案 —— 而「同一條規則有兩套形狀」正是本 repo
+     * 反覆記載的缺陷成因。
+     */
     static List<List<String>> partition(Collection<String> ids) {
         List<List<String>> batches = new ArrayList<>();
         if (ids == null || ids.isEmpty()) return batches;
