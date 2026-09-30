@@ -149,10 +149,13 @@ class UnreachableSystemAssigneeAlertTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("#83：大小寫不同的系統身分同樣告警（firstTaskAssignee 沒有驗證）")
+    @DisplayName("#83/#88：大小寫不同的系統身分同樣告警（外部 API 輸入端已擋，這裡是第二層）")
     void systemAssigneeIsCaseInsensitive() {
-        // 外部系統可以用 firstTaskAssignee 送出 "SYSTEM:x"（body 沒有任何驗證），
-        // 所以只比對小寫前綴會留下一個繞道。
+        // #88 已在外部 API 的輸入端擋掉 "SYSTEM:x"（ExternalActorGuard），
+        // 所以這條不再是「外部系統送得出來」的形狀。但它**仍然必要**：
+        // BPMN 的 flowable:assignee 字面值、管理員部署的流程、
+        // 以及未來任何新的寫入路徑都能產生它，而這個 listener 是最後一層。
+        // 只比對小寫前綴會讓那條路徑重新出現一個不告警的卡死。
         String key = "b83-system-assignee-upper";
         if (repositoryService.createProcessDefinitionQuery().processDefinitionKey(key).count() == 0) {
             repositoryService.createDeployment().addString(key + ".bpmn20.xml",

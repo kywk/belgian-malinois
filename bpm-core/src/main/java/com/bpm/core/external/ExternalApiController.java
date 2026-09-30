@@ -33,7 +33,12 @@ public class ExternalApiController {
     private final AuditEventPublisher auditPublisher;
     private final FormVersionLocker formVersionLocker;
     private final ExternalSystemPolicy policy;
-    private final com.bpm.core.service.OrgService orgService;
+    /**
+     * 外部系統指名的身分必須是人（#88）。{@code onBehalfOf} 與
+     * {@code firstTaskAssignee} 共用同一條規則 —— 見該類別註解
+     * 「為什麼把 onBehalfOf 的既有檢查也收進來」。
+     */
+    private final ExternalActorGuard actorGuard;
 
     /**
      * 流程實例的擁有者。啟動時由 server 寫入，外部系統無法透過 request body 影響。
@@ -48,7 +53,7 @@ public class ExternalApiController {
                                   ProcessVariableSpecRepository specRepo,
                                   AuditEventPublisher auditPublisher, FormVersionLocker formVersionLocker,
                                   ExternalSystemPolicy policy,
-                                  com.bpm.core.service.OrgService orgService) {
+                                  ExternalActorGuard actorGuard) {
         this.runtimeService = runtimeService;
         this.taskService = taskService;
         this.historyService = historyService;
@@ -59,7 +64,9 @@ public class ExternalApiController {
         this.auditPublisher = auditPublisher;
         this.formVersionLocker = formVersionLocker;
         this.policy = policy;
-        this.orgService = orgService;
+        // #88：原本這裡注入 OrgService 供 onBehalfOf 的 inline try/catch 使用。
+        // 規則移到 ExternalActorGuard 後本類別不再直接碰組織系統。
+        this.actorGuard = actorGuard;
     }
 
     // ── 1. Start Process ──
@@ -114,13 +121,63 @@ public class ExternalApiController {
             }
             // 必須是組織系統認得的人。查不到主管就無法路由 —— 而且一個不存在的
             // 員工編號出現在「我的申請」或通知信上，只會製造混亂。
-            try {
-                orgService.getDirectManager(onBehalfOf);
-            } catch (Exception e) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "onBehalfOf=" + onBehalfOf + " 不是組織系統認識的人員", e);
-            }
+            // ⚠️ #88 起這條規則的實作在 ExternalActorGuard，與下面
+            // firstTaskAssignee 共用同一份（規則只能有一份）。
+            actorGuard.requireKnownPerson("onBehalfOf", onBehalfOf);
         }
+
+        // ── #88：firstTaskAssignee 必須是組織系統認識的人 ──────────────
+        //
+        // ⚠️ 改動前這個欄位<b>完全沒有任何驗證</b>：後端只檢查
+        // 「firstTaskAssignee／firstTaskCandidateGroups 至少有一個」，
+        // 不檢查那個值是不是人。於是外部系統可以送
+        // {"firstTaskAssignee": "system:evil"}，讓第一個人工任務的
+        // assignee 變成沒有人能持有的身分 —— 案件從第一關就卡死，
+        // 而且沒有任何錯誤訊息。與 #83 是同一個缺陷的另一個入口，
+        // 而第一關更早、使用者更可能以為是系統故障。
+        //
+        // 為什麼排在兩個 403 之後、validateVariables 之前：
+        //  * 授權先決（與 #80 的 404 預檢同一個理由）。這條檢查不會洩漏
+        //    伺服器狀態（它問的是組織系統，不是流程定義部署），
+        //    但順序一致本身就是可讀性。
+        //  * 前面每一個 400／403 都在講「請求不完整或不被允許」，
+        //    呼叫端該改的是 payload —— 而「你給的員工編號查無此人」
+        //    正是同一類錯誤，必須排在同一區。
+        //  * 必須在 startProcessInstanceByKey 之前：擋在啟動之後就會留下
+        //    一個已經存在、卻沒有人能簽的案件（正是要修的那個缺陷）。
+        //
+        // 只在有值時檢查 —— 沒指名是合法的（改用候選群組），
+        // 由下面的「至少有一個」規則處理。
+        actorGuard.requireKnownPerson("firstTaskAssignee", firstAssignee);
+
+        // ── ⚠️ firstTaskCandidateGroups 刻意<b>不</b>驗證（見 #88 報告）──
+        //
+        // 對照：受理人是「一個 id」，所以「組織系統認不認識他」是個有答案的
+        // 問題。候選群組是「一個群組名稱」，而本 repo 的候選群組名稱有
+        // <b>三個互質的來源</b>（見 CandidateGroupMembership 類別註解）：
+        //   ① 部門代碼（${orgService.getDeptId(initiator)} 或手填）
+        //   ② 權限碼（例：hr:leave:approve）
+        //   ③ JWT roles claim 帶進來的 authority
+        // ① 可以用 getDeptMembers 驗，但②③<b>沒有任何「這群組存在嗎」的
+        // API</b> —— 權限中心只能由人反查權限清單，列不出權限碼全集；
+        // JWT authority 更不在我們的管轄範圍。
+        //
+        // 也就是說：要驗就必須<b>假設每個群組都是部門</b>，那會擋掉
+        // ②③ 這兩種合法用法（本專案自己產生的 BPMN 就用 ②）。
+        // 一個會擋掉合法用法的驗證比沒有驗證更糟。
+        //
+        // 而且它的危害型態不同、也還沒被裁決：
+        //  * 卡死：群組不存在 → 群組成員看不到任務 → 靜默卡死。
+        //    ⚠️ UnreachableTaskListener 對這種情況<b>不告警</b>
+        //    （UnreachableTaskAlertTest.taskWithCandidateGroupIsNotAlerted）。
+        //  * 越權：把案件丟進任意特權群組的待辦池
+        //    （docs/plan/2026-09-28-remediation-backlog.md:260），
+        //    那是<b>授權範圍</b>問題，必須由 PM 決定「哪些群組可被指定」。
+        //
+        // 所以這一格留白是<b>有意識的未完成</b>，不是漏掉。合理的下一步是
+        // 在外部系統設定檔加一個 allowedCandidateGroups 白名單
+        // （授權維度、零外部系統依賴），或由權限中心提供群組存在性 API。
+        // 在那之前，維持現狀是唯一不會擋掉合法用法的選擇。
 
         // 沒有受理人、沒有候選群組、也不是代員工發起 → 無從推導簽核人。
         // initiator 是 system:<id>，不是人，組織系統查不到它的主管。
