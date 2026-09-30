@@ -19,7 +19,7 @@
 - **audit-log-service**：已於 2026-04-24 併入 bpm-core；稽核為 fail-closed（寫不進就回滾）
 - **認證**：平台層 JWT 驗證＋信任閘道已完成（R-01）；個案層級授權仍由各 controller 負責
 - **外圍系統整合（組織／權限）仍以 Mock 替代**，真正的權限中心見 `docs/rbac-enterprise-backlog.md`
-- **測試**：後端約 280 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 59 個（Vitest）
+- **測試**：後端 422 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 59 個（Vitest）
 - 安全與正確性修復（P0／P1／P2、R 編號）另見 `docs/plan/2026-09-28-security-audit.md`、
   `docs/plan/2026-09-28-remediation-backlog.md`，已完成部分列在 `docs/backend-completed-items.md` 第八節
 
@@ -185,7 +185,8 @@
 | 83 | assignee 為 `system:<id>` 的任務沒有人能簽 | 🟠 **#74 造成的行為變化**（安全方向正確但功能壞掉）。外部系統發起 → 主管退回 → 補件關卡 assignee 是 `${initiator}` = `system:<id>` → 四個持有者條件全不命中 → 案件永久卡死。改動前是「任何人都能簽」，現在是「沒有人能簽」。**根本解法在 BPMN／路由層**：`initiator` 不是人時改指 `onBehalfOf` 或系統設定的受理人。`ExternalApiController.completeTask` 是 server-to-server 路徑有 `verifyRunningOwnership`，不受影響；缺口只在「人工去簽補件」 | 1d | ⬜ |
 | 84 | `NotifyAdminController.updateConfig` 未驗 templateId | ✅ **2026-09-29 完成**（`d4ddfae`）。抽出 `requireExistingTemplate` 給 create/update 共用（不是 DRY，是**規則只能有一份**：缺陷本身就是分散造成的 —— create 有擋、update 沒有，而 `deleteTemplate` 的註解宣稱兩者都擋了，描述的是不存在的行為）。⚠️ **實測到的後果與原描述不同**：P1-13 已替 `EmailConsumer` 加上消費端防護，所以線上實測是**設定被靜默忽略**（記 WARN、改用預設模板）而非通知永久遺失。危害較小但**更難察覺** —— 沒有例外、沒有錯誤訊息、通知照常寄出，後台還顯示「設定成功」。線上實測：不存在的 templateId／null／`""`／全空白 → 400 且五個欄位全未變、稽核無紀錄；有效 templateId → 200 且 `enabled` 真的翻轉；不存在的 id → 404；非管理員 → 403 且資料未變。**前端無相容性風險**（`grep` 確認 `bpm-frontend/src` 零 `notify-config` 呼叫） | ~~0.3d~~ | ✅ |
 | 85 | `ProcessVariableSpecController.update` 稽核說謊 | ✅ **2026-09-29 完成**（`97eafd7`）。`findById` 後比對 `existing.getProcessDefinitionKey()`，不符回 **404**（非 403，沿用 `ProcessAccessGuard` 政策：403 會確認物件存在，對可枚舉的 id 等於留枚舉管道）。稽核改寫 `existing` 的 key；被擋時不寫稽核。連帶修掉 `orElseThrow()` 讓不存在的 id 從 **500 → 404**（修前 500 會讓呼叫端一直重試）。**端到端已驗**：`required` 決定 `ExternalApiController.validateVariables` 擋不擋，所以 required=true 時外部請求缺該變數回 400 → 被擋的冒用後**仍然**400（輸入驗證沒被放寬）→ 用正確 key 改成 false 後同一請求變 **200**，證明 400 確實來自那一筆規格。⚠️ 不選「靜默忽略 key 不一致、以 id 為準照樣更新」：那樣稽核仍會寫錯的 key，且回 200 讓呼叫端以為改對了 | ~~0.3d~~ | ✅ |
-| 86 | `ProcessVariableSpecController.batchSave` 重複儲存必定 500 | 🔴 **2026-09-29 修 #85 的線上實測時發現**。`POST /api/admin/process-definitions/{key}/variable-spec` 端點是「整批取代」，先 `deleteByProcessDefinitionKey(key)`（衍生刪除 → `em.remove()`）再 `saveAll`（→ `em.persist()`）。**Hibernate 在同一次 flush 中把 INSERT 排在 DELETE 之前**，撞上 `@UniqueConstraint(processDefinitionKey, variableName)` → `Violation of UNIQUE KEY constraint` → **500**。所以只要該 key 已有任何一筆規格，重複呼叫必定失敗，**且整批取代在有既有資料時從來沒有成功過**。⚠️ 前端 `ProcessVariableSpecAdmin.vue` 的「儲存」按鈕正是走這條路徑 → 管理頁第二次儲存必定壞。**414 個測試沒有任何一個覆蓋 batchSave 的重複寫入** —— 又是「測試全綠但線上有洞」。修法方向：刪除改成 `flush()` 後再 insert、或改用批次原生 SQL／`deleteAllInBatch` | 0.5d | ⬜ |
+| 86 | `ProcessVariableSpecController.batchSave` 重複儲存必定 500 | ✅ **2026-09-30 完成**。`POST /api/admin/process-definitions/{key}/variable-spec` 是「整批取代」，原本先 `deleteByProcessDefinitionKey(key)`（衍生刪除 → `em.remove()`）再 `saveAll`（→ `em.persist()`）。**Hibernate 在同一次 flush 中把 INSERT 排在 DELETE 之前**，撞上 `@UniqueConstraint(processDefinitionKey, variableName)` → **500**。⚠️ **原描述「只要該 key 已有任何一筆規格就必定失敗」不精確，實測後修正**：觸發條件是**新批次與既有規格有同名變數**。新舊完全不重疊（整批換新名字）或送空陣列，缺陷期間都是 200 —— 沒有任何 INSERT 會撞到同名舊列。這讓它更難被手動試出來（剛建好規格時第一次存是好的），而管理頁的正常使用流程必然重疊。⚠️ 前端 `ProcessVariableSpecAdmin.vue` 的「儲存」按鈕正是走這條路徑 → **管理頁第二次按儲存必定壞**。**414 個測試沒有任何一個覆蓋重複寫入**。修法：刪除改成 `@Modifying @Query` 原生 JPQL（不選「衍生刪除 + `flush()`」——那樣也能修好，但規則會散在「刪除」與「記得 flush」兩處，而這正是本缺陷的成因）。**不**做「比對後只刪真正消失的列」：那會保留舊 id，而 `setId(null)` 是 P0-4 的防護。線上實測八種呼叫全 200 且稽核逐筆相符，見 commit `f6df3fb` | ~~0.5d~~ | ✅ |
+| 87 | `batchSave` 同一批內重複變數名 → 500 | 🟠 **2026-09-30 修 #86 的線上實測時發現**。送 `[{"variableName":"x",…},{"variableName":"x",…}]` 仍是 500，但**根因與 #86 不同**：這是呼叫端送了互相衝突的資料，與刪除／寫入的順序無關，#86 的修法不會解決它。**修法應是輸入驗證**（回 400 指出重複的名字），不是調整刪除方式。⚠️ 前端 `ProcessVariableSpecAdmin.vue` 的 `addRow()` 產出的 `variableName` 是空字串且**完全沒有重複檢查** → 使用者按兩次「新增行」再按「儲存」就會送出兩筆同名空字串。**刻意不併進 #86**：兩者的驗證方式與回應狀態碼都不同，混在一起會讓「這個 500 修掉了嗎」變成無法回答的問題 | 0.3d | ⬜ |
 ---
 
 ## 工項統計
@@ -206,14 +207,16 @@
 | 基礎設施 | 4 | 0 | 2 | 2 | 3.5d |
 | Form Service | 6 | 2 | 2 | 2 | 6d |
 | 跨服務整合 | 6 | 1 | 4 | 1 | 17d |
-| 2026-09-29 新增 | 8 | 2 | 0 | 6 | 30.5d |
-| **合計** | **73** | **24** | **21** | **28** | **~117 人天** |
+| 2026-09-29 新增 | 21 | 13 | 0 | 8 | 28d |
+| **合計** | **86** | **35** | **21** | **30** | **~114 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
 > 2026-09-29 晚間更新：#66、#69 完成（+3 項新發現 #71～#73）。
 > #67 的估時由 2d 上修為 4d（三段斷線、8～12 檔案、三種格式互不相通）。
 > #71 讀端授權的實際範圍遠大於原先預期的 3 個端點，估時 2d 仍可能偏低。
+> 2026-09-30 更新：#84、#85、#86 完成（+1 項新發現 #87）。統計表已重算
+> （「2026-09-29 新增」實際是 21 項，不是先前誤植的 8 項）。
 
 ---
 
@@ -234,6 +237,11 @@
 > - **#82（前端接權限碼）** —— `bpm:form:design` 目前在 UI 上完全看不到效果，
 >   需要架構決定（權限碼的資料來源）。
 > - #80、#81 修法都很短，約 0.8d 全部可關上。
+>
+> **2026-09-30 追加**：#84、#85、#86 已完成。**#87 建議併入 #80／#81 那一批** ——
+> 兩個都是 0.3d 左右的輸入驗證，而 #87 的前端（`addRow()` 產生空 `variableName`
+> 且無重複檢查）與後端（回 400 指出重複的名字）要一起改才對得上，
+> 只改後端會讓 UI 繼續送出必然被拒的資料。
 
 ### P0 — 核心流程可用（必須先完成）
 - #1~#2 退件/拒絕機制
