@@ -225,6 +225,20 @@ public class ProcessAccessGuard {
      * 反過來說用 {@code requireHolder} 會平白擋掉申請人 —— 他是關係人，
      * 卻不是主管審核關卡的持有者。
      *
+     * <h2>⚠️ 為什麼「已結束的關卡」<b>刻意</b>放行到這裡</h2>
+     *
+     * <p>{@link #processInstanceIdOfTask} 是 runtime 優先、歷史次之，
+     * 所以對一個已結束的關卡仍然解析得出 pid，於是守衛<b>放行</b>，
+     * 由 {@code TaskController.addComment} 把 {@code AddCommentCmd} 丟出的
+     * {@code FlowableObjectNotFoundException} 翻成 404（#79-2）。
+     *
+     * <p><b>不要在這裡擋掉它</b>：同一個 pid 也是<b>讀</b>端的輸入，
+     * 而已結束關卡的簽核軌跡必須讀得到（{@code ApprovalTimeline.vue}）。
+     * 在守衛裡加一道「任務必須在 runtime」的檢查，等於為了寫入端去打死讀取端。
+     * 而且那會是<b>第三份</b>「這個 taskId 存不存在」的規則 ——
+     * 本 repo 的硬規則是規則只能有一份。
+     * 這裡判斷的是<b>關係人</b>（授權），runtime 存不存在是<b>狀態</b>，兩件事。
+     *
      * <h2>⚠️ 為什麼不開稽核旁路</h2>
      *
      * <p>稽核人員的職責是<b>查閱</b>，不是替別人的案件補簽核意見。

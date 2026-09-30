@@ -249,6 +249,8 @@
 > 2026-09-30：#79、#87 完成（後端測試 450、前端 66）。
 > 2026-09-30：#80 完成（後端測試 **473**，基線 450 + 新增 23）。**未做線上實測**
 > （在獨立 worktree 中進行，同機器另有兩個 agent，資源會衝突）—— 待 PM 統一進行。
+> 2026-09-30：#79-2 完成（後端測試 **587**，基線 585 − 1 條被取代 + 新增 3）。
+> 同樣**未做線上實測**（`/tmp/gh-79x` worktree，資源限制）。
 > ⚠️ **測試數只有 `mvn verify` 輸出的 `Tests run: N` 是真的** ——
 > `target/surefire-reports` 不涵蓋 `@Nested` 內類別，逐類加總會少 34 條；
 > 併行跑測試時該目錄還會被互相覆寫。
@@ -273,9 +275,24 @@
 > - **#82（前端接權限碼）** —— `bpm:form:design` 目前在 UI 上完全看不到效果，
 >   需要架構決定（權限碼的資料來源）。
 > - #80、#81 修法都很短，約 0.8d 全部可關上。
-> - **待 PM 政策決定**：對**已完成**的關卡 `POST .../comments` 回 500
->   （`AddCommentCmd` 的既有行為，非 #79 引入）。404（任務已結束）還是
->   409（狀態衝突），以及「審完能不能補留言」是否要支援。
+> - ~~#79-2（對**已完成**的關卡 `POST .../comments` 回 500）~~ ——
+>   ✅ **2026-09-30 完成**（使用者裁決：**回 404**）。`TaskController.addComment`
+>   捕捉 `AddCommentCmd` 丟出的 `FlowableObjectNotFoundException` 並翻成
+>   `ResponseStatusException(404)`。**風險評估結論：不會誤傷真正存在的任務** ——
+>   用 `javap` 逐一檢查 Flowable 7.2.0 的 `AddCommentCmd.execute` 位元碼，
+>   確認它**只在兩處**拋這個例外（`taskService.getTask(taskId) == null`、
+>   `findById(pid) == null`），兩者都是「runtime 裡查不到」；
+>   暫停中的任務／流程實例拋的是 `FlowableException`（不同類別，維持 500），
+>   資料庫問題拋 `DataIntegrityViolationException`（也維持 500）。
+>   **刻意不用「先查再留言」**：那會在 controller 再寫一份
+>   「taskId 有沒有在 runtime」的規則（`ProcessAccessGuard.processInstanceIdOfTask`
+>   已經是那條規則），違反「規則只能有一份」；而且預先檢查消除不了競態，
+>   終究還是要同一層 catch。**讀端完全未動** ——
+>   `GET /api/tasks/{id}/comments` 與 `GET /api/history/tasks/{id}/comments`
+>   讀的是 `ACT_HI_COMMENT`，與任務是否在 runtime 無關，已用測試釘死
+>   （否則審結案件的簽核軌跡會在 `ApprovalTimeline` 上整段消失，
+>   而它把錯誤 `catch` 成 `[]` **不會報錯**）。
+>   測試 +2（17 → 19）；三組負向控制組見 commit 訊息。
 >
 > **2026-09-30 追加**：#84、#85、#86 已完成。**#87 建議併入 #80／#81 那一批** ——
 > 兩個都是 0.3d 左右的輸入驗證，而 #87 的前端（`addRow()` 產生空 `variableName`

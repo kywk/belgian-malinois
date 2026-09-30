@@ -6,6 +6,7 @@ import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.dto.CommentRequest;
+import org.flowable.common.engine.api.FlowableObjectNotFoundException;
 import org.flowable.common.engine.api.FlowableTaskAlreadyClaimedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
@@ -453,23 +454,90 @@ public class TaskController {
      * <p>順帶一提，{@code processInstanceId} 現在由守衛回傳，
      * 這也讓「pid 一定是真實的」變成結構性保證，而不是 {@code task != null} 的副產品。
      *
-     * <h3>⚠️ 仍未修：對<b>已完成</b>的關卡留言是裸 500（既有行為，非本工項引入）</h3>
+     * <h2>#79-2：對<b>已完成</b>的關卡留言由裸 500 改為 404</h2>
      *
-     * <p>2026-09-30 線上實測：{@code POST} 到一個已結束的 taskId，
-     * 授權會通過（守衛看得到歷史，所以 pid 找得到、關係人也成立），
-     * 接著 {@code AddCommentCmd} 因為 runtime 裡沒有這個任務而拋同一個例外 → <b>500</b>。
+     * <p>症狀：{@code POST} 到一個已結束的 taskId，授權會通過
+     * （守衛看得到歷史，所以 pid 找得到、關係人也成立），接著
+     * {@code AddCommentCmd} 因為 runtime 裡沒有這個任務而拋
+     * {@code FlowableObjectNotFoundException} → <b>500</b>。
      *
-     * <p>這與改動前完全相同（改動前 {@code task == null} → pid 傳 null → 同一個例外），
-     * 所以不是本次引入的迴歸。但守衛放行之後才 500，對呼叫端是誤導的 ——
-     * 「你有權，但這件事做不成」被講成「伺服器壞了」。
+     * <p>這與 #79 改動前完全相同（改動前 {@code task == null} → pid 傳 null
+     * → 同一個例外），所以<b>不是</b> #79 引入的迴歸。但守衛放行之後才 500
+     * 對呼叫端更誤導：「你有權，但這件事做不成」被講成「伺服器壞了」，
+     * 而 500 的直覺是「再試一次」，重試<b>永遠不會成功</b>。
+     * 已由使用者裁決為 404（與其他「找不到東西」的回應一致，見
+     * {@code ProcessAccessGuard} 類別註解的枚舉政策）。
      *
-     * <p><b>刻意不在此修</b>：正確答案是 404（任務已結束）還是 409（狀態衝突）
-     * 屬於 API 語意的政策性決定，且「完成後還能不能補留言」本身是產品問題
-     * （實務上常有「審完想附註」的需求）。回報 PM 決定後再處理。
-     * 前端目前不會走到這條路徑：{@code ApprovalTimeline.vue:44} 只對
-     * {@code t.endTime} 為真的 taskId 呼叫<b>讀</b>端點，寫入端
-     * （{@code CommentPanel}／{@code ActionDialog}）綁的則是待辦清單裡的
-     * 執行中任務。
+     * <h3>⚠️ 為什麼 catch 這個例外不會把真實的引擎故障藏起來</h3>
+     *
+     * <p>這是本工項唯一的風險點：{@code AddCommentCmd} 若也會對
+     * <b>真正存在</b>的任務拋同一個例外，那麼「任務存在但引擎有問題」
+     * 就會被講成 404。已用 javap 逐一檢查 Flowable 7.2.0 的
+     * {@code AddCommentCmd.execute} 位元碼確認：它<b>只</b>在兩個地方丟
+     * {@code FlowableObjectNotFoundException}，兩者都是「runtime 裡查不到」——
+     * <ol>
+     *   <li>{@code taskId != null && taskService.getTask(taskId) == null}
+     *       → {@code "Cannot find task with id …"}</li>
+     *   <li>{@code processInstanceId != null && findById(pid) == null}
+     *       → {@code "Cannot find process instance with id …"}</li>
+     * </ol>
+     * 該方法沒有第三個拋出點。因此對一個<b>存在</b>的執行中任務，(1) 不可能觸發；
+     * (2) 要觸發必須是「runtime 的任務列還在、但流程實例列已經不見」——
+     * 而 Flowable 結束一個流程實例時是在<b>同一個交易</b>裡刪掉兩者，
+     * 這個狀態不可達。換句話說，這個例外在這條路徑上<b>只</b>代表
+     * 「目標不在 runtime」。
+     *
+     * <p>其他引擎故障<b>不會</b>被這個 catch 吃掉，刻意保留 500：
+     * 暫停中的任務／流程實例 → {@code FlowableException}
+     * （{@code AddCommentCmd} 對 {@code isSuspended()} 明確拋這個，不是本類別）；
+     * 資料庫／約束問題 → {@code DataIntegrityViolationException}。
+     *
+     * <h3>⚠️ 為什麼用 catch 而不是先查再留言</h3>
+     *
+     * <p>「先 {@code createTaskQuery().taskId(id).count() == 0} 就 404」
+     * 看起來更直觀，但它會在 controller 裡<b>再寫一份</b>「這個 taskId
+     * 有沒有在 runtime」的規則 —— 而
+     * {@link com.bpm.core.security.ProcessAccessGuard#processInstanceIdOfTask}
+     * 已經是那條規則（runtime 優先、歷史次之）。#84（create/update 對同一個
+     * 參數兩套規則）與 #86（刪除規則與「記得 flush」分在兩處）都是這麼長出來的，
+     * 所以本 repo 的硬規則是<b>規則只能有一份</b>。
+     *
+     * <p>而且預先檢查<b>消除不了</b>競態窗口：查完到真的留言之間，
+     * 關卡仍可能被完成。要關掉那個窗口終究還是需要同一層 catch。
+     * 引擎自己就是「在不在 runtime」的權威，把它翻譯成狀態碼既不會多一份規則，
+     * 也不會漏掉競態。同一個模式已用在
+     * {@code ProcessController.startProcess} 與 {@code ExternalApiController.startProcess}
+     * 的 {@code FlowableObjectNotFoundException} 轉譯上。
+     *
+     * <h3>⚠️ 為什麼不順手擋掉<b>讀</b>端</h3>
+     *
+     * <p>{@link #getComments} 與 {@code HistoryController} 的歷史讀端點讀的是
+     * {@code ACT_HI_COMMENT}，與任務是否還在 runtime <b>無關</b> ——
+     * 已結束關卡的簽核意見正是簽核軌跡的一部分，必須讀得到，
+     * 否則 {@code ApprovalTimeline.vue} 會在審結的案件上整段空白。
+     * 本工項刻意不動讀端，並以 {@code CommentAuthorizationTest} 的
+     * 「已完成任務的留言讀取仍然成功」把它釘死。
+     *
+     * <h3>⚠️ 為什麼這裡<b>不</b>補稽核紀錄</h3>
+     *
+     * <p>不變的是 {@code TASK_COMMENT} —— 沒有留言發生就不該宣稱有
+     * （與「被拒的請求不得寫出稽核」同一條原則）。刻意<b>不</b>補一筆
+     * {@code DATA_ACCESS denied}：那條紀錄的語意是「有人探測了他無權的案件」
+     * （{@code denyNonParticipant}），而呼叫端<b>確實</b>是關係人、
+     * 也<b>沒有</b>任何授權規則被違反。塞進去會污染「誰在試探別人的單」這個
+     * 訊號。未留痕並不難診斷：404 的訊息會說明是「已結束」。
+     * 而且兩種情況回的都是 404，不會因此多開一條枚舉管道。
+     *
+     * <h3>前端相容性（實查，非假設）</h3>
+     *
+     * <p>前端走不到這條路徑：{@code ApprovalTimeline.vue:44} 只對
+     * {@code t.endTime} 為真的 taskId 呼叫<b>歷史讀</b>端點
+     * （{@code /api/history/tasks/{id}/comments}）；兩個寫入端
+     * （{@code CommentPanel.vue:35}／{@code ActionDialog.vue:61}）的 taskId
+     * 都來自 {@code DocumentDetail.vue} 的 {@code route.params.taskId}，
+     * 而 {@code /tasks/:taskId} 只由 {@code TaskInbox.vue:43} 與
+     * {@code Dashboard.vue:33} 導向 —— 兩者都出自 {@code GET /api/tasks}
+     * 這個 runtime 待辦清單。也就是說寫入端的 taskId 必然還在執行中。
      */
     @PostMapping("/{id}/comments")
     @Transactional("primaryTransactionManager")
@@ -503,7 +571,26 @@ public class TaskController {
         String previous = Authentication.getAuthenticatedUserId();
         try {
             Authentication.setAuthenticatedUserId(author);
-            taskService.addComment(id, processInstanceId, req.message());
+            // #79-2：把「runtime 裡沒有這個任務」翻譯成 404。
+            //
+            // ⚠️ catch 的範圍刻意<b>只包住 addComment 這一行</b>：
+            // 稽核的 publish 留在外面。若把它包進去，fail-closed 的稽核失敗
+            // 會被翻成 404 —— 那是把「稽核寫不進去所以這筆調閱不該成功」
+            // （AuditFailClosedTest）講成「東西不存在」，把真實故障藏起來。
+            //
+            // 守衛查得到歷史、所以已結束的關卡會走到這裡；引擎只認 runtime。
+            // 完整理由（含「這個例外會不會在任務存在時也觸發」的位元碼查證）
+            // 見本方法的 javadoc。
+            try {
+                taskService.addComment(id, processInstanceId, req.message());
+            } catch (FlowableObjectNotFoundException e) {
+                // ⚠️ 本方法是 @Transactional，而 Flowable 命令在外層交易中
+                // 拋例外會把交易標成 rollback-only —— 所以這裡只能「翻譯」
+                // 例外，不能在同一個交易裡繼續做別的事（與
+                // ExternalApiController.startProcess 的同型註解）。
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "任務不存在或已結束，無法留言: " + id, e);
+            }
         } finally {
             Authentication.setAuthenticatedUserId(previous);
         }
