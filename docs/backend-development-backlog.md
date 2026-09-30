@@ -178,7 +178,7 @@
 | 76 | `GET /api/history/tasks` 是枚舉鑰匙 | ✅ **2026-09-29 完成**（`15f58cf`）。原本不帶參數回傳**全公司**所有已完成任務，是 #74／#77／#78／#79／#80 五個 id-based 端點的 taskId 發射台。`assignee` 帶他人 → 400；帶 `processInstanceId` → 驗參與者（`ApprovalTimeline.vue` 刻意不傳 assignee，審核人仍看得到完整軌跡） | ~~0.5d~~ | ✅ |
 | 77 | 表單 schema 改寫無 ADMIN 限制 | ✅ **2026-09-29 完成**（`cc530df`）。`/api/forms/**` 掛在 `/api/** → authenticated()`，任何登入者能三步改版並發布全公司審核表。⚠️ 依 spec §8.5（欄位 id == 變數名）能改 schema 就能加一個欄位叫 `approved`。新增權限碼 `bpm:form:design`（**非** ADMIN，因會擋掉「業務人員自行設計」的產品定位），讀維持登入即可 | ~0.5d | ✅ |
 | 78 | 稽核的 ROLE_ADMIN 旁路是側門 | ✅ **2026-09-29 完成**（`cc530df`）。`SecurityConfig` 讓 `/api/audit-logs/**` 接受 ADMIN，但 `AuditEvent.detail` 帶整包流程變數，而 `ProcessAccessGuard` 明確拒絕 ADMIN 讀同一批資料 → 側門。已移除。⚠️ **之後讀稽核要用 `dev-token.sh dir001`**，不要用 `admin001 admin` | 0.2d | ✅ |
-| 79 | 簽核意見零授權 | ⬜ `GET /api/tasks/{id}/comments`、`GET /api/history/tasks/{taskId}/comments`、`POST /api/tasks/{id}/comments` 全部零檢查。內含**簽核意見全文**（退回理由、駁回原因）。taskId 來源已堵，但歷史 taskId 仍可從稽核紀錄（`audit:log:read`）取得。⚠️ `POST` 的 `CommentRequest.userId` 讓 `req.userId()` 成為自報 fallback（靠 `firstNonBlank` 順序僥倖） | 1d | ⬜ |
+| 79 | 簽核意見零授權 | ✅ **2026-09-30 完成**。三個端點（`GET /api/tasks/{id}/comments`、`GET /api/history/tasks/{taskId}/comments`、`POST /api/tasks/{id}/comments`）新增 `ProcessAccessGuard.requireTaskReadAccess`／`requireTaskParticipant` —— **規則與時間軸／variables／附件完全同一條**（關係人 ∪ `audit:log:read`，旁路必留痕；寫入端不開旁路）。連「taskId → 哪個案件」都收進守衛，理由是授權規則只能有一份。線上實測：`user002`／`mgr002` 由 200 變 404，審核人逐筆讀完自己參與案件的完整軌跡（含 assignee 不是自己的補件關卡）。**⚠️ 原描述「`userId` 靠 `firstNonBlank` 順序僥倖」經實測<b>不成立</b>**：`req.userId()` 從未生效（`callerId` 優先，且守衛保證它非空白），冒用沒有成功 —— 真正的缺陷只是授權缺失。`userId` 欄位維持現狀，屬 #66／#72／#81 同型的另案。**⚠️ 連帶修掉**：對不存在的 taskId 留言由裸 500 → 404。**新發現（已回報 PM）**：對**已完成**的關卡留言仍是裸 500（`AddCommentCmd` 的既有行為，改動前完全相同），404 還是 409 待政策決定 | ~~1d~~ | ✅ |
 | 80 | `GET /api/process-instances/{id}/bpmn-xml` 與 `GET /api/documents` | 🟠 兩者零檢查。`bpmn-xml` 的 `activeIds` 洩漏「這張單現在卡在哪一關」——**能精準指導後續攻擊的情報**，比單純 id 枚舉價值高。`GET /api/documents` 不帶參數即 `findAll()`（回傳全部公文含 processInstanceId，是 pid 的第二個枚舉來源），與 #71 修掉的 `GET /api/process-instances` 同型。兩者的修法都只是 `requireReadAccess`／`requireSelf`（已存在且被用過） | 0.5d | ⬜ |
 | 81 | `POST /api/forms` 的 `createdBy` 可冒用 | 🟠 與 #66／#72 同型但落在 `FormDefinition` 而非流程。`FormDefinition.createdBy` 有 setter（**非** READ_ONLY）且 `FormService.create()` **完全不碰它**（只用 `@CallerId` 餵稽核）。對照 `POST /{formKey}/revisions` → `createNextDraft` 有 `setCreatedBy`，**兩個端點不一致**。後果：「這張審核表是誰做的」不可信 | 0.3d | ⬜ |
 | 82 | 前端沒有權限碼的概念 | 🟠 **`bpm:form:design` 在 UI 上看不到效果**。`bpm-frontend/src/services/session.js` 只讀 JWT 的 `roles` claim，而權限中心的權限碼**不在 token 裡**；`router/index.js:24,28` 的 `/admin/form-editor` 與 `/admin/forms` 是 `requiresRole: 'admin'`。所以只持有 `bpm:form:design` 的業務人員後端放行但前端擋掉。這不是 #77 的 regression（那兩條路由本來就要求 admin），但它讓產品價值看不到。修法需要新的資料來源：後端 `/api/me/authorities` 端點，或 IdP 簽發時把權限碼放進 token —— **架構決定** | 1.5d | ⬜ |
@@ -233,10 +233,14 @@
 > **下一輪的 P0 建議**：
 > - **#83（`system:<id>` 的任務沒有人能簽）** —— 這是 #74 造成的行為變化。
 >   嚴重度雖是功能而非安全，但「案件永久卡死」比「案件被誤簽」更難察覺。
-> - **#79（簽核意見零授權）** —— 目前唯一還能讀到「誰審的、審核意見原文」的端點。
+> - ~~#79（簽核意見零授權）~~ —— **2026-09-30 已完成**，「誰審的、審核意見原文」
+>   這條路已關閉（規則與時間軸同一條）。
 > - **#82（前端接權限碼）** —— `bpm:form:design` 目前在 UI 上完全看不到效果，
 >   需要架構決定（權限碼的資料來源）。
 > - #80、#81 修法都很短，約 0.8d 全部可關上。
+> - **待 PM 政策決定**：對**已完成**的關卡 `POST .../comments` 回 500
+>   （`AddCommentCmd` 的既有行為，非 #79 引入）。404（任務已結束）還是
+>   409（狀態衝突），以及「審完能不能補留言」是否要支援。
 >
 > **2026-09-30 追加**：#84、#85、#86 已完成。**#87 建議併入 #80／#81 那一批** ——
 > 兩個都是 0.3d 左右的輸入驗證，而 #87 的前端（`addRow()` 產生空 `variableName`

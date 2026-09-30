@@ -147,12 +147,13 @@ tracked 檔**一併還原掉，重做了 4 個檔案的全部內容（最終 `di
 |---|---|---|
 | **#83** | `system:<id>` 的任務沒有人能簽 | **#74 造成的行為變化**。外部系統發起 → 主管退回 → 補件關卡 assignee 是 `${initiator}` = `system:<id>` → 四個持有者條件全不命中 → **案件永久卡死**。改動前是「任何人都能簽」。根本解法在 BPMN／路由層：`initiator` 不是人時改指 `onBehalfOf` 或系統設定的受理人 |
 | **#82** | 前端沒有權限碼的概念 | `session.js` 只讀 JWT 的 `roles` claim，權限中心的權限碼**不在 token 裡**。`router/index.js:24,28` 是 `requiresRole: 'admin'` → 只持有 `bpm:form:design` 的業務人員後端放行但前端擋掉。**架構決定** |
-| **#79** | 簽核意見零授權 | `GET /api/tasks/{id}/comments`、`GET /api/history/tasks/{taskId}/comments`、`POST /api/tasks/{id}/comments` 全無檢查。**目前唯一還能讀到「誰審的、審核意見原文」的端點** |
+| ~~**#79**~~ | 簽核意見零授權 | ✅ **2026-09-30 完成**。三個端點接 `ProcessAccessGuard.requireTaskReadAccess`／`requireTaskParticipant`，規則與時間軸／variables／附件**同一條**。**目前唯一還能讀到「誰審的、審核意見原文」的端點**已關閉 |
 | #80 | `bpmn-xml` 與 `documents` 零檢查 | `bpmn-xml` 的 `activeIds` 洩漏「這張單卡在哪一關」；`GET /api/documents` 不帶參數即 `findAll()` |
 | #81 | `POST /api/forms` 的 `createdBy` | `FormService.create()` 完全不碰它（只用 `@CallerId` 餵稽核），對照 `createNextDraft` 有 `setCreatedBy` —— 兩端不一致 |
 | — | 被委派任務送 `complete` 是裸 500 | `TaskHelper.completeTask` 對 `delegationState = PENDING` 直接拋 `FlowableException`。**既有引擎行為**，委派能走完的動作是 `resolve`（守衛已放行 owner 與 assignee 兩者） |
 | — | `isParticipant` 不涵蓋候選群組 | Flowable 的 `taskInvolvedUser` 只比對 `USER_ID_`。**使用者已明確決定維持現狀**。影響：群組審核人看不到案件層檢視（`/involved`、`/variables`、`/form-data`、`/history`） |
 | — | `ProcessController` 與 `TaskController` 各有一份 `PROTECTED_VARIABLES` | 兩處必須維持同一份內容。合併屬重構，尚未做 |
+| — | **#79 後新發現**：對已完成的關卡留言是裸 500 | 授權會通過（守衛查得到歷史），接著 `AddCommentCmd` 因 runtime 無此任務而拋 `FlowableObjectNotFoundException`。**改動前完全相同**（pid 傳 null → 同一個例外），非迴歸。404 還是 409 屬 API 語意政策決定，已回報 PM。前端走不到（`ApprovalTimeline` 只讀不寫已完成關卡） |
 
 ---
 

@@ -190,8 +190,47 @@ public class HistoryController {
         return raw.trim();
     }
 
+    /**
+     * 已完成任務的簽核意見（#79：這裡原本<b>完全沒有</b>任何檢查）。
+     *
+     * <h2>缺陷：#76 修掉發射台之後，剩下<b>最後一扇門</b></h2>
+     *
+     * <p>{@link #getHistoricTasks}（#76）已不再回傳全公司所有已完成任務，
+     * 但簽核意見是<b>同一批資料的另一面</b>，而且危害更高：時間軸只給
+     * 關卡名稱、審核人與時間，這裡給的是<b>意見原文</b> ——
+     * 退回理由、駁回原因、薪資調幅。
+     *
+     * <p>taskId 因此仍有取得路徑：稽核紀錄（持有 {@code audit:log:read} 的
+     * 稽核人員看得到 taskId 欄位）與任何已知或猜測到的 id。
+     * 實測：與該案無關的 {@code user002} 對 mgr001 的任務 {@code GET 200}，
+     * 讀到「薪資調幅尚未報帳，請補附件後再簽」全文。
+     *
+     * <h2>守衛：{@code requireTaskReadAccess}，與本類別的時間軸<b>同一條規則</b></h2>
+     *
+     * <p>「這張單的簽核軌跡」與「這張單的簽核意見」都是「一張單的內容」，
+     * 所以兩者都走 {@code requireReadAccess}（關係人 ∪ {@code audit:log:read}，
+     * 旁路每次留痕），非關係人 404。
+     *
+     * <p><b>刻意不把 assignee 收斂成呼叫者</b>（對照 {@link #getHistoricTasks}
+     * 刻意不收斂 assignee 的同一個理由）：{@code ApprovalTimeline.vue:44}
+     * 會對時間軸上的<b>每一個</b> taskId 呼叫本端點，而審核人要看的正是
+     * 「別人審了什麼、意見是什麼」。若收斂成「只看我審過的關卡」，
+     * 時間軸上會出現一串 404 —— 而那正是 {@code ApprovalTimeline} 在
+     * {@code try/catch} 裡吞掉、畫面上只是少幾段文字的失敗型態，
+     * 沒有任何錯誤訊息會指出「時間軸被收斂了」。
+     *
+     * <p>⚠️ <b>本端點對 runtime 任務也有效</b>：
+     * {@code ProcessAccessGuard.processInstanceIdOfTask} 是 runtime 優先、
+     * 歷史次之。改動前這個「歷史」端點其實也讀得到執行中任務的批註
+     * （{@code getTaskComments} 讀的是 {@code ACT_HI_COMMENT}，與任務是否
+     * 結束無關），所以解析順序不能只查歷史，否則會把一條既有可用的路徑
+     * 打成 404。
+     */
     @GetMapping("/tasks/{taskId}/comments")
-    public List<Map<String, Object>> getHistoricTaskComments(@PathVariable String taskId) {
+    public List<Map<String, Object>> getHistoricTaskComments(@PathVariable String taskId,
+                                                              @CallerId
+                                                              String callerId) {
+        accessGuard.requireTaskReadAccess(taskId, callerId);
         return TaskController.mapComments(taskService.getTaskComments(taskId));
     }
 
@@ -201,12 +240,14 @@ public class HistoryController {
      * <p>規則與 {@code GET /api/process-instances} 完全相同：省略參數 = 呼叫者自己、
      * 帶了別人的 id = 明確 400。改動前不帶參數即回傳<b>全公司</b>的歷史實例。
      *
-     * <p>⚠️ <b>仍然沒有物件層授權</b>：{@code GET /api/history/tasks}（簽核時間軸）
+     * <p>⚠️ <b>曾經完全沒有物件層授權</b>：{@code GET /api/history/tasks}（簽核時間軸）
      * 與 {@code .../comments}（簽核意見）。前者的授權已在
      * {@link #getHistoricTasks} 補上（以 processInstanceId 為條件時驗關係人）；
-     * <b>後者仍未修</b> —— 而 {@code ApprovalTimeline.vue:44} 會對時間軸上的
-     * <b>每一個</b> taskId 呼叫它，所以時間軸修好之後，簽核意見仍可被逐筆列出。
-     * 那是同一條鏈上剩下的最後一扇門，需另案處理（見回報）。
+     * <b>後者已於 #79 補上</b>（{@link #getHistoricTaskComments}，走同一條
+     * {@code requireReadAccess}）。也就是說「審核軌跡」與「審核意見」現在
+     * 由<b>同一條規則</b>把守 —— 這正是 {@code ProcessAccessGuard} 類別註解
+     * 說的「規則只能有一份」：若只修時間軸不修意見，taskId 仍可被逐筆列出，
+     * 而那條鏈上就還留著一扇門。
      * 但收件匣頁面就是靠時間軸渲染的，且「點開一個自己參與過的案件看簽核軌跡」
      * 是正常需求，因此它需要的是「以 processInstanceId 為條件時驗參與者」
      * 而不是照搬本方法。見 backlog #71 剩餘項目。

@@ -390,15 +390,85 @@ public class TaskController {
         return Map.of("taskId", id, "status", "ok");
     }
 
+    /**
+     * 留言（#79：這裡原本<b>完全沒有</b>物件層授權）。
+     *
+     * <h2>缺陷（真實 JWT 線上實測）</h2>
+     *
+     * <p>{@code callerId} 從 R-01 起只用於稽核，<b>從未拿去與案件或任務比對</b>。
+     * 任何登入者只要知道 taskId 就能在別人的單上留言，稽核留下
+     * {@code TASK_COMMENT | operatorId = user002}。改動前 taskId 還能從
+     * {@code GET /api/history/tasks} 大量取得（那是 #76 修掉的發射台）。
+     *
+     * <h2>守衛：{@code requireTaskParticipant}（寫個案，不是動作任務）</h2>
+     *
+     * <p>批註不影響流程走向（spec §4.5），所以適用「寫個案」政策 ——
+     * {@code requireParticipant}，<b>不開稽核旁路</b>（稽核人員的職責是查閱，
+     * 不是替別人的案子補簽核意見）。規則與理由見 {@code ProcessAccessGuard}。
+     *
+     * <p>守衛<b>排在最前面</b>：與 {@link #updateTask} 不同，這個方法沒有
+     * 「請求形狀」檢查可排，而訊息為空不會改變任何東西（{@code message} 可為 null），
+     * 因此沒有理由讓未授權的呼叫端先走到資料層。
+     *
+     * <h2>連帶修掉：對不存在的 taskId 留言是<b>裸 500</b></h2>
+     *
+     * <p>負向控制組實測（把守衛整段拿掉之後）：
+     * {@code POST /api/tasks/{unknownId}/comments} →
+     * {@code FlowableObjectNotFoundException: Cannot find task with id …} → <b>500</b>。
+     * 引擎的 {@code AddCommentCmd} <b>確實會</b>驗任務存在，所以不會產生
+     * 孤兒批註（這點與「Flowable 不驗外鍵」的直覺相反，是實測確認的），
+     * 但那個例外沒有被翻成 {@code ResponseStatusException}，於是呼叫端拿到 500。
+     *
+     * <p>500 的後果與 #85 記錄過的同一個：修好之後呼叫端才會停止重試。
+     * 而更根本的問題是改動前<b>連「這個任務存不存在」都沒人問</b> ——
+     * 守衛先確認任務真的存在，這條路徑於是回 404，
+     * 與 {@link #updateTask} 對不存在任務的處理一致。
+     *
+     * <p>順帶一提，{@code processInstanceId} 現在由守衛回傳，
+     * 這也讓「pid 一定是真實的」變成結構性保證，而不是 {@code task != null} 的副產品。
+     *
+     * <h3>⚠️ 仍未修：對<b>已完成</b>的關卡留言是裸 500（既有行為，非本工項引入）</h3>
+     *
+     * <p>2026-09-30 線上實測：{@code POST} 到一個已結束的 taskId，
+     * 授權會通過（守衛看得到歷史，所以 pid 找得到、關係人也成立），
+     * 接著 {@code AddCommentCmd} 因為 runtime 裡沒有這個任務而拋同一個例外 → <b>500</b>。
+     *
+     * <p>這與改動前完全相同（改動前 {@code task == null} → pid 傳 null → 同一個例外），
+     * 所以不是本次引入的迴歸。但守衛放行之後才 500，對呼叫端是誤導的 ——
+     * 「你有權，但這件事做不成」被講成「伺服器壞了」。
+     *
+     * <p><b>刻意不在此修</b>：正確答案是 404（任務已結束）還是 409（狀態衝突）
+     * 屬於 API 語意的政策性決定，且「完成後還能不能補留言」本身是產品問題
+     * （實務上常有「審完想附註」的需求）。回報 PM 決定後再處理。
+     * 前端目前不會走到這條路徑：{@code ApprovalTimeline.vue:44} 只對
+     * {@code t.endTime} 為真的 taskId 呼叫<b>讀</b>端點，寫入端
+     * （{@code CommentPanel}／{@code ActionDialog}）綁的則是待辦清單裡的
+     * 執行中任務。
+     */
     @PostMapping("/{id}/comments")
     @Transactional("primaryTransactionManager")
     public Map<String, String> addComment(@PathVariable String id,
                                           @RequestBody CommentRequest req,
                                           @CallerId
                                           String callerId) {
-        Task task = taskService.createTaskQuery().taskId(id).singleResult();
-        String processInstanceId = task != null ? task.getProcessInstanceId() : null;
+        // 非關係人 → 404（不是 403），且留痕；任務不存在 → 404。理由見
+        // ProcessAccessGuard.requireTaskParticipant 與 denyNonParticipant。
+        String processInstanceId = accessGuard.requireTaskParticipant(id, callerId);
 
+        // ⚠️ 這裡的 fallback 現在是<b>死碼</b>，而且它「看起來安全」是巧合：
+        // 安全性完全建立在 firstNonBlank 的<b>參數順序</b>上 ——
+        // callerId 在前，所以 req.userId() 永遠輪不到（requireTaskParticipant
+        // 已保證 callerId 非空白，未認證會先被 404 擋下）。
+        //
+        // 刻意<b>不</b>在這裡改成 requireSelf(req.userId(), callerId, "userId")：
+        // 「身分欄位帶了別人的值 → 明確 400」是 #66／#72／#81 那一組規則，
+        // 套用在這裡會讓 body 帶 userId 的既有呼叫端（spec §4.5 的範例、
+        // 前端 ActionDialog.vue:61 與 CommentPanel.vue:35 都送
+        // {@code userId:'current_user'}）整個變成 400。那是政策性決定，
+        // 另案處理；這裡只把「順序是承重結構」這件事寫下來。
+        //
+        // 2026-09-30 線上實測（#79）：送 {"userId":"dir001"} 時，批註作者與
+        // 稽核 operatorId 都是實際的呼叫者 —— 冒用沒有成功。
         String author = firstNonBlank(callerId, req.userId());
 
         // 用 try/finally 還原原值：Authentication 存放在 ThreadLocal，
@@ -423,8 +493,43 @@ public class TaskController {
         return null;
     }
 
+    /**
+     * 讀取批註（#79：這裡原本<b>完全沒有</b>任何檢查）。
+     *
+     * <h2>缺陷（真實 JWT 線上實測）</h2>
+     *
+     * <p>taskId {@code ba0454b0-…}（user001 的請假單，持有者 mgr001）上
+     * 掛著 mgr001 寫的「薪資調幅尚未報帳，請補附件後再簽」。
+     * 實測：{@code user001}／{@code user002}／{@code mgr002} 三個身分
+     * 全部 {@code GET 200}，也就是<b>完全無關的人讀得到簽核意見全文</b>。
+     * 這是整條鏈上<b>最後一扇還開著的門</b>：taskId 的發射台已由 #76 關掉，
+     * 但 taskId 仍可從稽核紀錄（{@code audit:log:read}）取得。
+     *
+     * <h2>守衛：{@code requireTaskReadAccess}（讀個案內容）</h2>
+     *
+     * <p>與 variables／form-data／附件／簽核軌跡<b>同一條</b>
+     * {@code requireReadAccess}：關係人 ∪ {@code audit:log:read}（旁路每次留痕），
+     * 非關係人 404。規則與「為什麼旁路留痕寫在守衛裡」見
+     * {@code ProcessAccessGuard.requireTaskReadAccess}。
+     *
+     * <p>⚠️ <b>刻意不新增 {@code @Transactional}</b>：唯讀查詢 ＋ 一次稽核寫入，
+     * 與 {@code ProcessController.getVariables}／{@code HistoryController.getHistoricTasks}
+     * 同一型（稽核失敗 → 503，見 {@code AuditFailClosedTest}）。
+     * 加交易反而會讓稽核掛在 beforeCommit，響應組裝階段的例外會讓它永遠寫不進去。
+     *
+     * <p>⚠️ <b>前端的相容性由構造保證</b>：{@code CommentPanel.vue:31} 呼叫本端點，
+     * 而它綁的 taskId 來自 {@code DocumentDetail.vue} 的待辦清單 ——
+     * 也就是呼叫者<b>持有或可認領</b>的任務，而 assignee／owner／candidateUser
+     * 全部落在 {@code isParticipant} 條件 2（{@code taskInvolvedUser}）的比對範圍內。
+     * 由 {@code CommentAuthorizationTest} 的兩條正向測試固定住：
+     * {@code taskHolderCanStillReadIt}、
+     * {@code reviewerCanStillTraverseTheWholeApprovalTimeline}。
+     */
     @GetMapping("/{id}/comments")
-    public List<Map<String, Object>> getComments(@PathVariable String id) {
+    public List<Map<String, Object>> getComments(@PathVariable String id,
+                                                 @CallerId
+                                                 String callerId) {
+        accessGuard.requireTaskReadAccess(id, callerId);
         return mapComments(taskService.getTaskComments(id));
     }
 
