@@ -19,7 +19,7 @@
 - **audit-log-service**：已於 2026-04-24 併入 bpm-core；稽核為 fail-closed（寫不進就回滾）
 - **認證**：平台層 JWT 驗證＋信任閘道已完成（R-01）；個案層級授權仍由各 controller 負責
 - **外圍系統整合（組織／權限）仍以 Mock 替代**，真正的權限中心見 `docs/rbac-enterprise-backlog.md`
-- **測試**：後端 450 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 66 個（Vitest）
+- **測試**：後端 459 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 66 個（Vitest）
 - 安全與正確性修復（P0／P1／P2、R 編號）另見 `docs/plan/2026-09-28-security-audit.md`、
   `docs/plan/2026-09-28-remediation-backlog.md`，已完成部分列在 `docs/backend-completed-items.md` 第八節
 

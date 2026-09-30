@@ -34,7 +34,7 @@ backlog 原本寫「只要該 key 已有任何一筆規格，重複儲存必定�
 | 前端 | Vue 3.4 + Vite 5 + Element Plus |
 | DB | MSSQL 2022，**三個資料庫**：`bpm_core_db`／`bpm_audit_db`／`bpm_form_db` |
 | 其他 | RabbitMQ、Redis、MailHog。Docker 是 **OrbStack** |
-| 測試 | 後端 **450** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **66** 個（Vitest） |
+| 測試 | 後端 **459** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **66** 個（Vitest） |
 | 分支 | `feature/round2-hardening`，比 `main` 多 9 個 commit，**未 push** |
 | 部署 | **尚未部署，只有本機開發** |
 
@@ -238,21 +238,30 @@ export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
 
 ---
 
-## 9. 2026-09-30 已完成（#79、#87）
+## 9. 2026-09-30 已完成
 
 | # | commit | 摘要 |
 |---|---|---|
-| #79 | `235ab30` | 簽核意見三端點接 `ProcessAccessGuard.requireTaskReadAccess`／`requireTaskParticipant`。**連 taskId→pid 的查詢都收進守衛**（授權規則只能有一份）。`TaskHolderGuard` 完全沒動 —— 留言不改變任務狀態。線上實測：`user002`／`mgr002` 由 200 變 404，審核人逐筆讀完完整軌跡（含 assignee 不是自己的補件關卡） |
-| #87 | `bdddb9d`／`c1bb853`／`7c13a4b` | 同批重複變數名回 **400 並指名衝突**。⚠️ **「重複」不能用 `Set<String>` 判斷** —— 定序是 `SQL_Latin1_General_CP1_CI_AS`，PM 獨立實查確認 `Amount`/`amount`、`amount`/`amount `、全形`Ａ`/半形`A` 在 DB 層面就是衝突（`SELECT CASE WHEN N'Amount'=N'amount'` 回 1，INSERT 真的撞約束）。只做 `Set<String>` 的話**使用者最常見的失敗形狀擋不住**。連帶修掉 `update` 改名撞同流程其他變數 → 500 |
+| #79 | `235ab30` | 簽核意見三端點接 `ProcessAccessGuard.requireTaskReadAccess`／`requireTaskParticipant`。**連 taskId→pid 的查詢都收進守衛**（授權規則只能有一份）。`TaskHolderGuard` 完全沒動 —— 留言不改變任務狀態 |
+| #87 | `bdddb9d`／`c1bb853`／`7c13a4b` | 同批重複變數名回 **400 並指名衝突**。⚠️ **「重複」不能用 `Set<String>` 判斷** —— 定序是 `SQL_Latin1_General_CP1_CI_AS`，PM 獨立實查確認 `Amount`/`amount`、`amount`/`amount `、全形`Ａ`/半形`A` 在 DB 層面就是衝突（`SELECT CASE WHEN N'Amount'=N'amount'` 回 1，INSERT 真的撞約束）。只做 `Set<String>` 的話**使用者最常見的失敗形狀擋不住** |
+| #81 | `ec4f3a5`（已合併 `4112e99`） | `POST /api/forms` 的 `createdBy` 改由登入身分決定。⚠️ **後果比 backlog 描述嚴重**：實測**省略** `createdBy` 時原本存的是 `null` —— 不只是「可冒用」，而是**正常呼叫下這欄根本是空的，每一張經 `POST /api/forms` 建立的審核表都沒有作者**（`FormDefinition.createdBy` 無預設值、無 `nullable=false`，`FormService.create()` 完全不碰它）。與 `createNextDraft`（v2 有設）的不一致方向是「其中一條壞掉」。**但稽核從未被污染** —— `audit("FORM_UPDATE", userId, …)` 傳的一直是 `@CallerId`，與 #66／#72 的「operatorId 一起被冒用並被 hash chain 永久固定」性質不同，**不要用 #66 的嚴重性去描述它** |
+
+**#81 的兩個值得記錄的細節**：
+
+- **前端零風險**（與 #79 的 `CommentRequest.userId` 不同）：`grep -rn 'createdBy' bpm-frontend/src` 零命中，`FormEditor.vue:42` 送的是明確三欄物件。所以「server 決定」不會破壞任何現有呼叫。#79 當時刻意不改 `userId`，是因為前端**真的**在送 `'current_user'` —— 兩者的差異在於前端有沒有送那個欄位。
+- **守衛必須排在 `formService.create()` 之前**：反過來的話「冒用 + formKey 已存在」會先回「已存在」，呼叫端以為換個 formKey 就送得出去。`PUT /api/forms/{id}` 刻意不加守衛 —— `FormService.update` 只搬 `name` 與 `schemaJson`，`createdBy` 本來就沒有可冒用的欄位。
 
 **PM 的獨立驗證**（不依賴 subagent 報告）：
-- `mvn verify` **450 全綠**（基線 422 + #79 的 17 + #87 的 11），容器停止狀態下跑
+- `mvn verify` **450 全綠**（#79 的 17 + #87 的 11），容器停止狀態下跑
 - 前端 **66 全綠**（基線 59 + 7）
 - `acceptance-test.sh` PASS 7 / FAIL 0（⚠️ 容器剛重建、seed 完**立刻**跑會全失敗，
-  再跑一次就過 —— 這是 seed 的時序問題，**不是本輪改動引入**，但下一個人會踩到）
-- #79：`user002`／`mgr002` → 404，**404 回應不含意見內容**；關係人（申請人 `user001`）
-  與稽核職能 `dir001` → 200；被拒的 POST 零痕跡（批註筆數不變、稽核無紀錄）
-- #87：9 種形狀全部符合預期；#86 的行為無回歸（原樣重存 200、空陣列清空、夾帶 id 仍被清 null）
+  再跑一次就過 —— 這是 seed 的時序問題，**不是改動引入**，但下一個人會踩到）
+- #79：`user002`／`mgr002` → 404，**404 回應不含意見內容**；關係人與稽核職能 → 200；
+  被拒的 POST 零痕跡
+- #87：9 種形狀全部符合預期；#86 的行為無回歸
+- #81（合併後主樹）：`mvn verify` **459 全綠**；線上實測省略 `createdBy` → `createdBy=mgr001`、
+  冒用他人 → **400 且訊息指名該怎麼改**、送自己 → 200、無權限 → 403；
+  **被拒的請求在資料庫查無、稽核也無 `FORM_UPDATE`**（不宣稱沒發生的變更）
 
 ---
 
@@ -310,7 +319,8 @@ git worktree list            # 確認每個 agent 一個
 
 ## 11. 現況一句話
 
-`feature/round2-hardening` = `7c13a4b`，比 `main` 多 9 個 commit，**未 push**。
-#86、#79、#87 完成。後端 **450** 測試全綠（**容器停止狀態下跑的**）、
+`feature/round2-hardening` = `4112e99`（含 #81 合併），比 `main` 多 11 個 commit，**未 push**。
+已完成 **#86、#79、#87、#81**。後端 **459** 測試全綠（**容器停止狀態下跑的**）、
 前端 **66** 全綠、`acceptance-test.sh` PASS 7 / FAIL 0。工作樹乾淨。
+**#80 與 #83 進行中（各自獨立 worktree `/tmp/gh-80`、`/tmp/gh-83`）。**
 **待裁決：#79-2、#87-2、#87-3（見第 8 節）。尚未部署。**
