@@ -33,7 +33,7 @@
     <sequenceFlow id="flowReturn" sourceRef="gw1" targetRef="applicantRevision"/>
 
     <userTask id="applicantRevision" name="申請者補件"
-              flowable:assignee="${initiator}"
+              flowable:assignee="${applicantResolver.resolve(execution)}"
               flowable:formKey="leave-request">
       <extensionElements>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>

@@ -35,7 +35,7 @@
 
     <!-- 主管退回 → 補件 → 回主管 -->
     <userTask id="revisionFromManager" name="申請者補件（主管退回）"
-              flowable:assignee="${initiator}"
+              flowable:assignee="${applicantResolver.resolve(execution)}"
               flowable:formKey="purchase-request">
       <extensionElements>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
@@ -67,7 +67,7 @@
 
     <!-- 財務退回 → 補件 → 回主管審核 -->
     <userTask id="revisionFromFinance" name="申請者補件（財務退回）"
-              flowable:assignee="${initiator}"
+              flowable:assignee="${applicantResolver.resolve(execution)}"
               flowable:formKey="purchase-request">
       <extensionElements>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>

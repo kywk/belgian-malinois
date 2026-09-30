@@ -37,7 +37,15 @@ public class BpmnLintService {
             // 第一個任務的受理人判斷（P2-7）。BPMN 的 managerReview 用它取代
             // 直接呼叫 orgService.getDirectManager(initiator) —— 後者在外部系統
             // 發起時會對 system:<id> 查主管，永遠查不到。
-            "assigneeResolver");
+            "assigneeResolver",
+            // 補件關卡的受理人判斷（#83）。與 assigneeResolver 分開是因為
+            // 兩者回答的是不同問題：那是「第一關該派給誰」，
+            // 這是「這張單有沒有自然人申請人，沒有的話派給誰」。
+            //
+            // ⚠️ 三個補件 UserTask 在本項之前寫死 ${initiator}，於是外部系統
+            // 發起時 assignee 是 system:<id> —— 不是人，沒有人能簽，案件靜默卡死。
+            // 規則只能有一份，所以這裡與 FlowableConfig.setBeans() 必須同步。
+            "applicantResolver");
     private static final Set<String> DEFAULT_NAMES = Set.of(
             "Task", "Task 1", "Task 2", "Task 3", "");
 
