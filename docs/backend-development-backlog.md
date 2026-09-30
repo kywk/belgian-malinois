@@ -165,7 +165,31 @@
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
 | 66 | 內部發起流程的 initiator 改由 JWT 決定 | ✅ **2026-09-29 完成**（`0b3e7d8`／`4d6dd98`）。`@CallerId` 決定 initiator 與稽核 operatorId；body 帶 initiator 明確 400（對齊 R-20）；`variables` 套用 `TaskController` 的 deny-list，擋掉夾帶 `onBehalfOf`（繞過 R-20 授權）與 `_externalSystemId`（繞過 R-09）；`DocumentController.createdBy` 同步修 | ~~1d~~ | ✅ |
-| 67 | Webhook 投遞接線 |**三段各自獨立斷線**（非一段）：(A) 沒有任何程式碼設定 `__webhookUrl`（自 2026-04-17 起從未存在過設定端）；(B) `WebhookTaskListener` 未被 BPMN 引用、也不在 `setBeans()`；(C) 前端 `WebhookProps.js` 寫進 BPMN `documentation`，後端零讀取。⚠️ 三種格式互不相通：spec 說 `extensionElements`、前端寫 `documentation`、consumer 期待 Rabbit payload 欄位。#25 缺 `task.timeout` 與候選人/operatorName/comment 欄位。規模 8～12 檔案，原估 2d 偏低。**已決策：仍是需求；設定來源待定（建議 `extensionElements`）** | 2d→4d || ⬜
+| 67 | Webhook 投遞接線 |**三段各自獨立斷線**（非一段）：(A) 沒有任何程式碼設定 `__webhookUrl`（自 2026-04-17 起從未存在過設定端）；(B) `WebhookTaskListener` 未被 BPMN 引用、也不在 `setBeans()`；(C) 前端 `WebhookProps.js` 寫進 BPMN `documentation`，後端零讀取。⚠️ 三種格式互不相通：spec 說 `extensionElements`、前端寫 `documentation`、consumer 期待 Rabbit payload 欄位。#25 缺 `task.timeout` 與候選人/operatorName/comment 欄位。規模 8～12 檔案，原估 2d 偏低。**已決策：仍是需求；設定來源待定（建議 `extensionElements`）** | 2d→4d | 🟡 見下 |
+
+**#67 實作結果（2026-09-30，`feature-67`）—— A/B/C 三段全部接上，但有兩件事沒做**
+
+| 段 | 狀態 | 做法 |
+|---|---|---|
+| (A) 沒有程式碼設定 `__webhookUrl` | ✅ | 新增 `WebhookConfigResolver`（從 BPMN 讀設定）＋ `WebhookConfig` record。`WebhookTaskListener` 現在逐筆設定 `__webhookUrl`／`__webhookMethod`。**投遞維持既有的 RabbitMQ 路徑**（PM 決策），`WebhookUrlPolicy` 仍是唯一閘門 |
+| (B) listener 未被引用、不在 `setBeans()` | ✅ | 兩支出廠 BPMN 的每個 UserTask 加 `event="all"` 的 `delegateExpression="${webhookTaskListener}"`；`FlowableConfig.setBeans()` 的 map 加入它（`notifyTaskListener` 未動） |
+| (C) 前端寫 `documentation`、後端零讀取 | ✅ | 前端改寫進 `extensionElements`（`flowable:webhooks`／`flowable:webhook`）；後端優先讀新格式，**沒有新格式元素時**才回頭讀舊的 `documentation` |
+
+**開工前的必要驗證（結果決定了整個讀取策略）**：實測 Flowable 7.2.0 **會**保留它不認識的 extension element（deploy → `getBpmnModel()` → `convertToXML()` 三段都保留，`<documentation>` 也讀得到），所以讀取走 `RepositoryService.getBpmnModel()` 而不是自己解析 `ACT_GE_BYTEARRAY`。已用 `ExtensionElementPreservationTest` 釘住 —— **Flowable 8 升級（Stage 5）時這條會是第一個紅的**。
+
+**向後相容**：兩種格式並存時 `extensionElements` 為準；**「有 `<flowable:webhooks>` 元素就是權威」**（即使內容是空），所以使用者在設計器刪掉最後一筆時舊設定不會復活。轉換發生在**使用者下次在設計器存檔**時（`webhookStorage.js` 的 `save()` 順手清掉舊的 `__webhooks__:` documentation，但保留其他說明文字）—— 刻意**不在部署或執行期自動改寫**已部署的流程定義，那是稽核軌跡的一環。已部署的舊流程**不會壞**（`legacyDocumentationStillDelivers`）。
+
+**⚠️ 連帶修掉一個原描述未提到的既有缺陷**：`flowableModdle.js` 的 `TaskListener` 沒有 `superClass: ['Element']`，因此 **bpmn-js 開啟再存檔會把 `<flowable:taskListener>` 整個刪掉** —— 也就是說出廠兩支流程的**通知機制**本來就會在設計器存檔一次後消失（實測匯出 `leave-approval.bpmn20.xml` 一次，兩個 taskListener 都不見）。這不是 #67 造成的，但 #67 加上 `webhookTaskListener` 之後會讓它同時弄掉 webhook 接線，所以一併修了。
+
+**⚠️ 範圍超出預期的部分**（PM 請注意）：
+1. **SSRF 的風險面變大了**。投遞位址改成來自 BPMN，而 BPMN 是業務人員在設計器裡編輯的內容 —— 「設定 URL 的人」與「決定送什麼資料出去的人」可能是不同人。`WebhookUrlPolicy` 是唯一閘門這件事從此是**安全相依**而非可有可無；已加整合測試證明它對 BPMN 來的 URL 真的生效（`loopbackUrlFromBpmnIsRejected`），單元測試證明不了這件事。
+2. **`IntegrationTestBase.SERVLET_PORT` 是 static final 的單一 port → 整個測試套件只容得下一個 Spring context。** 任何測試類別加 `@TestPropertySource`／`@Import`／`@DynamicPropertySource` 都會讓**其他**測試整組紅掉（實測踩到）。`bpm.webhook.allowed-hosts` 因此只能放 `application-test.yml`。這是既有測試基礎設施的限制，不是本工項造成的，但下一個人一定會再踩。
+3. **`FlowElement#getDocumentation()` 只保留最後一個 `<documentation>`**（Flowable 的 `DocumentationParser` 是單值欄位）。舊格式的相容性因此有先天限制：若有人在同一節點補了一段一般說明，舊的 webhook 設定就讀不到了。新格式不受影響。
+
+**❌ 沒做（需要裁決）**：
+- **`ProcessCompletedListener` 的 process 級 webhook 仍然沒有投遞設定來源**。它同樣送 `bpm.webhook.*` 但同樣不設 `__webhookUrl`，是斷線 (A) 的**第四個實例**、而不在 handoff 列的三段裡。spec §11.4 只定義節點層，沒有定義流程層的設定來源，所以沒有動。接上只需在同一個 resolver 加一個「讀 `<process>` 上的 `flowable:webhooks`」的方法。
+- **`#25` 的 payload 缺口未補**（`task.timeout` 事件、候選人、`operatorName`、`comment`）。那是 #25 的範圍。`event="all"` 已讓 `timeout` 在節點掛了邊界計時器時真的能觸發，但 payload 欄位仍由 #25 決定。
+- **未做線上實測**（PM 統一做）。
 | 68 | R-20 剩餘項 |**a/b/d 已於 2026-09-30 完成**（詳見各自條目）。四小項狀態：<br>**a** ✅ admin UI 開關 —— `ExternalSystemAdmin.vue` 加上 `allowOnBehalfOf` 開關與列表欄位，並修掉 `resetForm()` 的 **`Object.assign` 不刪鍵 → 授權繼承**（`applyForm()` 改成先刪鍵再賦值）。⚠️ **連帶修掉兩項原描述未提到的**：(1)「建立外部系統」按鈕原本只有 `showCreate = true`、不重設表單，於是「編輯 A → 取消 → 建立」會送出**對 A 的 PUT**（靜默的）；(2) `editSystem` 的 `Object.assign(form, row)` 讓 `id`／`apiKey`／`lastUsedAt` 一起進 payload（後端擋掉，但那是後端的防護）。⚠️ **發現並補上 `enabled`**：後端 PUT 是整欄覆寫且 `enabled` 是 NOT NULL，原來 `enabled` 是靠 `Object.assign(form, row)` **意外**帶進去的 —— 改用明確欄位清單時若漏掉，「只為了改代發授權而按儲存」會 500。<br>**b** ✅ 前端代發標示 —— 新增 `OnBehalfOfLookup` service，`/api/tasks` 與 `/api/history/tasks` 各多一個 `onBehalfOf` 欄位；`TaskInbox.vue` 標「代 user001 發起」、`DocumentDetail.vue` 在表單上方加警告條。⚠️ **授權是零新增揭露，已用測試釘住**：改動前審核人早就能從 `GET /api/process-instances/{id}/variables` 讀到 `onBehalfOf`（`requireReadAccess` 回整包流程變數），本項只是把它移到值該出現的地方。**刻意只放 `onBehalfOf`（人），不放 `initiator`（`system:<id>`）** —— 後者對「該問誰補件」毫無幫助卻多一個揭露面（誰送進來的），屬產品決定，已回報 PM。系統身分（`system:*`）在顯示端被濾掉，與 `ApplicantResolver` 同一條防線<br>**c** ✅ 已由 #83 一併完成（`ApplicantResolver` bean、3 個補件 UserTask、`UnreachableTaskListener` 告警繞過）<br>**d** ✅ lint rule h 升 error —— ⚠️ **實測確認 `seed-data.sh` 不會被擋**，但理由與 backlog 原本記的不同：**不是**「無 seed SQL 所以 `isExternalAllowed` 恆為 false」，而是**出廠兩支 BPMN 的第一關是 `${assigneeResolver.resolve(execution)}`、字串裡沒有 `initiator`**，所以規則 h 根本不觸發 —— 這在**已授權外部系統存在時也一樣**。已加兩條測試釘死：真的走 `POST /api/deployments` 部署兩支 BPMN 必須 200，以及第一關的 assignee 不得含 `initiator`。⚠️ **負向控制組實測：把 severity 改回 warning 時，「部署 200」那條仍然是綠的** —— 它證明的是「出廠 BPMN 不觸發規則 h」，不是「升級安全」，所以才需要第二條測試把原因釘死。升級的實際價值是：擋下**未來**被改成 `${initiator}` 的 BPMN（#83 的形狀） | ~~2d~~ | 🟡 a/b/d ✅、c ✅（#83）
 | 69 | 不存在的流程 key 回 500 | ✅ **2026-09-29 完成**（`0b3e7d8`）。key 為 null/空 → 400；查不到定義 → 404（並 catch `FlowableObjectNotFoundException` 補 race window）。⚠️ 範圍比原描述廣：key 缺席與空字串原本也全是 500。`ExternalApiController` 的同一個洞未修（見 #80） | ~~0.5d~~ | ✅ |
 | 70 | Spring Boot 4 + Flowable 8 升級 |Boot 3.5 已於 2026-06-30 EOL；兩者必須同步跳。計畫見 `docs/plan/2026-09-28-springboot4-upgrade.md` Stage 5～6 | 22d || ⬜

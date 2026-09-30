@@ -48,6 +48,12 @@ public class FlowableConfig {
      * {@code BpmnExpressionBeanScopeTest} 直接從 {@code EL_WHITELIST} 推導
      * 測試對象，所以只加其中一邊就會被那個測試擋下來。
      *
+     * <p>⚠️ {@code webhookTaskListener}（#67）只加在<b>這一份</b>，
+     * <b>不</b>進 {@code BpmnLintService.EL_WHITELIST}。它是
+     * {@code delegateExpression} 要解析的對象，不是 BPMN 運算式要呼叫的函式；
+     * 放進 EL 白名單等於宣告「運算式可以拿到它」，而它不該被拿到。
+     * {@code notifyTaskListener} 走的是同一條分界。
+     *
      * <h2>這不是完整的修補</h2>
      *
      * <p>{@code setBeans()} 限制的是「哪些 bean 在命名空間內」，<b>不會</b>
@@ -64,7 +70,8 @@ public class FlowableConfig {
             com.bpm.core.service.ApplicantResolver applicantResolver,
             BpmPermissionService permService,
             BpmQueryService bpmQueryService,
-            NotifyTaskListener notifyTaskListener) {
+            NotifyTaskListener notifyTaskListener,
+            com.bpm.core.webhook.WebhookTaskListener webhookTaskListener) {
         return config -> {
             config.setEventListeners(List.of(processCompletedListener, unreachableTaskListener));
             config.setBeans(Map.of(
@@ -82,7 +89,13 @@ public class FlowableConfig {
                     // 必須與 BpmnLintService.EL_WHITELIST 同一份內容。
                     "applicantResolver", applicantResolver,
                     // ⚠️ 不可移除：purchase-approval 的 delegateExpression 依賴它
-                    "notifyTaskListener", notifyTaskListener));
+                    "notifyTaskListener", notifyTaskListener,
+                    // ⚠️ 不可移除（#67）：兩支 BPMN 的每個 UserTask 都以
+                    // delegateExpression="${webhookTaskListener}" 引用它。
+                    // 漏掉它與漏掉 notifyTaskListener 的症狀完全相同 ——
+                    // 任務建立時拋「無法解析 delegateExpression」，
+                    // 而且是在部署之後、第一次送出案件時才發生。
+                    "webhookTaskListener", webhookTaskListener));
         };
     }
 }
