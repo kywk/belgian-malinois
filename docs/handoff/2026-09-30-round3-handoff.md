@@ -1,4 +1,4 @@
-# 接手文件 — #86 完成後、#79／#87 進行中
+# 接手文件 — 2026-09-30 第二輪（#86 #79 #81 #87 #80 已完成，#83 進行中）
 
 **寫給下一個接手的實作 agent。** 撰寫時間 2026-09-30。
 上一輪的交接見 `docs/handoff/2026-09-29-authorization-hardening-handoff.md`
@@ -34,7 +34,7 @@ backlog 原本寫「只要該 key 已有任何一筆規格，重複儲存必定�
 | 前端 | Vue 3.4 + Vite 5 + Element Plus |
 | DB | MSSQL 2022，**三個資料庫**：`bpm_core_db`／`bpm_audit_db`／`bpm_form_db` |
 | 其他 | RabbitMQ、Redis、MailHog。Docker 是 **OrbStack** |
-| 測試 | 後端 **459** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **66** 個（Vitest） |
+| 測試 | 後端 **482** 個（Testcontainers：真實 MSSQL／RabbitMQ／Redis），前端 **66** 個（Vitest） |
 | 分支 | `feature/round2-hardening`，比 `main` 多 9 個 commit，**未 push** |
 | 部署 | **尚未部署，只有本機開發** |
 
@@ -248,6 +248,18 @@ export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
 | #79 | `235ab30` | 簽核意見三端點接 `ProcessAccessGuard.requireTaskReadAccess`／`requireTaskParticipant`。**連 taskId→pid 的查詢都收進守衛**（授權規則只能有一份）。`TaskHolderGuard` 完全沒動 —— 留言不改變任務狀態 |
 | #87 | `bdddb9d`／`c1bb853`／`7c13a4b` | 同批重複變數名回 **400 並指名衝突**。⚠️ **「重複」不能用 `Set<String>` 判斷** —— 定序是 `SQL_Latin1_General_CP1_CI_AS`，PM 獨立實查確認 `Amount`/`amount`、`amount`/`amount `、全形`Ａ`/半形`A` 在 DB 層面就是衝突（`SELECT CASE WHEN N'Amount'=N'amount'` 回 1，INSERT 真的撞約束）。只做 `Set<String>` 的話**使用者最常見的失敗形狀擋不住** |
 | #81 | `ec4f3a5`（已合併 `4112e99`） | `POST /api/forms` 的 `createdBy` 改由登入身分決定。⚠️ **後果比 backlog 描述嚴重**：實測**省略** `createdBy` 時原本存的是 `null` —— 不只是「可冒用」，而是**正常呼叫下這欄根本是空的，每一張經 `POST /api/forms` 建立的審核表都沒有作者**（`FormDefinition.createdBy` 無預設值、無 `nullable=false`，`FormService.create()` 完全不碰它）。與 `createNextDraft`（v2 有設）的不一致方向是「其中一條壞掉」。**但稽核從未被污染** —— `audit("FORM_UPDATE", userId, …)` 傳的一直是 `@CallerId`，與 #66／#72 的「operatorId 一起被冒用並被 hash chain 永久固定」性質不同，**不要用 #66 的嚴重性去描述它** |
+| #80 | `28e44ef`（已合併 `29f9605`） | 三個端點接既有守衛（`bpmn-xml` 與 `documents/{id}` → `requireReadAccess`，`documents` 列表 → `requireSelf`）。**連帶修掉兩項原描述未提到的**：`GET /api/documents/{id}` 同樣零檢查（只修列表等於沒修）、`ExternalApiController` 啟動不存在 key 的裸 500（#69 條目自己指名留給本工項） |
+
+**#80 的一個設計值得學**：它的 404 預先檢查**刻意排在 403 之後**。
+順序顛倒的話，一個只被授權 `leave-approval` 的系統能用「403 變 404」
+**枚舉伺服器上部署了哪些流程定義** —— 等於把授權檢查變成 discovery 工具。
+PM 線上實測確認這個順序真的成立：`purchase-approval`（未授權）回 403，
+且**不因流程存不存在而改變**；只有已授權但未部署的 key 才回 404。
+
+**#80 的 (b) 政策決定（已實作，待追認）**：`/api/documents` 選**自己建立的**
+而非「自己參與的」。放棄「全公司公文清單」與稽核旁路。關鍵前提是**沒有任何前端
+呼叫這個端點**。日後若需要「我參與的公文」應**新增** `/api/documents/involved`，
+**不要把這個放寬回去** —— 放寬回去看起來很合理，但安全上是退步。
 
 **#81 的兩個值得記錄的細節**：
 
@@ -322,8 +334,8 @@ git worktree list            # 確認每個 agent 一個
 
 ## 11. 現況一句話
 
-`feature/round2-hardening` = `4112e99`（含 #81 合併），比 `main` 多 11 個 commit，**未 push**。
-已完成 **#86、#79、#87、#81**。後端 **459** 測試全綠（**容器停止狀態下跑的**）、
+`feature/round2-hardening` = 待合併 #83 中，比 `main` 多 14 個 commit，**未 push**。
+已完成 **#86、#79、#87、#81、#80**。後端 **482** 測試全綠（**容器停止狀態下跑的**）、
 前端 **66** 全綠、`acceptance-test.sh` PASS 7 / FAIL 0。工作樹乾淨。
-**#80 與 #83 進行中（各自獨立 worktree `/tmp/gh-80`、`/tmp/gh-83`）。**
+**#83 進行中（獨立 worktree `/tmp/gh-83`）。**
 **待裁決：#79-2、#87-2、#87-3（見第 8 節）。尚未部署。**
