@@ -332,6 +332,20 @@
 > 未指定）**未實作**，因為它碰到 `TASK_CREATED` 裡改 assignee 的 flush 順序
 > 風險（#86 那一類）。它的兩個已知漏報記在該列。
 >
+> 🔴 **2026-10-01（晚間）—— #91 方向 A 以「復原」形式才真正進入 main。**
+> 上一輪把 #91 方向 A 寫成已完成，但它**從未被合併**：三個 commit
+> （`6682051` 重構、`b053b77` 規則 k、`0bd4dac` 測試）只存在於
+> **unreachable commit**（基底 `e8572fd`），`git reflog` 裡沒有任何
+> feature/91 的 merge 記錄。本次從 main 切 `feature/91a-recover`
+> cherry-pick 復原、零衝突。
+> ⚠️ **測試數更正**：`main` 的基線是 **693**，而上一輪的
+> 「693（＝661＋#91 的 10＋#94 的 22）」把 #91 的 10 條算進去了 ——
+> 693 其實是在**不含** #91 的主樹上量的。復原後完整套件
+> **703** 全綠（693 ＋ 10）。
+> **教訓**：`git show --stat`／`mvn verify` 只能證明「這一刻的樹」，
+> 證明不了「那份成果在 main 上」。收工前應以 `git log --oneline <branch>..main`
+> 或 worktree 的 merge 記錄逐一核對每個工項**真的有 merge commit**。
+>
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是
 > `Unresolved compilation problem: TestGatewayMockMvcCustomizer cannot be
