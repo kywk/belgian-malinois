@@ -691,12 +691,58 @@ public class ExternalApiController {
         return new ResponseStatusException(HttpStatus.FORBIDDEN, "無權存取此流程");
     }
 
+    /**
+     * 檢查必填變數（{@code spec.required == true}）。
+     *
+     * <h2>#91 缺陷：{@code containsKey} 把「有值卻等於沒有值」放行了</h2>
+     *
+     * <p>改動前這裡只判 {@code !variables.containsKey(name)}。於是
+     * {@code {"dept": "  "}} 與 {@code {"dept": null}} 都因為<b>鍵存在</b>而通過，
+     * 但 BPMN 的 {@code flowable:assignee="${dept}"} 求值成空白／null：
+     * assignee 非 null（空字串）或為 null 卻沒有候選人，
+     * {@code ASSIGNEE_ IS NULL} 的候選群組查詢不命中 → 案件靜默卡死。
+     * 呼叫端拿到 200 與一個 processInstanceId，完全看不出問題。
+     *
+     * <h2>裁決後的語意：符合任一 → 400</h2>
+     *
+     * <ol>
+     *   <li>缺值：{@code !containsKey}（既有行為，訊息不變）。</li>
+     *   <li>值為 {@code null}。</li>
+     *   <li>值為 {@code String} 且 {@code isBlank()}。</li>
+     * </ol>
+     *
+     * <p>兩種 400 的訊息刻意不同：一種是「你根本沒送這個欄位」，
+     * 另一種是「你送了但它是空白」——呼叫端要改的是 payload 的不同地方。
+     * 但都維持 <b>400</b>：這是「請求形狀不對、改了才會成功」，不是可重試的 5xx。
+     *
+     * <h2>⚠️ 刻意<b>不</b>擋：{@code 0}、{@code false}、空集合／空 Map</h2>
+     *
+     * <p>「空白」的判準是<b>字串語意</b>，不是一般程式語言裡的
+     * <b>falsy</b>。因此這裡用 {@code value == null || (value instanceof String s && s.isBlank())}，
+     * 而<b>不是</b> {@code value == null || "".equals(value.toString().trim())} 之類
+     * 會把任何型別都先轉成字串再判的寫法。
+     *
+     * <p>為什麼這個取捨重要：{@code 0}（例如 {@code days}＝0）、{@code false}
+     * （例如布林旗標）、空集合／空 Map 都是<b>合法且語意明確的必填值</b>。
+     * 把它們當成「空白」擋下，等於把一個「漏填」缺陷換成一個「合法的 0 填不進來」
+     * 缺陷，而且症狀一樣是靜默卡死 —— 只是換了一批受害者。
+     * {@code required=false} 的變數完全不受本方法影響。
+     */
     private void validateVariables(String processDefKey, Map<String, Object> variables) {
         List<ProcessVariableSpec> specs = specRepo.findByProcessDefinitionKeyOrderByVariableName(processDefKey);
         for (ProcessVariableSpec spec : specs) {
-            if (Boolean.TRUE.equals(spec.getRequired()) && !variables.containsKey(spec.getVariableName())) {
+            if (!Boolean.TRUE.equals(spec.getRequired())) continue;
+            String name = spec.getVariableName();
+            // ① 缺值：鍵不存在。既有行為，訊息不變（呼叫端既有測試依賴它）。
+            if (!variables.containsKey(name)) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "缺少必填變數: " + spec.getVariableName());
+                        "缺少必填變數: " + name);
+            }
+            // ②／③ 有鍵但值等於沒有值：null 或純空白字串。
+            Object value = variables.get(name);
+            if (value == null || (value instanceof String s && s.isBlank())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "必填變數不可為空白: " + name);
             }
         }
     }
