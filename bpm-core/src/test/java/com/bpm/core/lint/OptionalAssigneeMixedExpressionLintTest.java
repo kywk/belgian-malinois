@@ -30,9 +30,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>放寬<b>只</b>套用在 {@code assignee}：它是<b>單一值</b>，任何一個未填的可選
  * 變數都會讓整個值變成無效 id（{@code "alice-"}、{@code "-01"}）。
  * {@code candidateUsers}／{@code candidateGroups} 是<b>多值</b>（逗號分隔），
- * 一個空白元素不會讓其餘候選人消失（{@code extractCandidates} 會把它拆成
- * {@code ["DEP01", ""]}），對它放寬只會製造<b>假警告</b>。
- * 完整理由寫在 {@code BpmnLintService.checkOptionalAssigneeVariable} 的 javadoc。
+ * Java 的 {@code split} 丟掉尾端空字串、保留前端與中間的空字串，所以
+ * {@code "hr,${dept}"} 在 dept 為空時仍留有 {@code "hr"}（實測：
+ * {@code "DEP01,"}→{@code ["DEP01"]}、{@code ",hr"}→{@code ["","hr"]}）——
+ * 只要還留下一個有效項，任務就仍有人看得到，對它放寬只會製造<b>假警告</b>。
+ * 完整理由（含刻意不涵蓋的 {@code "${a},${b}"} 全空邊界）寫在
+ * {@code BpmnLintService.checkOptionalAssigneeVariable} 的 javadoc。
  *
  * <h2>負向控制組實測結果（2026-10-01，#91c）</h2>
  *
@@ -219,17 +222,35 @@ class OptionalAssigneeMixedExpressionLintTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("混合式的 candidateGroups／candidateUsers → 不得警告（多值欄位的刻意不對稱）")
-    void mixedCandidateFieldsDoNotWarn() {
+    @DisplayName("固定群組 ＋ 可選變數的混合式候選欄位 → 不得警告（最常見的形狀）")
+    void mixedCandidateFieldsWithLiteralGroupDoNotWarn() {
         String key = newProcessKey();
         givenSpec(key, "dept", false);
-        givenSpec(key, "other", false);
 
-        assertThat(ruleIds(key, "flowable:candidateGroups=\"${dept},${other}\""))
-                .as("逗號並接的多值欄位：一個空白元素不會讓其餘候選群組消失，警告會是假警告")
+        // "hr,${dept}" 在 dept 為空時 split 出 ["hr"]（尾端空被丟、前端空保留）——
+        // 任務仍有人看得到，對它警告就是假警告。這是最常見的形狀。
+        assertThat(ruleIds(key, "flowable:candidateGroups=\"hr,${dept}\""))
+                .as("只要還留下一個有效項，任務就仍有人看得到，警告會是假警告")
                 .doesNotContain(RULE);
-        assertThat(ruleIds(key, "flowable:candidateUsers=\"${dept},${other}\""))
+        assertThat(ruleIds(key, "flowable:candidateUsers=\"hr,${dept}\""))
                 .as("candidateUsers 與 candidateGroups 同為多值欄位，判準一致")
+                .doesNotContain(RULE);
+    }
+
+    @Test
+    @DisplayName("[已知殘餘邊界] 全可選且全空的候選欄位 → 目前仍不警告（刻意取捨，非保證）")
+    void allOptionalMixedCandidatesResidualBoundaryDoesNotWarn() {
+        String key = newProcessKey();
+        givenSpec(key, "a", false);
+        givenSpec(key, "b", false);
+
+        // "${a},${b}" 兩者皆空 → "," → [] → 一個候選人都沒有，任務確實不可達。
+        // 規則 k「刻意不涵蓋」它：把候選欄位放寬成「任一可選參照就警告」會對最常見的
+        // "hr,${dept}" 製造大量假警告（完整取捨見 BpmnLintService 的 javadoc）。
+        // 這條測試把「目前不警告」釘住；若日後有人擴大候選欄位的判準，它會紅 ——
+        // 那時請當成一次有意識的規則變更來處理，而不是把斷言改掉。
+        assertThat(ruleIds(key, "flowable:candidateGroups=\"${a},${b}\""))
+                .as("已知取捨：這個形狀確實會讓任務不可達，但目前不發警告（避免誤擋 hr,${dept}）")
                 .doesNotContain(RULE);
     }
 

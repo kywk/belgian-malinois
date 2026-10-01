@@ -482,13 +482,25 @@ public class BpmnLintService {
      *       這與純 {@code ${dept}} 求值成空白是同一種靜默卡死，所以判準放寬成
      *       「運算式裡用 {@link #BARE_VARIABLE} 找到任一個 required=false 的已宣告變數」。</li>
      *   <li><b>{@code candidateUsers}／{@code candidateGroups} 是多值</b>（逗號分隔）：
-     *       {@code extractCandidates} 對字串做的是 {@code s.split("[\\s]*,[\\s]*")}，
-     *       所以 {@code "DEP01,"} 得到 {@code ["DEP01", ""]} —— 空的只是其中一項，
-     *       其餘候選人／群組照常掛上去，<b>任務仍然有人看得到</b>。
-     *       對那個形狀發警告就是<b>假警告</b>：管理員無法解決一個不存在的問題，
+     *       {@code extractCandidates} 對字串做的是 {@code s.split("[\\s]*,[\\s]*")}。
+     *       Java 的 split 預設<b>丟掉尾端空字串</b>、<b>保留前端與中間的空字串</b>，
+     *       所以（{@code javap -c} 讀 Flowable 7.2.0 的 {@code extractCandidates} 後
+     *       以 Java 實測）：{@code "DEP01,"} → {@code ["DEP01"]}、
+     *       {@code ",hr"} → {@code ["", "hr"]}、{@code "a,,b"} → {@code ["a", "", "b"]}。
+     *       也就是<b>只要還留下一個有效項，任務就仍有人看得到</b>
+     *       —— {@code "hr,${dept}"} 在 dept 為空時仍留有 {@code "hr"}。
+     *       對這些形狀發警告就是<b>假警告</b>：管理員無法解決一個不存在的問題，
      *       而假警告會訓練大家忽略警告（見 {@code LintRuleCorrectnessTest} 類別註解
      *       為什麼誤擋比漏放更貴）。所以這裡維持只認純參照。</li>
      * </ul>
+     *
+     * <p>⚠️ <b>本不對稱刻意不涵蓋的殘餘邊界</b>：{@code "${a},${b}"} 若兩者皆為
+     * required=false 且執行期皆為空，split 的結果是 {@code "," → []}
+     * —— 一個候選人都沒有，任務確實不可達，與 assignee 的靜默卡死同級。
+     * 之所以仍然不警告，是因為把候選欄位放寬成「任一可選參照就警告」會對最常見的
+     * {@code "hr,${dept}"}（固定群組 ＋ 可選變數，dept 空時仍有 hr）製造大量假警告；
+     * 兩害相權取其輕，選擇漏放這個較少見、且需要「所有元素皆為可選且皆空」才成立的形狀。
+     * 這是<b>已知的取捨</b>，不是沒想到。
      *
      * <p>⚠️ 這個不對稱是<b>刻意</b>的，不是沒寫完：{@code assignee} 放寬後，
      * 純 {@code ${dept}} 仍會被警告，但只會有一條 —— 放寬的判準（{@link #BARE_VARIABLE}）
