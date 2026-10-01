@@ -511,6 +511,12 @@ class KnownPersonRuleConvergenceTest extends IntegrationTestBase {
                     .as("空白的訊息必須是「這欄沒給」，不是「改用候選群組」")
                     .contains("countersignUserId 為必填")
                     .doesNotContain("firstTaskCandidateGroups");
+            // 防 DoS 的決定性斷言也要有：父任務必須仍可正常完成。
+            // 只要有任何一筆子任務落地，這裡就會是 409。
+            var complete = put("/api/tasks/" + parent.getId(), HOLDER,
+                    "{\"action\":\"complete\",\"variables\":[{\"name\":\"approved\",\"value\":true}]}");
+            assertThat(complete.statusCode())
+                    .as("父任務必須仍可正常完成 —— 有未完成子任務時這裡會是 409").isEqualTo(200);
         }
     }
 
