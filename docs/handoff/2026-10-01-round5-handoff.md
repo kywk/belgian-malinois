@@ -172,13 +172,17 @@ PM 本輪用 `git restore --staged` 還原、沒有 commit 那個刪除。**每�
 （DB 的 `ASSIGNEE_` 真的是 NULL、外部 API 空白必填值真的 400 且零副作用）。
 **未 push。** worktree 已清除。統計：✅ 50 → **51**、🟡 22 → **21**。
 
+> **後續補充（同日）：** #67 流程層 webhook 亦已完成（`<process>` 的 `flowable:webhooks`），
+> 後端 **749** 全綠、`acceptance-test` PASS 7 / FAIL 0。`#67` 仍 🟡（剩 #25 payload 與前端測試缺口）。
+> dev 庫另增探測殘留 `probe-67p`／`probe-67p-noconfig`。
+
 ---
 
 ## 6. 建議的下一輪優先序（先和使用者確認）
 
 | 順序 | 工項 | 估時 | 備註 |
 |---|---|---|---|
-| 1 | **#67 流程層** `ProcessCompletedListener` 的 webhook | 0.5d | 斷線 A 第四個實例。**需先裁決投遞設定來源**（spec §11.4 只定義節點層） |
+| ~~1~~ | ✅ **#67 流程層**（2026-10-01 同日補完） | 0.5d | 設定來源＝`<process>` 的 `flowable:webhooks`（與節點層共用同一份解析）。沒有設定就不發訊息；事件對應 `all`／`process.completed`／`complete`／省略。線上實測通過（listener 排入佇列、consumer 收到 `__webhookUrl`、loopback 被拒）。見 backlog #67 列 |
 | 2 | **#67 前端** `modeling.updateProperties` 測試缺口 | 0.3d | |
 | 3 | **#25** webhook payload 缺口 | 0.5d | `task.timeout` 事件、候選人、`operatorName`、`comment` |
 | 4 | **`dev-token.sh` 註解** | 0.1d | 它教人用 `dir001` 讀稽核，但 `mintDevToken` 不簽 `roles` claim |
