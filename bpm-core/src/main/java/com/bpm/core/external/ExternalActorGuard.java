@@ -312,6 +312,46 @@ public class ExternalActorGuard {
      * 送來的每一個候選群組都必須在該系統的 {@code allowedCandidateGroups} 內
      * （#88 政策 B）。
      *
+     * <h2>⚠️ 參數是<b>已切開的清單</b>，不是原始字串（#93）</h2>
+     *
+     * <p>改動前簽名是 {@code (ExternalSystem, String raw)}，本方法自己在裡面
+     * {@code raw.split(",")}。而 {@code String raw} 這個簽章就是 #93 的成因：
+     * {@code docs/bpm-platform-spec.md} §9.2 示範的是 JSON <b>陣列</b>
+     * {@code "firstTaskCandidateGroups": ["hr_dept"]}，而呼叫端在 controller
+     * 裡先做 {@code (String) body.get(...)} —— 送陣列就在<b>那一行</b>拋
+     * {@code ClassCastException}，回 500 且沒有訊息（#73 只回傳刻意丟出的理由）。
+     *
+     * <p><b>為什麼不用 Jackson 的 {@code convertValue}、也不在 controller 擋掉陣列</b>：
+     * 那兩種做法都會讓本方法<b>繼續只認字串</b>，於是「請求長什麼形狀」與
+     * 「群組怎麼驗」又變成兩處各自決定。改成收 {@code List<String>} 之後，
+     * 邊界（body 這個欄位是什麼形狀）由<b>呼叫端唯一決定一次</b>，而
+     * trim／丟棄空白／去重／白名單仍然<b>只有這一份</b> ——
+     * 也就是本 repo 的硬規則「規則只能有一份」。
+     *
+     * <h2>切分之後，邊界是誰的責任</h2>
+     *
+     * <ul>
+     *   <li><b>形狀</b>（body 是陣列還是逗號分隔字串、元素是什麼型別）
+     *       → 請求契約的邊界檢查 → {@code ExternalApiController}。</li>
+     *   <li><b>內容</b>（trim、丟棄空白、去重、白名單）→ 本方法。</li>
+     * </ul>
+     *
+     * <p>理由是「形狀錯了」與「這個群組沒被授權」是<b>兩件不同的事</b>：
+     * 前者的診斷是型別（回 400），後者的診斷是授權（回 403）。混在一個方法裡
+     * 就會出現「一個沒有設白名單的系統因為型別不符而拿到 400」這種
+     * 把「我們的設定」說成「你送錯了」的回應。
+     *
+     * <h2>前置條件：元素皆為非 null 的 {@code String}</h2>
+     *
+     * <p>本方法對每個元素做 {@code g.trim()}，所以<b>不</b>接受 null 元素 ——
+     * 傳進 null 元素會是 {@code NullPointerException} → 500，而那正是本工項
+     * 要修的失敗型態。這個前置條件由呼叫端的形狀解析保證（見
+     * {@code ExternalApiController.parseCandidateGroups}）。
+     *
+     * <p><b>為什麼不在本方法加 null 防護</b>：那會是第二份「什麼算合法群組名稱」
+     * 的規則。擋掉的正確位置是唯一決定形狀的那一段 —— 在那裡回 400 還能給出
+     * 指名元素索引的診斷；在這裡擋掉只能回一句無法定位的 400。
+     *
      * <h2>為什麼回傳解析後的清單，而不是讓呼叫端自己再 split 一次</h2>
      *
      * <p>呼叫端原本是 {@code firstGroups.split(",")} 再逐個
@@ -319,7 +359,8 @@ public class ExternalActorGuard {
      * <b>同一條規則兩套形狀</b>（#84／#86 的成因）：驗證過的清單與
      * 實際寫進 identity link 的清單可能不一致（例如某個實作忘了 trim），
      * 而且「驗證了 3 個群組、實際寫了 4 個」這種 bug 不會有任何錯誤。
-     * 由本方法回傳<b>同一份</b>清單，兩邊不可能對不起來。
+     * 由本方法回傳<b>同一份</b>清單，兩邊不可能對不起來。#93 之後這一份
+     * 是「形狀解析後、內容規則處理後」的結果，而兩段責任仍然各只有一份。
      *
      * <h2>空白項目為什麼丟棄而不是拒絕</h2>
      *
@@ -342,18 +383,24 @@ public class ExternalActorGuard {
      * 但清單被丟空之後 {@code startProcess} 的「至少有一個」規則
      * 會如實看到「沒有群組」，所以不會變成靜默卡死。
      *
+     * <p>⚠️ <b>空清單（{@code []} 與 {@code ["  "]}）同樣不在這裡拒絕</b>：
+     * 解析後是空清單，於是 {@code startProcess} 的「至少有一個」規則會回 400。
+     * 在這裡再加一條「空清單要拒絕」就是同一條規則兩套形狀。
+     *
      * @param sys   發起方；白名單為空時<b>不限制</b>（見 ExternalSystemPolicy）
-     * @param raw   body 的 {@code firstTaskCandidateGroups}（逗號分隔字串）
+     * @param raw   已由呼叫端切開的群組清單（元素<b>未</b> trim、<b>不可</b>為
+     *              null；相容形狀的逗號分隔已由呼叫端處理）。{@code null}
+     *              或空清單 = 未指定任何群組。
      * @return 解析後的群組清單（trim 後、已丟棄空白項目、去重並保留順序）
      * @throws ResponseStatusException 403（白名單不包含某個群組）
      */
-    public List<String> requireAllowedCandidateGroups(ExternalSystem sys, String raw) {
-        if (raw == null) return List.of();
+    public List<String> requireAllowedCandidateGroups(ExternalSystem sys, List<String> raw) {
+        if (raw == null || raw.isEmpty()) return List.of();
 
         // 去重並保留順序：用 LinkedHashSet 讓 "dept001,dept001" 只寫一次，
         // 同一組輸入的結果因此與書寫順序無關（deterministic）。
         Set<String> groups = new LinkedHashSet<>();
-        for (String g : raw.split(",")) {
+        for (String g : raw) {
             String name = g.trim();
             if (name.isEmpty()) continue;
             if (!policy.isCandidateGroupAllowed(sys, name)) {

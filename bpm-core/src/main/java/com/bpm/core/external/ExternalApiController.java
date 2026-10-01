@@ -95,7 +95,21 @@ public class ExternalApiController {
         String onBehalfOf = (String) body.get("onBehalfOf");
         if (onBehalfOf != null && onBehalfOf.isBlank()) onBehalfOf = null;
         String firstAssignee = (String) body.get("firstTaskAssignee");
-        String firstGroups = (String) body.get("firstTaskCandidateGroups");
+        // ⚠️ #93：這裡<b>不能</b>寫成 (String) body.get("firstTaskCandidateGroups")。
+        //
+        // 改動前就是那樣，而 docs/bpm-platform-spec.md §9.2 示範的形狀是
+        // JSON 陣列 ["hr_dept"] —— 送陣列就在 cast 那一行拋 ClassCastException
+        // → 500，而 #73 刻意只回傳「刻意丟出的」訊息，所以呼叫端連
+        // 「你送錯形狀了」都拿不到。
+        //
+        // 危害不是「壞掉」而是「永遠不會成功還一直重試」：500 的語意是
+        // 「稍後重試」，而 payload 不變就永遠不會成功，批次會無限重試。
+        //
+        // ⚠️ 而那個 cast 還排在<b>所有檢查之前</b>（連 allowedProcessKeys
+        // 的 403 都還沒查），所以未授權的系統送陣列會拿到 500 而不是 403。
+        // 現在只把值原封不動取出，形狀的判定交給 parseCandidateGroups，
+        // 呼叫位置則在兩個 403 之後（見下方 requireAllowedCandidateGroups 處）。
+        Object firstGroups = body.get("firstTaskCandidateGroups");
         String callbackUrl = (String) body.get("callbackUrl");
 
         @SuppressWarnings("unchecked")
@@ -130,8 +144,20 @@ public class ExternalApiController {
         //
         // ⚠️ 用回傳值而不是自己再 split 一次 —— 驗證過的清單必須就是
         // 實際寫進 identity link 的那一份，否則「規則只有一份」不成立。
-        List<String> firstCandidateGroups =
-                actorGuard.requireAllowedCandidateGroups(sys, firstGroups);
+        //
+        // #93：形狀解析（陣列／逗號分隔字串）也排在這裡，理由同上 ——
+        // 它必須排在 allowedProcessKeys 的 403 之後。否則一個只被授權
+        // leave-approval 的系統就能用「403 變 400」探測伺服器上部署了哪些
+        // 流程定義（#80 建立這個順序的理由）。
+        //
+        // ⚠️ 形狀錯誤是 400 而白名單是 403，兩者在<b>同一個欄位</b>上：
+        // 一個未授權的群組 + 一個非字串元素會拿到 400（形狀先判，因為
+        // 沒有形狀就沒有群組名可以拿去比對白名單）。這不構成枚舉風險 ——
+        // 形狀錯誤的回應<b>不隨白名單內容改變</b>，所以無法用 400/403 的
+        // 差異反推哪些群組被授權。與 initiator 冒用的 400（更早那一格）
+        // 不同形狀的錯誤本來就無法互相取代。
+        List<String> firstCandidateGroups = actorGuard.requireAllowedCandidateGroups(
+                sys, parseCandidateGroups(firstGroups));
 
         // 代員工發起（2026-09-29 決策：依系統授權，預設不允許）。
         if (onBehalfOf != null) {
@@ -250,7 +276,20 @@ public class ExternalApiController {
         //
         // 先前沒被發現是因為組織 mock 對未知 userId 一律回 mgr001，
         // 而測試剛好都用 firstTaskAssignee=mgr001，捏造值與預期值恰好相同。
-        com.bpm.core.service.InitialAssigneeResolver.putIfPresent(variables, firstAssignee, firstGroups);
+        //
+        // ⚠️ #93：寫進變數的仍然是<b>逗號分隔字串</b>，而且是由<b>解析後的
+        // 清單</b> join 出來的，不是把 body 的原始值原樣塞回去。理由：
+        //  1. 這個變數的形狀是 InitialAssigneeResolver.FIRST_GROUPS_VAR 的
+        //     既定契約（str() → toString() → 非空白 → 留空等人認領）。
+        //     改成塞 List 會讓變數在 Flowable 的序列化與該類別的行為都變形，
+        //     那是本工項不需要的改動範圍。
+        //  2. 用解析後的清單才能讓「變數裡的」與「identity link 裡的」一致 ——
+        //     例如 "dept001,  " 不會讓變數看起來像有兩個群組。
+        // 空清單寫 null（= 未指定），與「欄位不存在」一致。
+        String firstGroupsVar = firstCandidateGroups.isEmpty()
+                ? null : String.join(",", firstCandidateGroups);
+        com.bpm.core.service.InitialAssigneeResolver.putIfPresent(
+                variables, firstAssignee, firstGroupsVar);
         if (callbackUrl != null) variables.put("_callbackUrl", callbackUrl);
 
         // ── 存在性預先檢查（#80：#69 的同一個洞在此仍未修）────────────────
@@ -383,6 +422,127 @@ public class ExternalApiController {
     }
 
     // ── Helpers ──
+
+    /**
+     * 把 body 的 {@code firstTaskCandidateGroups} 轉成「一串群組名」（#93）。
+     *
+     * <h2>它修的缺陷</h2>
+     *
+     * <p>{@code docs/bpm-platform-spec.md} §9.2 示範的形狀是 JSON <b>陣列</b>
+     * {@code "firstTaskCandidateGroups": ["hr_dept"]}，而改動前這裡是
+     * {@code (String) body.get(...)} —— 送陣列就在那一行拋
+     * {@code ClassCastException} → 500。已上線的整合方照 spec 抄就會踩到，
+     * 而且 500 的語意是「稍後重試」，payload 不變就永遠不會成功 → 批次無限重試。
+     *
+     * <h2>⚠️ 為什麼 400 而不是 500</h2>
+     *
+     * <p>沿用<b>同一個方法裡既有的規則</b>，不是新政策：
+     * {@code initiator} 冒用 → 400、{@code firstTaskAssignee} 查無此人 → 400、
+     * 空白 → 400。也就是「呼叫端該改 payload 就回 400」。
+     * 500 的語意是「稍後重試」，而形狀錯了重試一萬次也不會成功 ——
+     * 讓呼叫端在「改 payload」與「稍後重試」之間選錯，是可用性問題。
+     *
+     * <h2>⚠️ 為什麼陣列是 canonical、逗號分隔字串保留為相容形狀</h2>
+     *
+     * <p>spec 示範的一直是陣列，而<b>已上線的整合方送的是字串</b>。
+     * 只留陣列會讓那些整合在部署新版本的那一天全部壞掉；只留字串則讓
+     * spec 從第一天起就是錯的。所以兩個都收，spec 也照實標明。
+     *
+     * <p>⚠️ 兩個形狀的<b>解析結果必須相同</b> —— 那是「規則只有一份」在
+     * 跨形狀時的樣子（trim／丟棄空白／去重都在守衛裡，不在這裡各做一次）。
+     *
+     * <h2>⚠️ 邊界處置為什麼是這樣</h2>
+     *
+     * <table border="1">
+     *   <caption>firstTaskCandidateGroups 的形狀處置</caption>
+     *   <tr><th>body</th><th>結果</th><th>理由</th></tr>
+     *   <tr><td>{@code ["hr_dept"]}</td><td>接受</td>
+     *       <td>spec §9.2 的 canonical 形狀</td></tr>
+     *   <tr><td>{@code "hr_dept,finance"}</td><td>接受</td>
+     *       <td>相容形狀；已上線的整合方送這個</td></tr>
+     *   <tr><td>{@code ["hr_dept",123]}</td><td><b>400</b></td>
+     *       <td>元素非字串，指名索引與型別。<b>不在此默默轉成 "123"}</b> ——
+     *           那會建立一個叫「123」的候選群組，而沒有任何人會是它的成員
+     *           → 靜默卡死，正是本 repo 反覆修的那種缺陷</td></tr>
+     *   <tr><td>{@code 123} / {@code true} / {@code {}}</td><td><b>400</b></td>
+     *       <td>整個欄位型別錯</td></tr>
+     *   <tr><td>{@code null}</td><td>未指定</td>
+     *       <td>沿用現況；與「欄位不存在」不可區分</td></tr>
+     *   <tr><td>{@code []}</td><td>空清單</td>
+     *       <td>沿用現況：被「至少有一個」規則回 400（不新增規則）</td></tr>
+     *   <tr><td>{@code ["  "]}</td><td>空清單</td>
+     *       <td>同上；空白元素由守衛丟棄</td></tr>
+     * </table>
+     *
+     * <h2>⚠️ 為什麼不在這裡把空清單直接拒絕</h2>
+     *
+     * <p>{@code []} 與 {@code ["  "]} 刻意<b>不在這裡</b>回 400，而是交給
+     * {@code startProcess} 既有的「至少有一個」規則。那條規則比對的是
+     * <b>解析後</b>的清單（#88 刻意如此），所以它本來就看得到「沒有群組」。
+     * 在這裡再加一條「空陣列要拒絕」就是同一條規則兩套形狀 —— 這個 repo
+     * 反覆記載的缺陷成因。留著既有規則，錯誤訊息也就維持同一句。
+     *
+     * <h2>為什麼是 400 的訊息要指名索引與型別</h2>
+     *
+     * <p>只說「格式錯誤」會讓呼叫端一個欄位一個欄位試錯；說「第 2 個元素不是
+     * 字串」則一次就定位得到。這與 {@code ExternalActorGuard} 指名員工編號、
+     * 白名單指名群組名是同一個標準：<b>診斷要能指出該改哪裡</b>。
+     *
+     * @param raw body 的原始值（{@code Object}，未轉型）
+     * @return 已切開的群組名清單（元素<b>未</b> trim；空清單就是空清單）
+     * @throws ResponseStatusException 400（形狀錯；呼叫端該改 payload）
+     */
+    private static List<String> parseCandidateGroups(Object raw) {
+        if (raw == null) return List.of();               // 未指定
+        // 相容形狀：已上線的整合方送逗號分隔字串。
+        // ⚠️ 這裡切完就交給守衛做 trim／去空白／去重，不在這裡做 ——
+        // 那樣會是第二份內容規則。
+        //
+        // ⚠️ split 的 limit 用 -1（保留結尾空字串）而<b>不是</b>預設值：
+        // 兩者在這裡結果相同，因為守衛會丟棄所有空白項目
+        // （"dept001," → ["dept001"] 或 ["dept001",""] → 都是 ["dept001"]）。
+        // 寫 -1 只是讓「切了幾段」忠實反映呼叫端寫了幾段，不做第二層推論。
+        if (raw instanceof String s) return List.of(s.split(",", -1));
+        if (raw instanceof List<?> list) {
+            List<String> out = new ArrayList<>(list.size());
+            for (int i = 0; i < list.size(); i++) {
+                Object element = list.get(i);
+                // ⚠️ 包含 null 在內都要拒絕：null 元素會讓守衛的 g.trim() NPE
+                // → 500，那正是本工項要修的失敗型態。
+                if (!(element instanceof String s)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "firstTaskCandidateGroups 的第 " + (i + 1) + " 個元素必須是字串，"
+                                    + "收到的是 " + describeJsonType(element) + "。"
+                                    + "陣列的每個元素都必須是群組名稱的字串，例如"
+                                    + " [\"hr_dept\"]；若要一次指定多個群組請寫成"
+                                    + " [\"hr_dept\",\"finance\"]。");
+                }
+                out.add(s);
+            }
+            return out;
+        }
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "firstTaskCandidateGroups 必須是字串陣列或逗號分隔字串，收到的是 "
+                        + describeJsonType(raw) + "。標準形狀是陣列 [\"hr_dept\"]；"
+                        + "逗號分隔字串（\"hr_dept,finance\"）為相容形狀。");
+    }
+
+    /**
+     * JSON 值的可讀型別名稱，只用在錯誤訊息裡。
+     *
+     * <p>為什麼不用 {@code getClass().getSimpleName()}：那是 Java 型別
+     * （{@code LinkedHashMap}、{@code Integer}），對一個照 spec 串接 payload
+     * 的呼叫端毫無意義，而 #66 選定 400 的整個目的就是「讓呼叫端知道要改什麼」。
+     */
+    private static String describeJsonType(Object v) {
+        if (v == null) return "null";
+        if (v instanceof String) return "字串";
+        if (v instanceof Boolean) return "布林值";
+        if (v instanceof Number) return "數字";
+        if (v instanceof Map) return "物件";
+        if (v instanceof Collection) return "陣列";
+        return v.getClass().getSimpleName();
+    }
 
     private Map<String, Object> buildStatusResponse(String processInstanceId, String systemId) {
         // Try running first

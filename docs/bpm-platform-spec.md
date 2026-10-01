@@ -665,7 +665,6 @@ Body:
 {
     "processDefinitionKey": "registration-approval",
     "businessKey": "REG-2026-001",
-    "initiator": "system:registration",
     "firstTaskAssignee": "manager001",
     "firstTaskCandidateGroups": ["hr_dept"],
     "variables": {
@@ -674,6 +673,12 @@ Body:
         "callbackUrl": "https://ext-system.com/api/callback"
     }
 }
+```
+
+⚠️ **Body 裡不帶、也禁止帶 `initiator`**（R-20）：`initiator` 一律由伺服器決定為
+`system:{X-System-Id}`，呼叫端帶了會收到 **400**（`initiator 由伺服器決定，不可由呼叫端指定`）。
+要代某位員工發起請改用 `onBehalfOf`（需管理員為該系統開啟 `allowOnBehalfOf`，預設關閉）。
+**本範例曾經包含 `"initiator": "system:registration"` —— 照抄會拿到 400**，已修正。
 
 → Response:
 {
@@ -688,6 +693,37 @@ Body:
 }
 ```
 
+#### `firstTaskCandidateGroups` 的形狀（#93）
+
+**標準形狀是 JSON 陣列**，如上面的 `["hr_dept"]`。
+
+**逗號分隔字串是相容形狀**，僅為相容既有整合而保留，新整合請用陣列：
+
+```json
+"firstTaskCandidateGroups": ["hr_dept", "finance"]      // 標準
+"firstTaskCandidateGroups": "hr_dept,finance"          // 相容，作用完全相同
+```
+
+兩種形狀解析後的結果必須相同（空白字串元素被丟棄、重複去重、其餘原樣）。
+
+錯誤處置：
+
+| Body 的值 | 結果 |
+|---|---|
+| `["hr_dept"]` / `"hr_dept,finance"` | 接受 |
+| `["hr_dept", 123]`（元素非字串） | **400**，訊息指名第幾個元素、什麼型別 |
+| `123` / `true` / `{}`（整個欄位型別錯） | **400** |
+| `null` / 未提供 | 視為未指定 |
+| `[]` / `["  "]` | 視為未指定任何群組 → 觸發「必須指定 `firstTaskAssignee` 或 `firstTaskCandidateGroups`」的 400 |
+
+⚠️ 形狀錯誤回 **400**（呼叫端該改 payload）而不是 500：500 的語意是「稍後重試」，
+但 payload 不變就永遠不會成功，批次會無限重試。
+
+⚠️ 每一個群組都必須在該外部系統的 `allowedCandidateGroups` 白名單內，
+否則回 **403**。陣列與字串形狀都一樣（見 `ExternalSystemPolicy.isCandidateGroupAllowed`）。
+
+⚠️ `firstTaskCandidateGroups` 與 `firstTaskAssignee` 至少要有一個，否則回 400。
+
 #### 外部 initiator 處理規則
 
 外部系統發起的流程，`initiator` 格式為 `system:{systemId}`，非真實用戶。BPMN 中依賴 `initiator` 的 EL 函數（如 `orgService.getDirectManager(initiator)`）會無法解析。
@@ -695,7 +731,8 @@ Body:
 處理方式：
 1. **流程設計時**：供外部系統發起的流程，第一個 UserTask 不可使用 `initiator` 相關 EL 表達式
 2. **API 層**：外部系統發起時，必須透過 `firstTaskAssignee` 或 `firstTaskCandidateGroups` 明確指定第一個節點的審核人
-3. **後續節點**：可正常使用 EL 表達式，因為後續節點的 `initiator` 可替換為實際經辦人（第一個節點的 assignee）
+3. **後續節點**：**`initiator` 不會被替換** —— 它全程維持 `system:{systemId}`。伺服器另外寫入一個**獨立的**變數 `effectiveInitiator`（值為 `firstTaskAssignee`），後續節點要引用經辦人請用 `${effectiveInitiator}` 而**不是** `${initiator}`。
+   ⚠️ **這一點寫錯過，而它正是工項 #83 的成因**：舊版本文寫「後續節點的 `initiator` 可替換為實際經辦人」，設計師照著在**補件關卡**寫了 `flowable:assignee="${initiator}"` → 執行期求值得到 `system:erp` → 四個持有者條件全不命中、候選人也看不到（`taskCandidateUser` 帶 `ASSIGNEE_ IS NULL`，與 assignee **互斥**）→ **案件永久卡死且無任何告警**。現在補件關卡改用 `${applicantResolver.resolve(execution)}`，規則是 `onBehalfOf` → `initiator`（是人的話）→ 權限碼 `bpm:external:revision` 指定的受理人。
 4. **BPMN Lint 規則**：若流程定義允許外部系統發起（在 ProcessVariableSpec 中標記），驗證第一個 UserTask 不使用 `initiator` EL 函數
 
 ```java
