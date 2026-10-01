@@ -665,7 +665,6 @@ Body:
 {
     "processDefinitionKey": "registration-approval",
     "businessKey": "REG-2026-001",
-    "initiator": "system:registration",
     "firstTaskAssignee": "manager001",
     "firstTaskCandidateGroups": ["hr_dept"],
     "variables": {
@@ -674,6 +673,12 @@ Body:
         "callbackUrl": "https://ext-system.com/api/callback"
     }
 }
+```
+
+⚠️ **Body 裡不帶、也禁止帶 `initiator`**（R-20）：`initiator` 一律由伺服器決定為
+`system:{X-System-Id}`，呼叫端帶了會收到 **400**（`initiator 由伺服器決定，不可由呼叫端指定`）。
+要代某位員工發起請改用 `onBehalfOf`（需管理員為該系統開啟 `allowOnBehalfOf`，預設關閉）。
+**本範例曾經包含 `"initiator": "system:registration"` —— 照抄會拿到 400**，已修正。
 
 → Response:
 {
@@ -726,7 +731,8 @@ Body:
 處理方式：
 1. **流程設計時**：供外部系統發起的流程，第一個 UserTask 不可使用 `initiator` 相關 EL 表達式
 2. **API 層**：外部系統發起時，必須透過 `firstTaskAssignee` 或 `firstTaskCandidateGroups` 明確指定第一個節點的審核人
-3. **後續節點**：可正常使用 EL 表達式，因為後續節點的 `initiator` 可替換為實際經辦人（第一個節點的 assignee）
+3. **後續節點**：**`initiator` 不會被替換** —— 它全程維持 `system:{systemId}`。伺服器另外寫入一個**獨立的**變數 `effectiveInitiator`（值為 `firstTaskAssignee`），後續節點要引用經辦人請用 `${effectiveInitiator}` 而**不是** `${initiator}`。
+   ⚠️ **這一點寫錯過，而它正是工項 #83 的成因**：舊版本文寫「後續節點的 `initiator` 可替換為實際經辦人」，設計師照著在**補件關卡**寫了 `flowable:assignee="${initiator}"` → 執行期求值得到 `system:erp` → 四個持有者條件全不命中、候選人也看不到（`taskCandidateUser` 帶 `ASSIGNEE_ IS NULL`，與 assignee **互斥**）→ **案件永久卡死且無任何告警**。現在補件關卡改用 `${applicantResolver.resolve(execution)}`，規則是 `onBehalfOf` → `initiator`（是人的話）→ 權限碼 `bpm:external:revision` 指定的受理人。
 4. **BPMN Lint 規則**：若流程定義允許外部系統發起（在 ProcessVariableSpec 中標記），驗證第一個 UserTask 不使用 `initiator` EL 函數
 
 ```java
