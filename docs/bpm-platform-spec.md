@@ -990,6 +990,33 @@ bpmn-js Properties Panel 中，UserTask 節點提供「審核對象類型」下�
 }
 ```
 
+#### 流程層 Webhook 設定（`<process>` 層）
+
+節點層之外，`<process>` 元素本身也可設定 webhook，語法與節點層完全對稱，容器掛在 `<process>` 的 `extensionElements`：
+
+```xml
+<process id="leave-approval" isExecutable="true">
+  <extensionElements>
+    <flowable:webhooks>
+      <flowable:webhook event="process.completed" url="https://erp.example/done" method="POST"/>
+    </flowable:webhooks>
+  </extensionElements>
+  ...
+</process>
+```
+
+流程層只有一個事件（流程結案），`event` 對應規則如下：
+
+| `event` 值 | 是否投遞 | 說明 |
+|-----------|---------|------|
+| `process.completed` | ✅ | 正式名稱（省略時的預設值） |
+| `complete` | ✅ | 與節點層同名，方便從節點層遷移 |
+| `all` | ✅ | 每個事件都投遞的逃生門 |
+| 省略 | ✅ | 視為 `process.completed`（`WebhookConfig.DEFAULT_PROCESS_EVENT`） |
+| `create` / `timeout` / `reject` | ❌ | 這些是節點層的事件，流程層不推導 |
+
+未設定時，結案**完全不發送** webhook 訊息（佇列不留雜訊、DLQ 不混入從不該投遞的訊息）。讀取來源與節點層共用同一份解析邏輯（`WebhookConfigResolver.resolveForProcess`），因此「有 `<flowable:webhooks>` 元素即為權威、空元素代表清空、完全沒有新元素才回讀舊 `<documentation>` 格式」這兩層完全一致。SSRF 判定仍只由 `WebhookUrlPolicy`（consumer 端）負責，listener 與 resolver 不做任何 URL 格式檢查。
+
 後端透過 Flowable TaskListener / ExecutionListener 攔截事件，觸發對應 webhook：
 
 ```java
@@ -1030,7 +1057,7 @@ public class WebhookTaskListener implements TaskListener {
 | `task.completed` (returned) | operatorId, operatorName, action="returned", returnTo, comment | 退回 |
 | `task.rejected` | operatorId, operatorName, action="rejected", rejectReason | 拒絕（流程終止） |
 | `task.timeout` | assignee, createdAt, dueDate, overdueHours | 超時未處理 |
-| `process.completed` | result ("approved"/"rejected"), allVariables | 流程結案 |
+| `process.completed` | result ("approved"/"rejected"/"returned"/"unknown"), businessKey | 流程結案（刻意不送流程變數，見下） |
 
 Payload 範例（同意）：
 
@@ -1057,7 +1084,7 @@ Payload 範例（同意）：
 
 `variables` 範圍規則：
 - 節點事件（task.*）：**僅送該節點寫入/修改的變數**，避免暴露流程內部資訊
-- 流程結案事件（process.completed）：送完整流程變數
+- 流程結案事件（process.completed）：**不送流程變數**，只送 `result` 與 `businessKey`（後者已在共用欄位）。表單欄位 id 就是流程變數名（§8.5），外送全部變數等於把薪資、身分證號等表單內容原封不動送到外部 URL，而且沒有任何白名單（security-audit P2-1）。需要明細的接收端應回頭呼叫 API（該路徑有授權）。
 - 若外部系統需要特定變數，透過 `payloadTemplate` 自訂 payload 結構
 
 ### 11.5 待辦清單查詢（三種來源合併）

@@ -1,6 +1,7 @@
 package com.bpm.core.webhook;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.flowable.bpmn.model.BaseElement;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.ExtensionElement;
 import org.flowable.bpmn.model.FlowElement;
@@ -15,7 +16,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 從 BPMN 讀出節點層的 webhook 設定（spec §11.4，#67 的斷線 (A)）。
+ * 從 BPMN 讀出 webhook 設定（spec §11.4，#67 的斷線 (A)）。
+ *
+ * <p>支援兩層，讀取規則完全對稱：
+ * <ul>
+ *   <li><b>節點層</b> —— {@link #resolve(String, String)}，讀 {@code <userTask>} 等
+ *       {@link FlowElement} 上的設定，未填 event 預設 {@code create}。</li>
+ *   <li><b>流程層</b> —— {@link #resolveForProcess(String)}，讀 {@code <process>}
+ *       上的設定，未填 event 預設 {@code process.completed}。</li>
+ * </ul>
+ * 兩層共用同一組私有解析方法，所以「格式優先順序」與「有元素就是權威」只寫一份。
  *
  * <h2>這裡補的是什麼</h2>
  *
@@ -143,22 +153,64 @@ public class WebhookConfigResolver {
         }
         if (element == null) return List.of();
 
-        List<WebhookConfig> fromExtension = fromExtensionElements(element);
+        List<WebhookConfig> fromExtension = fromExtensionElements(element, WebhookConfig.DEFAULT_EVENT);
         if (!fromExtension.isEmpty()) return fromExtension;
 
         // ⚠️ 「有 webhooks 元素但內容是空的」必須仍然回空清單，
         // 不能落到舊格式 —— 見類別註解「有元素就是權威」那段。
         if (hasWebhooksElement(element)) return List.of();
 
-        return fromLegacyDocumentation(element);
+        return fromLegacyDocumentation(element, element.getDocumentation(), WebhookConfig.DEFAULT_EVENT);
     }
 
-    /** 節點上是否<b>存在</b> {@code <flowable:webhooks>} 元素（不管裡面有沒有東西）。 */
-    private boolean hasWebhooksElement(FlowElement element) {
+    /**
+     * 取出某個<b>流程</b>（{@code <process>}）層設定的 webhook（spec §11.4）。
+     *
+     * <p>與 {@link #resolve(String, String)} 完全對稱，差別只在讀的是
+     * {@code <process>} 這個 {@link BaseElement} 的 extension elements／documentation，
+     * 而不是某個節點；以及「未填 event」的預設值是
+     * {@link WebhookConfig#DEFAULT_PROCESS_EVENT}（{@code process.completed}），
+     * 不是節點層的 {@code create}。
+     *
+     * <p>⚠️ 解析邏輯與節點層<b>共用同一份</b> {@link #fromExtensionElements}／
+     * {@link #hasWebhooksElement}／{@link #fromLegacyDocumentation}，<b>不</b>另寫一份。
+     * 「有 {@code <flowable:webhooks>} 元素就是權威（即使內容是空的）」
+     * 這條規則因此在兩層自動一致。
+     *
+     * @param processDefinitionId 流程定義 id（{@code key:version:deploymentId}）
+     * @return 沒有設定時回空清單，<b>不</b>回 null
+     */
+    public List<WebhookConfig> resolveForProcess(String processDefinitionId) {
+        if (processDefinitionId == null) return List.of();
+
+        Process process;
+        try {
+            BpmnModel model = repositoryService.getBpmnModel(processDefinitionId);
+            process = processOf(model, processDefinitionId);
+        } catch (Exception e) {
+            // 與節點層同樣的取捨：設定讀不到頂多是不投遞，不得讓結案失敗。
+            log.warn("讀取流程 {} 的流程層 webhook 設定失敗，本次結案不投遞：{}",
+                    processDefinitionId, e.toString());
+            return List.of();
+        }
+        if (process == null) return List.of();
+
+        List<WebhookConfig> fromExtension =
+                fromExtensionElements(process, WebhookConfig.DEFAULT_PROCESS_EVENT);
+        if (!fromExtension.isEmpty()) return fromExtension;
+
+        if (hasWebhooksElement(process)) return List.of();
+
+        return fromLegacyDocumentation(
+                process, process.getDocumentation(), WebhookConfig.DEFAULT_PROCESS_EVENT);
+    }
+
+    /** 元素上是否<b>存在</b> {@code <flowable:webhooks>} 元素（不管裡面有沒有東西）。 */
+    private boolean hasWebhooksElement(BaseElement element) {
         return !element.getExtensionElements().getOrDefault(WebhookConfig.ELEMENT, List.of()).isEmpty();
     }
 
-    private List<WebhookConfig> fromExtensionElements(FlowElement element) {
+    private List<WebhookConfig> fromExtensionElements(BaseElement element, String defaultEvent) {
         List<WebhookConfig> out = new ArrayList<>();
         for (ExtensionElement container : element.getExtensionElements()
                 .getOrDefault(WebhookConfig.ELEMENT, List.of())) {
@@ -171,10 +223,11 @@ public class WebhookConfigResolver {
                 WebhookConfig cfg = WebhookConfig.of(
                         hook.getAttributeValue(null, WebhookConfig.ATTR_EVENT),
                         hook.getAttributeValue(null, WebhookConfig.ATTR_URL),
-                        hook.getAttributeValue(null, WebhookConfig.ATTR_METHOD));
+                        hook.getAttributeValue(null, WebhookConfig.ATTR_METHOD),
+                        defaultEvent);
                 if (cfg == null) {
-                    log.warn("節點 {} 有 {} 元素但沒有 url 屬性，忽略該筆設定（id={}）",
-                            element.getId(), WebhookConfig.CHILD, element.getId());
+                    log.warn("元素 {} 有 {} 元素但沒有 url 屬性，忽略該筆設定",
+                            element.getId(), WebhookConfig.CHILD);
                     continue;
                 }
                 out.add(cfg);
@@ -192,8 +245,7 @@ public class WebhookConfigResolver {
      * 但若有人在同一個節點上又補了一段一般說明，那段會蓋掉它 ——
      * 這是舊格式的先天限制，{@link #resolve} 的說明裡說明新格式不受影響。
      */
-    private List<WebhookConfig> fromLegacyDocumentation(FlowElement element) {
-        String doc = element.getDocumentation();
+    private List<WebhookConfig> fromLegacyDocumentation(BaseElement element, String doc, String defaultEvent) {
         if (doc == null || !doc.startsWith(LEGACY_DOC_PREFIX)) return List.of();
 
         String json = doc.substring(LEGACY_DOC_PREFIX.length()).trim();
@@ -201,23 +253,24 @@ public class WebhookConfigResolver {
         try {
             var tree = objectMapper.readTree(json);
             if (!tree.isArray()) {
-                log.warn("節點 {} 的舊格式 webhook 設定不是陣列，忽略：{}", element.getId(), json);
+                log.warn("元素 {} 的舊格式 webhook 設定不是陣列，忽略：{}", element.getId(), json);
                 return List.of();
             }
             for (var node : tree) {
                 WebhookConfig cfg = WebhookConfig.of(
                         text(node, WebhookConfig.ATTR_EVENT),
                         text(node, WebhookConfig.ATTR_URL),
-                        text(node, WebhookConfig.ATTR_METHOD));
+                        text(node, WebhookConfig.ATTR_METHOD),
+                        defaultEvent);
                 if (cfg == null) {
-                    log.warn("節點 {} 的舊格式 webhook 設定缺少 url，忽略該筆", element.getId());
+                    log.warn("元素 {} 的舊格式 webhook 設定缺少 url，忽略該筆", element.getId());
                     continue;
                 }
                 out.add(cfg);
             }
         } catch (Exception e) {
             // 同上：設定壞掉不得讓流程建立失敗。
-            log.warn("節點 {} 的舊格式 webhook 設定無法解析，本節點不投遞：{}",
+            log.warn("元素 {} 的舊格式 webhook 設定無法解析，本元素不投遞：{}",
                     element.getId(), e.toString());
             return List.of();
         }
