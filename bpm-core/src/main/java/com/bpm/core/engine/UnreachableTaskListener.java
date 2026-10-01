@@ -192,6 +192,13 @@ public class UnreachableTaskListener implements FlowableEventListener {
         // 應該在<b>寫入端</b>擋（#88 已在外部 API 做了），listener 這一層的
         // 職責是<b>寫入端漏掉時仍然看得見</b>，兩者不可互相取代 ——
         // 與 BpmnLintService 規則 h 對這個 listener 的註解是同一個道理。
+        //
+        // ⚠️ 2026-10-01（#91 方向 B）：BPMN 運算式求值為空白那條路徑已在
+        // 引擎的寫入端根治 —— BlankAssigneeNormalizingInterceptor（全域
+        // CreateUserTaskInterceptor）於 handleAssignments 之後把空白 assignee
+        // 收斂成 null。本 listener 的判準與職責都不變：它仍是最後一道，
+        // 負責在寫入端漏掉時（例如 setAssignee 等其他寫入端）告警。
+        // 兩者互補，不可互相取代。
         if (hasCandidate && assignee == null) return;
 
         Map<String, Object> detail = new LinkedHashMap<>();
