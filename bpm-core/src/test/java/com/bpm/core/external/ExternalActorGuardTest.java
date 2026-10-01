@@ -317,27 +317,40 @@ class ExternalActorGuardTest {
             return sys;
         }
 
-        private List<String> accepted(String whitelist, String raw) {
+        /**
+         * 相容形狀的切分，與 {@code ExternalApiController.parseCandidateGroups}
+         * 對逗號分隔字串做的事相同。
+         *
+         * <p>⚠️ 這裡<b>刻意</b>保留一份切分：它不是「規則的第二份」，
+         * 形狀解析只有 controller 那一份（見 #93 的 javadoc）。這個 helper
+         * 只是讓下面那些以逗號分隔字串表達的測試維持可讀 —— 守衛本身
+         * <b>不再</b>切分，所以它收到什麼就是什麼（元素未 trim）。
+         */
+        private static List<String> csv(String raw) {
+            return raw == null ? null : List.of(raw.split(",", -1));
+        }
+
+        private List<String> accepted(String whitelist, List<String> raw) {
             return guard.requireAllowedCandidateGroups(system(whitelist), raw);
         }
 
-        private ResponseStatusException groupRejected(String whitelist, String raw) {
+        private ResponseStatusException groupRejected(String whitelist, List<String> raw) {
             try {
                 accepted(whitelist, raw);
             } catch (ResponseStatusException e) {
                 return e;
             }
-            throw new AssertionError("預期被拒絕，但沒有拋例外: [" + raw + "]");
+            throw new AssertionError("預期被拒絕，但沒有拋例外: " + raw);
         }
 
         @Test
         @DisplayName("白名單內的群組必須放行（對照組：不得「擋掉全部群組」）")
         void listedGroupsPass() {
-            assertThat(accepted("[\"dept001\",\"hr:leave:approve\"]", "dept001,hr:leave:approve"))
+            assertThat(accepted("[\"dept001\",\"hr:leave:approve\"]", csv("dept001,hr:leave:approve")))
                     .containsExactly("dept001", "hr:leave:approve");
             // 權限碼形狀是本專案自己的 BPMN 會產生的（ExternalSystemPolicy 的說明），
             // 一個「假設每個群組都是部門」的實作會擋掉它。
-            assertThat(accepted("[\"hr:leave:approve\"]", "hr:leave:approve"))
+            assertThat(accepted("[\"hr:leave:approve\"]", csv("hr:leave:approve")))
                     .containsExactly("hr:leave:approve");
         }
 
@@ -347,7 +360,7 @@ class ExternalActorGuardTest {
             // ⚠️ 這條同時是「既有資料為什麼不需要回填」的答案：
             // migration 之後既有系統的這個欄位一律是 null，而它必須照常工作。
             for (String whitelist : new String[]{null, "", "   "}) {
-                assertThat(accepted(whitelist, "dept001,hr:leave:approve,anything"))
+                assertThat(accepted(whitelist, csv("dept001,hr:leave:approve,anything")))
                         .as("白名單留空代表不限制: [" + whitelist + "]")
                         .containsExactly("dept001", "hr:leave:approve", "anything");
             }
@@ -356,14 +369,14 @@ class ExternalActorGuardTest {
         @Test
         @DisplayName("明確的空清單 [] → 拒絕全部（合法設定，不是「不限制」）")
         void emptyJsonArrayDeniesAll() {
-            assertThat(groupRejected("[]", "dept001").getStatusCode())
+            assertThat(groupRejected("[]", csv("dept001")).getStatusCode())
                     .isEqualTo(HttpStatus.FORBIDDEN);
         }
 
         @Test
         @DisplayName("白名單外的群組 → 403，且指名是哪一個群組")
         void unlistedGroupIsForbidden() {
-            var e = groupRejected("[\"dept001\"]", "dept001,hr:leave:approve");
+            var e = groupRejected("[\"dept001\"]", csv("dept001,hr:leave:approve"));
 
             assertThat(e.getStatusCode())
                     .as("白名單是授權維度 → 403，與 allowedProcessKeys 的 403 同類")
@@ -377,9 +390,9 @@ class ExternalActorGuardTest {
         @DisplayName("子串不得誤放行（沿用 R-09 的精確比對）")
         void substringMustNotPass() {
             // 與 isProcessKeyAllowed 同一個坑：集合比對不是子串比對。
-            assertThat(groupRejected("[\"hr:leave:approve\"]", "hr:leave").getStatusCode())
+            assertThat(groupRejected("[\"hr:leave:approve\"]", csv("hr:leave")).getStatusCode())
                     .isEqualTo(HttpStatus.FORBIDDEN);
-            assertThat(groupRejected("[\"dept001\"]", "dept0011").getStatusCode())
+            assertThat(groupRejected("[\"dept001\"]", csv("dept0011")).getStatusCode())
                     .isEqualTo(HttpStatus.FORBIDDEN);
         }
 
@@ -389,10 +402,10 @@ class ExternalActorGuardTest {
             // 見 requireAllowedCandidateGroups 的 javadoc：丟棄不是放寬
             // （沒有人是空字串群組的成員），但它讓白名單的錯誤訊息不會
             // 指名一個「看得見但看不懂」的群組名。
-            assertThat(accepted("[\"dept001\"]", " dept001 , , "))
+            assertThat(accepted("[\"dept001\"]", csv(" dept001 , , ")))
                     .containsExactly("dept001");
             // 全部都是空白 → 沒有群組。呼叫端的「至少有一個」規則會看到這一點。
-            assertThat(accepted("[\"dept001\"]", " , ")).isEmpty();
+            assertThat(accepted("[\"dept001\"]", csv(" , "))).isEmpty();
         }
 
         @Test
@@ -409,7 +422,7 @@ class ExternalActorGuardTest {
             // 「驗證了 3 個群組、實際寫了 4 個」這種 bug 不會有任何錯誤。
             // 所以這裡斷言「回傳的清單就是被驗過的那一份」：
             // 空白被丟棄、重複被去重、順序保留。
-            assertThat(accepted("[\"dept001\",\"dept002\"]", "dept002, dept001 ,dept002"))
+            assertThat(accepted("[\"dept001\",\"dept002\"]", csv("dept002, dept001 ,dept002")))
                     .as("去重且保留書寫順序")
                     .containsExactly("dept002", "dept001");
         }
