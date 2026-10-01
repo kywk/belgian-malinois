@@ -62,6 +62,10 @@ public class TaskController {
     private final AuditEventPublisher auditPublisher;
     private final com.bpm.core.security.ProcessAccessGuard accessGuard;
     private final com.bpm.core.security.TaskHolderGuard holderGuard;
+    // #92：改派對象必須是組織系統認識的人。與 #88 的 firstTaskAssignee /
+    // onBehalfOf 共用同一份規則（ExternalActorGuard）—— 「規則只能有一份」
+    // 是本專案的硬規則，同一條規則有兩套形狀正是 #84／#86 的成因。
+    private final com.bpm.core.external.ExternalActorGuard actorGuard;
     // #68b：待辦清單的「代某某發起」標示。
     private final com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup;
 
@@ -74,6 +78,7 @@ public class TaskController {
                           // 其中一處，就會出現「看得到、點進去被拒」那種組合
                           // 型式的差異，而那種差異比沒有檢查更難察覺。
                           com.bpm.core.security.TaskHolderGuard holderGuard,
+                          com.bpm.core.external.ExternalActorGuard actorGuard,
                           com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup) {
         this.taskService = taskService;
         this.runtimeService = runtimeService;
@@ -81,6 +86,7 @@ public class TaskController {
         this.auditPublisher = auditPublisher;
         this.accessGuard = accessGuard;
         this.holderGuard = holderGuard;
+        this.actorGuard = actorGuard;
         this.onBehalfOfLookup = onBehalfOfLookup;
     }
 
@@ -307,7 +313,12 @@ public class TaskController {
                 // 順帶關掉一個洞：改動前 {"action":"claim","assignee":"其他人"}
                 // 會<b>代別人認領</b>。那不是 claim 的語意（claim 是「這是我的」），
                 // 而且等於讓持有者指定任意受理人 —— 那是 reassign 的工作，
-                // 而 reassign 自己也還沒驗證新受理人（P1-4，尚未施作）。
+                // 而 reassign 的新受理人自 #92 起已由 ExternalActorGuard
+                // 驗過「是不是組織系統認識的人」。
+                //
+                // ⚠️ claim 自己的身分不需要外部查詢：認領者就是呼叫者
+                // （callerId），而呼叫端能通過閘道就代表他是個真實登入者。
+                // 這與 reassign 必須打網路是兩種不同的情形，不要合併。
                 String claimant = callerId;
                 try {
                     taskService.claim(id, claimant);
@@ -367,6 +378,17 @@ public class TaskController {
                 // 守衛若不放行 delegatee 就等於把委派功能打死。
                 // 由 TaskHolderGuard 的條件 1（assignee）涵蓋，
                 // 見 TaskHolderGuard 類別註解的 delegate／resolve 生命週期分析。
+                //
+                // ⚠️ 已知缺口（**刻意不在本工項修**，回報給 PM）：delegateUser
+                // 與 #92 修掉的 reassign assignee 是**同一個形狀的缺陷** ——
+                // 指給一個組織系統不認識的字串，任務就沒有人能簽、也沒有告警。
+                // 兩者的差別只有一個：delegate 之後 assignee 會變成 delegatee，
+                // 而 owner 仍然是原指派人（TaskHolderGuard 條件 2），
+                // 所以 owner 還能 resolve 把它收回來 —— 後果比 reassign 輕，
+                // 但缺陷本質相同。
+                // 沒有順手修的理由：本工項的範圍由 PM 界定為 reassign，
+                // 而在 delegate 加上網路查詢會擴大這個端點的交易內 HTTP 呼叫量
+                // （委派可以連續發生好幾輪）。是否併入同一個工項是政策決定。
                 taskService.delegateTask(id, req.delegateUser());
                 auditType = OperationType.TASK_DELEGATE;
             }
@@ -389,13 +411,67 @@ public class TaskController {
                 // 語意檢查（#77）：改派是持有者的權力，所以與其他 action
                 // 套用同一條守衛 —— 非持有者不得改派任何人的任務。
                 //
-                // ⚠️ 仍未檢查新 assignee 是否為該任務的候選人 —— 持有者目前
-                // 可以把任務指給任意 id。那是 P1-4 的另一半，本次不處理
-                // （範圍是「誰能動這個任務」，不是「能指派給誰」）。
+                // ── #92：形狀檢查（必須指定 assignee）────────────────
+                //
+                // ⚠️ 這一格是**形狀**檢查，與下面的**身分**檢查是兩件事：
+                // 「有沒有給一個值」與「給的那個值是不是人」不可互相取代。
+                // 刻意保留這個明確的 400（而不是直接交給 actorGuard）：
+                // actorGuard 對空白的訊息是為 firstTaskAssignee 寫的
+                // （會提到改用候選群組），對 reassign 而言是誤導 ——
+                // 「沒給 assignee」在這裡只有一種意義，就是 payload 少了一欄。
                 if (req.assignee() == null || req.assignee().isBlank()) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "reassign 必須指定 assignee");
                 }
+
+                // ── #92：改派對象必須是組織系統認識的人 ────────────────
+                //
+                // 缺陷（改動前這裡只有上面的空白檢查）：
+                //   holder = mgr001 送出 {"action":"reassign","assignee":"nobody-xyz"}
+                //   → setAssignee(taskId, "nobody-xyz") 成功 → 200 {"status":"ok"}
+                //   → assignee 非 null，Flowable 的候選人查詢帶著 ASSIGNEE_ IS NULL，
+                //     所以**候選人救不了它**（兩個條件互斥）
+                //   → UnreachableTaskListener 的判準是「有沒有人能動它」，
+                //     而 nobody-xyz 非空白、非 system: 前綴 → **不告警**
+                //   → 結果：一個沒有人看得到、沒有人能簽、也沒有任何告警的任務。
+                //
+                // 為什麼重用 ExternalActorGuard.requireKnownPerson 而不在此寫一份：
+                // 「指派給誰」這條規則在 #88 已經有了唯一一份實作
+                // （firstTaskAssignee 與 onBehalfOf 共用），本專案反覆記載的
+                // 缺陷成因就是同一條規則有兩套形狀（#84／#86／#87）——
+                // 兩處各自維護時，只要有人改了其中一處，就會出現
+                // 「外部入口擋掉、加派擋掉，改派卻放行」那種組合型式的差異，
+                // 而那種差異比沒有檢查更難察覺。
+                //
+                // 為什麼驗的是「**是不是人**」而不是「**是不是候選人**」：
+                // 後者比本規則嚴格得多，而且會打斷合法功能。主管把任務改派給
+                // 一位不在啟動時產生的候選清單裡、但確實該處理的人，是正常業務
+                // 行為（出差、代班、跨部門支援）；候選清單是流程啟動時的**建議**，
+                // 不是改派的白名單。若拿它當白名單，唯一合法結果是把
+                // 「改派」這個功能整個打死。使用者要擋的是「指給一個沒有人
+                // 認得、也沒有人能登入的字串」，那正是「是不是人」，
+                // 與 ExternalActorGuard 回答的問題完全相同。
+                //
+                // ⚠️ 改派給「候選清單以外的人」是**刻意允許**的，
+                // 由 ReassignKnownPersonTest.reassignToKnownPersonOutsideCandidateListIsAllowed
+                // 釘住 —— 那條測試是本決定的唯一防護門。
+                // 「只能指派給候選人」若日後被視為需求，那是**另一個工項**
+                // （需要裁決，且必須連同例外路徑一起設計），不該順手加在這裡。
+                //
+                // 排序：排在 requireHolder 之後、排在空白檢查之後、排在寫入之前。
+                //   * 必須在 requireHolder 之後：持有者是唯一有權改派的人，
+                //     對非持有者應該是 404（授權），而不是 400（payload 形狀）。
+                //     這也守住 #83 agent 拒絕過的誘惑 —— 新檢查不得放寬持有者守衛。
+                //   * 必須在形狀檢查之後：與本方法既有的「形狀 → 授權 → 身分欄位」
+                //     一致（見本方法 javadoc 末段：MockMvc 不做 error dispatch，
+                //     狀態碼差異會被既有測試綁死）。
+                //   * 必須在 setAssignee 之前：擋在寫入之後就留下一個已經
+                //     指派、卻沒有人能簽的任務 —— 那正是要修的缺陷本身。
+                //
+                // 狀態碼沿用 ExternalActorGuard 既有行為（不自創第四組政策）：
+                // 組織系統「查無此人」→ 400（呼叫端該改 payload）；
+                // 組織系統「故障」→ 503（可安全重試，此時尚未寫入任何東西）。
+                actorGuard.requireKnownPerson("assignee", req.assignee());
                 taskService.setAssignee(id, req.assignee());
                 auditType = OperationType.TASK_REASSIGN;
             }
