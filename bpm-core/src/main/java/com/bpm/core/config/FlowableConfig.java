@@ -71,9 +71,15 @@ public class FlowableConfig {
             BpmPermissionService permService,
             BpmQueryService bpmQueryService,
             NotifyTaskListener notifyTaskListener,
-            com.bpm.core.webhook.WebhookTaskListener webhookTaskListener) {
+            com.bpm.core.webhook.WebhookTaskListener webhookTaskListener,
+            com.bpm.core.engine.BlankAssigneeNormalizingInterceptor blankAssigneeNormalizingInterceptor) {
         return config -> {
             config.setEventListeners(List.of(processCompletedListener, unreachableTaskListener));
+            // #91 方向 B：所有 UserTask 建立後，把求值為空白的 assignee 正規化成 null。
+            // 必須是全域的 CreateUserTaskInterceptor —— 見該類別註解說明為什麼
+            // engine event listener／per-BPMN task listener／ActivityBehaviorFactory
+            // 都不行。它只在 handleAssignments 之後跑，所以是既有 row 的 UPDATE。
+            config.setCreateUserTaskInterceptor(blankAssigneeNormalizingInterceptor);
             config.setBeans(Map.of(
                     "orgService", orgService,
                     "permService", permService,
