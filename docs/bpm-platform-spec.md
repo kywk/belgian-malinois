@@ -990,6 +990,33 @@ bpmn-js Properties Panel 中，UserTask 節點提供「審核對象類型」下�
 }
 ```
 
+#### 流程層 Webhook 設定（`<process>` 層）
+
+節點層之外，`<process>` 元素本身也可設定 webhook，語法與節點層完全對稱，容器掛在 `<process>` 的 `extensionElements`：
+
+```xml
+<process id="leave-approval" isExecutable="true">
+  <extensionElements>
+    <flowable:webhooks>
+      <flowable:webhook event="process.completed" url="https://erp.example/done" method="POST"/>
+    </flowable:webhooks>
+  </extensionElements>
+  ...
+</process>
+```
+
+流程層只有一個事件（流程結案），`event` 對應規則如下：
+
+| `event` 值 | 是否投遞 | 說明 |
+|-----------|---------|------|
+| `process.completed` | ✅ | 正式名稱（省略時的預設值） |
+| `complete` | ✅ | 與節點層同名，方便從節點層遷移 |
+| `all` | ✅ | 每個事件都投遞的逃生門 |
+| 省略 | ✅ | 視為 `process.completed`（`WebhookConfig.DEFAULT_PROCESS_EVENT`） |
+| `create` / `timeout` / `reject` | ❌ | 這些是節點層的事件，流程層不推導 |
+
+未設定時，結案**完全不發送** webhook 訊息（佇列不留雜訊、DLQ 不混入從不該投遞的訊息）。讀取來源與節點層共用同一份解析邏輯（`WebhookConfigResolver.resolveForProcess`），因此「有 `<flowable:webhooks>` 元素即為權威、空元素代表清空、完全沒有新元素才回讀舊 `<documentation>` 格式」這兩層完全一致。SSRF 判定仍只由 `WebhookUrlPolicy`（consumer 端）負責，listener 與 resolver 不做任何 URL 格式檢查。
+
 後端透過 Flowable TaskListener / ExecutionListener 攔截事件，觸發對應 webhook：
 
 ```java
@@ -1008,29 +1035,37 @@ public class WebhookTaskListener implements TaskListener {
 
 #### Webhook Payload 規格
 
-所有事件共用欄位：
+所有事件共用的 **payload body** 欄位：
 
 | 欄位 | 型別 | 說明 |
 |------|------|------|
 | event | string | 事件類型 |
-| timestamp | string | 事件時間 (UTC, ISO 8601) |
+| timestamp | string | **事件發生時間** (UTC, ISO 8601)。⚠️ 這是 body 內的事件時間；投遞時間另見標頭 `X-BPM-Timestamp` |
 | processInstanceId | string | 流程實例 ID |
 | processDefinitionKey | string | 流程定義 key |
 | businessKey | string | 業務單號 |
 | taskId | string | 任務 ID |
 | taskName | string | 任務名稱 |
-| hmacSignature | string | HMAC-SHA256 簽章（防偽造） |
+
+投遞時的 **HTTP 標頭**（由 `WebhookConsumer` 附加，**不在 body** —— 整合方驗章請讀標頭，不要從 body 找簽章欄位）：
+
+| 標頭 | 值 | 說明 |
+|------|-----|------|
+| `Content-Type` | `application/json` | body 為 JSON |
+| `X-BPM-Signature` | `sha256=<hex>` | 對**實際送出的 body** 計算的 HMAC-SHA256（防偽造）。⚠️ 只放標頭、**不進 body** |
+| `X-BPM-Timestamp` | ISO 8601 | 投遞時間（body 另含 `deliveryTimestamp` 同值） |
+| `X-BPM-Delivery-Id` | UUID | 投遞識別碼，供重放偵測（body 另含 `deliveryId` 同值） |
 
 各事件額外欄位：
 
 | 事件 | 額外欄位 | 說明 |
 |------|---------|------|
 | `task.created` | assignee, candidateUsers, candidateGroups, dueDate | 任務建立 |
-| `task.completed` (approved) | operatorId, operatorName, action="approved", comment, variables | 同意 |
+| `task.completed` (approved) | operatorId, operatorName, action="approved", comment | 同意 |
 | `task.completed` (returned) | operatorId, operatorName, action="returned", returnTo, comment | 退回 |
 | `task.rejected` | operatorId, operatorName, action="rejected", rejectReason | 拒絕（流程終止） |
 | `task.timeout` | assignee, createdAt, dueDate, overdueHours | 超時未處理 |
-| `process.completed` | result ("approved"/"rejected"), allVariables | 流程結案 |
+| `process.completed` | result ("approved"/"rejected"/"returned"/"unknown"), businessKey | 流程結案（刻意不送流程變數，見下） |
 
 Payload 範例（同意）：
 
@@ -1046,18 +1081,15 @@ Payload 範例（同意）：
     "operatorId": "manager001",
     "operatorName": "李主管",
     "action": "approved",
-    "comment": "同意報名",
-    "variables": {
-        "approved": true,
-        "approverComment": "同意報名"
-    },
-    "hmacSignature": "sha256=xxxxxxxx"
+    "comment": "同意報名"
 }
 ```
 
+簽章 `sha256=...` 走 HTTP 標頭 `X-BPM-Signature`，**不在** body（見上表）；節點事件**不送** `variables`（見下）。
+
 `variables` 範圍規則：
-- 節點事件（task.*）：**僅送該節點寫入/修改的變數**，避免暴露流程內部資訊
-- 流程結案事件（process.completed）：送完整流程變數
+- 節點事件（task.*）：**不送 `variables`**，只送該事件的基本欄位（見「各事件額外欄位」表）。表單欄位 id 就是流程變數名（§8.5），外送變數等於把該關卡表單的全部內容（可能含薪資、身分證號）原封不動送到外部 URL，而且沒有任何白名單（security-audit P2-1）。需要明細的接收端應回頭呼叫 API（該路徑有授權）。
+- 流程結案事件（process.completed）：**不送流程變數**，只送 `result` 與 `businessKey`（後者已在共用欄位）。表單欄位 id 就是流程變數名（§8.5），外送全部變數等於把薪資、身分證號等表單內容原封不動送到外部 URL，而且沒有任何白名單（security-audit P2-1）。需要明細的接收端應回頭呼叫 API（該路徑有授權）。
 - 若外部系統需要特定變數，透過 `payloadTemplate` 自訂 payload 結構
 
 ### 11.5 待辦清單查詢（三種來源合併）

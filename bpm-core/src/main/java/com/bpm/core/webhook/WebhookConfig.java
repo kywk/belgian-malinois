@@ -48,6 +48,16 @@ public record WebhookConfig(String event, String url, String method) {
     public static final String DEFAULT_EVENT = "create";
 
     /**
+     * 流程層（{@code <process>}）未指定 event 時的預設值。
+     *
+     * <p>⚠️ 不可與 {@link #DEFAULT_EVENT} 合併。節點層的前端選單第一項是
+     * {@code create}，但流程層（#67）只有結案這一個事件；沿用 {@code create}
+     * 會讓「省略 event」的流程層設定被存成一筆永遠對不上事件的 {@code create}，
+     * 症狀是設定成功、畫面正常、卻永遠不投遞 —— 正是本專案反覆在對付的靜默失效。
+     */
+    public static final String DEFAULT_PROCESS_EVENT = "process.completed";
+
+    /**
      * 整理成一筆可用的設定。
      *
      * <p>URL 空白 → 回 {@code null}（代表「這一筆不成立」）。
@@ -57,8 +67,20 @@ public record WebhookConfig(String event, String url, String method) {
      * 規則只能有一份）。這裡只做「有沒有填」這種無歧義的整理。
      */
     static WebhookConfig of(String event, String url, String method) {
+        return of(event, url, method, DEFAULT_EVENT);
+    }
+
+    /**
+     * 與 {@link #of(String, String, String)} 相同，但可指定「未填 event」時用的預設值。
+     *
+     * <p>存在的唯一理由是流程層：{@code <process>} 上省略 event 代表
+     * {@link #DEFAULT_PROCESS_EVENT}（{@code process.completed}），
+     * 而不是節點層的 {@code create}。兩層的預設值不同是<b>語意</b>不同，
+     * 不是重複；把節點層的預設直接改成 {@code process.completed} 會弄壞節點層。
+     */
+    static WebhookConfig of(String event, String url, String method, String defaultEvent) {
         if (url == null || url.isBlank()) return null;
-        String e = (event == null || event.isBlank()) ? DEFAULT_EVENT : event.trim();
+        String e = (event == null || event.isBlank()) ? defaultEvent : event.trim();
         String m = (method == null || method.isBlank()) ? DEFAULT_METHOD : method.trim();
         return new WebhookConfig(e, url.trim(), m);
     }

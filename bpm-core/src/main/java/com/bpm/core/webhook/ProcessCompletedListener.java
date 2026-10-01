@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.springframework.context.annotation.Lazy;
@@ -25,6 +26,17 @@ public class ProcessCompletedListener implements FlowableEventListener {
     private final RabbitTemplate rabbitTemplate;
     private final RuntimeService runtimeService;
     private final HistoryService historyService;
+
+    /**
+     * 流程層 webhook 設定的來源（#67 斷線 (A) 的第四個實例）。
+     *
+     * <p>與節點層共用同一個 {@link WebhookConfigResolver}：它讀的是
+     * {@code <process>} 上的 {@code <flowable:webhooks>}，規則與節點層對稱。
+     *
+     * <p>⚠️ 這裡<b>不</b>需要 {@code @Lazy}：resolver 自己對
+     * {@code RepositoryService} 才是 {@code @Lazy}，循環在那一層就斷開了。
+     */
+    private final WebhookConfigResolver configResolver;
 
     /**
      * ⚠️ {@code @Lazy} 不可移除 —— Stage 4 已實測確認（2026-09-28）。
@@ -52,10 +64,12 @@ public class ProcessCompletedListener implements FlowableEventListener {
     public ProcessCompletedListener(RabbitTemplate rabbitTemplate,
                                     @Lazy RuntimeService runtimeService,
                                     @Lazy HistoryService historyService,
+                                    WebhookConfigResolver configResolver,
                                     com.bpm.core.audit.AuditEventPublisher auditPublisher) {
         this.rabbitTemplate = rabbitTemplate;
         this.runtimeService = runtimeService;
         this.historyService = historyService;
+        this.configResolver = configResolver;
         this.auditPublisher = auditPublisher;
     }
 
@@ -115,6 +129,33 @@ public class ProcessCompletedListener implements FlowableEventListener {
                             "finalVariablesResolved", !vars.isEmpty()),
                     Instant.now()));
 
+            // ── 流程層 webhook 的投遞設定（#67 斷線 (A) 的第四個實例）──
+            //
+            // 改動前這裡無條件送出一則沒有 __webhookUrl 的 payload，
+            // WebhookConsumer 讀到 null 就記一行 debug 丟掉 —— 沒有例外、
+            // 沒有錯誤、沒有稽核，與節點層改動前的失敗型態完全相同。
+            //
+            // 現在與節點層對稱：讀 <process> 上的設定，沒有設定就完全不發訊息。
+            // 理由同 WebhookTaskListener：queue 不要有雜訊，DLQ 不要混著
+            // 從來不該投遞的訊息 —— 否則排查時分不出「該投但失敗」與「本來就不該投」。
+            //
+            // ⚠️ 這一段在 auditPublisher.publish() 之後：稽核不該取決於
+            // 外部系統是否可達（見上方註解）。沒有設定而提前 return，稽核仍已寫入。
+            List<WebhookConfig> configs =
+                    configResolver.resolveForProcess(exec.getProcessDefinitionId());
+            if (configs.isEmpty()) {
+                log.debug("流程 {} 沒有流程層 webhook 設定，結案不發送", processDefKey);
+                return;
+            }
+            List<WebhookConfig> matching = configs.stream()
+                    .filter(c -> matchesProcessCompleted(c.event()))
+                    .toList();
+            if (matching.isEmpty()) {
+                log.debug("流程 {} 有 {} 筆流程層 webhook 設定，但沒有一筆對應 process.completed",
+                        processDefKey, configs.size());
+                return;
+            }
+
             Map<String, Object> payload = new HashMap<>();
             payload.put("event", "process.completed");
             payload.put("timestamp", Instant.now().toString());
@@ -131,7 +172,16 @@ public class ProcessCompletedListener implements FlowableEventListener {
             // 保留 businessKey 與 result 已足以讓外部系統知道「哪張單、
             // 什麼結果」並自行查詢。
 
-            rabbitTemplate.convertAndSend("bpm.exchange", "bpm.webhook." + processDefKey, payload);
+            for (WebhookConfig config : matching) {
+                // ⚠️ 這兩個欄位是 WebhookConsumer 與本 listener 之間唯一的契約。
+                // 欄位名不可改：consumer 用 payload.remove("__webhookUrl") 讀，
+                // 改名等於把整條鏈路再斷一次（而斷掉之後不會有任何錯誤）。
+                payload.put("__webhookUrl", config.url());
+                payload.put("__webhookMethod", config.method());
+                rabbitTemplate.convertAndSend("bpm.exchange", "bpm.webhook." + processDefKey, payload);
+                log.info("流程 {} 的結案事件已排入投遞佇列：{} {}",
+                        processDefKey, config.method(), config.url());
+            }
         }
     }
 
@@ -184,6 +234,44 @@ public class ProcessCompletedListener implements FlowableEventListener {
         if (Boolean.FALSE.equals(vars.get("approved"))) return "returned";
         if (Boolean.TRUE.equals(vars.get("approved"))) return "approved";
         return "unknown";
+    }
+
+    /**
+     * 這一筆流程層設定是否對應「流程結案」。
+     *
+     * <p>package-private：比照 {@link WebhookTaskListener#matches}，讓測試能直接
+     * 釘住規則本身。端到端測試只證明「有設定就投遞」，證明不了這條對應規則 ——
+     * 把 {@code create} 誤當成命中，端到端照樣綠。
+     *
+     * <h2>規則與理由（流程層只有一個事件）</h2>
+     *
+     * <p>Flowable 對流程結案只發一個事件，payload 的 {@code event} 固定是
+     * {@code process.completed}。因此：
+     * <ol>
+     *   <li><b>{@code process.completed}</b> 命中 —— 正式名稱。</li>
+     *   <li><b>{@code complete}</b> 命中 —— 與節點層的 {@code complete} 同名，
+     *       使用者從節點層遷移過來時最直覺的寫法；設計器輸入不經驗證。</li>
+     *   <li><b>{@code all}</b> 命中 —— 與節點層同一個逃生門。</li>
+     *   <li><b>省略（null／空白）</b> 命中 —— 視為 {@code process.completed}。
+     *       解析端（{@link WebhookConfigResolver#resolveForProcess}）已用
+     *       {@link WebhookConfig#DEFAULT_PROCESS_EVENT} 把省略補成
+     *       {@code process.completed}；這裡再容忍一次是為了讓這條規則
+     *       <b>自成一體、可單獨驗證</b>，且讓直接建構的設定也有一致行為。</li>
+     *   <li>其餘（{@code create}／{@code timeout}／{@code reject}）<b>不命中</b> ——
+     *       它們是節點層的事件。刻意不在流程層推導 {@code reject}：
+     *       流程結案後才判定結果，與「完成任務當下判 rejected」不同；
+     *       最終結果已由 payload 的 {@code result} 欄位表達。</li>
+     * </ol>
+     *
+     * <p>大小寫不拘，同節點層 —— 設計器輸入不經過驗證。
+     */
+    static boolean matchesProcessCompleted(String configEvent) {
+        String want = (configEvent == null || configEvent.isBlank())
+                ? WebhookConfig.DEFAULT_PROCESS_EVENT
+                : configEvent.trim();
+        return "all".equalsIgnoreCase(want)
+                || WebhookConfig.DEFAULT_PROCESS_EVENT.equalsIgnoreCase(want)
+                || "complete".equalsIgnoreCase(want);
     }
 
     private String extractKey(String processDefinitionId) {
