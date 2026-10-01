@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { decodeToken, getToken, setToken, clearToken, currentIdentity, hasRole } from './session.js'
+import {
+  decodeToken,
+  getToken,
+  setToken,
+  clearToken,
+  currentIdentity,
+  hasRole,
+  permissionCodesFromRoles,
+} from './session.js'
 import { testJwt } from './testJwt.js'
 
 /**
@@ -124,6 +132,57 @@ describe('session', () => {
     it('未指定角色時視為不需要角色', () => {
       expect(hasRole(null)).toBe(true)
       expect(hasRole('')).toBe(true)
+    })
+  })
+
+  /**
+   * #82：從 roles claim 撈權限碼。
+   *
+   * ⚠️ **這不是授權判斷。** 正式權限來自 GET /api/me/permissions
+   * （見 permissionsApi.js）。這個函式只在後端不可用時作為降級，
+   * 而且回傳的結果一律被 store 標記為「未確認」。
+   */
+  describe('permissionCodesFromRoles', () => {
+    it('撈出形狀像權限碼的項目', () => {
+      // 後端 AuthorityResolver.fromJwtRoles 刻意保留原字串，
+      // 所以 IdP 若直接以權限碼簽 roles claim，那個碼就是可用的。
+      expect(
+        permissionCodesFromRoles(['bpm:form:design', 'audit:log:read'])
+      ).toEqual(['bpm:form:design', 'audit:log:read'])
+    })
+
+    it('不撈角色名與通配符', () => {
+      // 「admin」是角色（且在後端對應 ROLE_ADMIN，刻意不等於稽核權）；
+      // 「*」是權限中心的通配符。把任一個當權限碼，都會讓前端顯示
+      // 後端會擋的入口。
+      expect(
+        permissionCodesFromRoles(['admin', '*', 'auditor', 'ROLE_ADMIN']),
+        '角色名與通配符都不是權限碼 —— 後端刻意不展開 *'
+      ).toEqual([])
+    })
+
+    it('接受階層式的三段式命名', () => {
+      expect(
+        permissionCodesFromRoles([
+          'hr:leave:approve',
+          'finance:payment:approve',
+          'bpm:external:revision',
+        ])
+      ).toEqual(['hr:leave:approve', 'finance:payment:approve', 'bpm:external:revision'])
+    })
+
+    it('不接受大寫與空白', () => {
+      // 權限碼是正規化的小寫階層名；大寫或含空白的字串多半是
+      // 拼錯的權限碼，把它當成權限只會製造「看得到點不動」。
+      expect(permissionCodesFromRoles(['BPM:FORM:DESIGN', 'bpm: form:design', ' bpm:form:design']))
+        .toEqual([])
+    })
+
+    it('非陣列輸入回空陣列，不得拋出', () => {
+      expect(permissionCodesFromRoles(null)).toEqual([])
+      expect(permissionCodesFromRoles(undefined)).toEqual([])
+      expect(permissionCodesFromRoles('bpm:form:design')).toEqual([])
+      expect(permissionCodesFromRoles([null, undefined, 42, {}])).toEqual([])
     })
   })
 })

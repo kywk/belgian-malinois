@@ -12,6 +12,19 @@
  * claim；claim 沒帶時前端不自行推測 —— 後端會回頭查權限中心，
  * 而前端猜錯只會產生「看得到選項但點下去被擋」的壞體驗。
  * 那種情況下選單少顯示一項，比顯示一個點不動的項目好。
+ *
+ * ── #82 之後：這段「不推測」的態度有了資料來源 ──
+ * 上面那段取捨是在<b>前端沒有權限資料</b>的前提下寫的：唯一能讀的
+ * JWT roles claim 只有在 IdP 願意簽權限碼時才有用，而 dev 的
+ * mintDevToken() 刻意不簽（見 devToken.js），於是前端一律什麼都不知道。
+ *
+ * 現在 {@code GET /api/me/permissions}（services/permissionsApi.js）
+ * 回傳呼叫者實際被授權的權限碼，後端零外部相依 —— 資料本來就在手上。
+ * 所以「不推測」不再是無奈的讓步，而是<b>正確的預設值</b>：
+ * 有權限資料就用它，沒有（後端不可用）才退回 roles claim 裡
+ * <b>形狀像權限碼</b>的那些字串 —— 並且標記為未確認。
+ *
+ * ⚠️ 這份清單是 UX 層防線，不是安全邊界（見 permissionsApi.js）。
  */
 const TOKEN_KEY = 'token'
 
@@ -95,7 +108,49 @@ export function currentIdentity() {
   return decodeToken(getToken())
 }
 
+/**
+ * 角色判斷（讀 JWT 的 roles claim）。
+ *
+ * ⚠️ **這是權限碼體系落地前的退路，不是權限判斷。** 真正的權限判斷
+ * 走 {@code /api/me/permissions}（見 permissionsApi.js）與 auth store 的
+ * {@code hasPermission}。
+ *
+ * 保留這個函式的理由是它仍然如實回報「JWT 帶了什麼角色」，而那是
+ * session.js 唯一能知道的東西 —— roles claim 沒有帶就是空陣列，
+ * 前端不推測（見檔案註解）。
+ */
 export function hasRole(role) {
   if (!role) return true
   return currentIdentity().roles.includes(role)
+}
+
+/**
+ * 權限碼形狀：至少一段冒號，且每段皆為小寫字母、數字、底線或連字號。
+ *
+ * <p>⚠️ 這是<b>形狀</b>判斷，不是<b>授權</b>判斷。它只用來回答
+ * 「這個字串看起來像不像權限碼」，讓 {@link permissionCodesFromRoles}
+ * 能把 roles claim 裡的權限碼撈出來。
+ *
+ * <p>為什麼要判形狀：正式環境的 IdP 可能直接以權限碼簽 roles claim
+ * （後端 {@code AuthorityResolver.fromJwtRoles} 刻意保留原字串，
+ * 讓 {@code hasAuthority("bpm:form:design")} 也能命中）。
+ * 那時前端可以省下那一次請求。
+ *
+ * <p>為什麼不能用「看起來像」當授權依據：這是前端猜的，形狀判斷擋不住
+ * 一個權限中心已撤銷但仍留在 token 裡的碼。真正一致的答案來自後端 ——
+ * 所以這條路徑只在拿不到後端回應時作為降級（見 stores/auth.js）。
+ */
+const PERMISSION_CODE = /^[a-z0-9_]+(:[a-z0-9_-]+)+$/
+
+/**
+ * 從 roles claim 裡撈出權限碼。
+ *
+ * <p>⚠️ **這不是授權判斷**，理由見 {@link PERMISSION_CODE}。
+ * 而且回傳的結果一律被視為「未經確認」—— 呼叫端必須知道它是猜的。
+ *
+ * @returns {string[]}
+ */
+export function permissionCodesFromRoles(roles) {
+  if (!Array.isArray(roles)) return []
+  return roles.filter(r => typeof r === 'string' && PERMISSION_CODE.test(r))
 }
