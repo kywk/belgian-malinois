@@ -200,9 +200,21 @@ public class BpmnLintService {
         // allowedProcessKeys —— 那才是決定「誰能發起這個流程」的地方。
         boolean isExternalAllowed = isExternallyStartable(process.getId());
 
+        // ⚠️ 整個 lint 只查一次變數規格，並把結果傳下去。
+        //
+        // 改動前 declaredVariables() 是由 checkBareVariableReferences() 呼叫的，
+        // 而那個方法對 assignee／candidateUsers／candidateGroups 各呼叫一次
+        // —— 也就是每個 UserTask 三次資料庫查詢，且整支流程的查詢次數
+        // 隨 UserTask 數量線性成長。規則 k（optional-assignee）需要同一份資料的
+        // `required`，若各自查就變成四次，而且四次結果可能不一致。
+        //
+        // 所以形狀比照同一段裡的 isExternalAllowed：同樣的資料只取一次，
+        // 同樣的原因（同一份事實不該有兩條取得路徑）。
+        Map<String, Boolean> declaredVariables = specsByVariableName(process.getId());
+
         for (FlowElement el : process.getFlowElements()) {
             if (el instanceof UserTask ut) {
-                lintUserTask(ut, errors, isExternalAllowed, process);
+                lintUserTask(ut, errors, isExternalAllowed, process, declaredVariables);
             } else if (el instanceof ExclusiveGateway gw) {
                 lintGateway(gw, errors);
             } else if (el instanceof ServiceTask st) {
@@ -221,7 +233,9 @@ public class BpmnLintService {
         return new LintResult(errors.stream().noneMatch(e -> "error".equals(e.severity())), errors);
     }
 
-    private void lintUserTask(UserTask ut, List<LintError> errors, boolean externalAllowed, org.flowable.bpmn.model.Process process) {
+    private void lintUserTask(UserTask ut, List<LintError> errors, boolean externalAllowed,
+                              org.flowable.bpmn.model.Process process,
+                              Map<String, Boolean> declaredVariables) {
         String assignee = ut.getAssignee();
         String candidateUsers = String.join(",", ut.getCandidateUsers());
         String candidateGroups = String.join(",", ut.getCandidateGroups());
@@ -254,18 +268,22 @@ public class BpmnLintService {
             }
         }
 
+        // 指派欄位一覽。帶屬性名是為了讓警告訊息能指出是哪一個欄位 ——
+        // assignee 與 candidateGroups 空白時的後果不同（見規則 j 的訊息），
+        // 管理者要能一眼看出要改哪裡。
+        List<Assignment> assignments = List.of(
+                new Assignment("flowable:assignee", assignee != null ? assignee : ""),
+                new Assignment("flowable:candidateUsers", candidateUsers),
+                new Assignment("flowable:candidateGroups", candidateGroups));
+
         // Rule g: EL function whitelist
-        List<String> exprs = List.of(
-                assignee != null ? assignee : "",
-                candidateUsers,
-                candidateGroups);
-        for (String expr : exprs) {
-            checkElWhitelist(expr, ut.getId(), ut.getName(), errors);
+        for (Assignment a : assignments) {
+            checkElWhitelist(a.expr(), ut.getId(), ut.getName(), errors);
         }
 
         // Rule i: 裸變數參照必須是平台變數或已宣告的流程變數（P2-6）
-        for (String expr : exprs) {
-            checkBareVariableReferences(expr, ut.getId(), ut.getName(), process.getId(), errors);
+        for (Assignment a : assignments) {
+            checkBareVariableReferences(a.expr(), ut.getId(), ut.getName(), declaredVariables, errors);
         }
 
         // Rule j: 不得對主管鏈直接做索引（P2-6）
@@ -382,15 +400,15 @@ public class BpmnLintService {
      * 後者給了正當需求一條明路 —— 先宣告，再使用。
      */
     private void checkBareVariableReferences(String expr, String elementId, String elementName,
-                                              String processKey, List<LintError> errors) {
+                                             Map<String, Boolean> declaredVariables,
+                                             List<LintError> errors) {
         if (expr == null || !expr.contains("${")) return;
 
         // ${name} 且 name 之後直接是 } —— 有點或有括號的都由白名單規則處理
-        var matcher = java.util.regex.Pattern.compile("\\$\\{(\\w+)\\}").matcher(expr);
-        Set<String> declared = declaredVariables(processKey);
+        var matcher = BARE_VARIABLE.matcher(expr);
         while (matcher.find()) {
             String name = matcher.group(1);
-            if (PLATFORM_VARIABLES.contains(name) || declared.contains(name)) continue;
+            if (PLATFORM_VARIABLES.contains(name) || declaredVariables.containsKey(name)) continue;
             errors.add(new LintError(elementId, elementName, "undeclared-variable",
                     "運算式參照了未宣告的流程變數 '" + name + "'。"
                             + "若這是字面值（例如部門代碼），請直接填寫不要包 ${}；"
@@ -399,17 +417,43 @@ public class BpmnLintService {
         }
     }
 
-    private Set<String> declaredVariables(String processKey) {
-        if (processKey == null || processKey.isBlank()) return Set.of();
+    /** 字串中出現的裸變數參照 {@code ${name}}（name 之後直接是 }）。 */
+    private static final java.util.regex.Pattern BARE_VARIABLE =
+            java.util.regex.Pattern.compile("\\$\\{(\\w+)\\}");
+
+    /**
+     * 這個流程宣告的變數：變數名 → required。
+     *
+     * <p>⚠️ 整個 lint 只呼叫這一次（由 {@link #lint()} 傳下去），原因見該處。
+     * 這是「同一份資料不該查兩次」的落實：{@code required} 與「是否已宣告」
+     * 來自同一列，查兩次除了多打一次資料庫之外，還有兩次查詢結果不一致的風險。
+     *
+     * <p>回傳空 Map 而非 null，讓呼叫端不必處理兩種形狀。
+     */
+    private Map<String, Boolean> specsByVariableName(String processKey) {
+        if (processKey == null || processKey.isBlank()) return Map.of();
         try {
             return specRepo.findByProcessDefinitionKeyOrderByVariableName(processKey).stream()
-                    .map(com.bpm.core.model.ProcessVariableSpec::getVariableName)
-                    .collect(java.util.stream.Collectors.toSet());
+                    // ⚠️ 明確給 merge function：(processDefinitionKey, variableName)
+                    // 上有唯一約束，理論上不會重複，但 Collectors.toMap 預設遇到
+                    // 重複會丟 IllegalStateException，而那會被下面的 catch 吞成
+                    // 空 Map —— 於是一筆重複資料會讓 undeclared-variable 對
+                    // <b>所有</b>變數誤報。取 (a, b) -> a || b 是保守的一邊。
+                    .collect(java.util.stream.Collectors.toMap(
+                            com.bpm.core.model.ProcessVariableSpec::getVariableName,
+                            // required 是 Boolean 而非 boolean：資料庫裡若是 NULL，
+                            // 取出來是 null。Boolean.TRUE.equals(null) 為 false
+                            // —— 與 Model 欄位預設值 false 的語意一致。
+                            s -> Boolean.TRUE.equals(s.getRequired()),
+                            (a, b) -> a || b));
         } catch (Exception e) {
             // lint 不該因為讀不到規格而整個失敗；退化為只放行平台變數（較嚴格的一邊）。
-            return Set.of();
+            return Map.of();
         }
     }
+
+    /** 指派欄位：屬性名（用於訊息）＋ 運算式。 */
+    private record Assignment(String attribute, String expr) {}
 
     private void checkElWhitelist(String expr, String elementId, String elementName, List<LintError> errors) {
         if (expr == null || !expr.contains("${")) return;
