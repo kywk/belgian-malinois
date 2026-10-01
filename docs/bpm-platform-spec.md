@@ -688,6 +688,37 @@ Body:
 }
 ```
 
+#### `firstTaskCandidateGroups` 的形狀（#93）
+
+**標準形狀是 JSON 陣列**，如上面的 `["hr_dept"]`。
+
+**逗號分隔字串是相容形狀**，僅為相容既有整合而保留，新整合請用陣列：
+
+```json
+"firstTaskCandidateGroups": ["hr_dept", "finance"]      // 標準
+"firstTaskCandidateGroups": "hr_dept,finance"          // 相容，作用完全相同
+```
+
+兩種形狀解析後的結果必須相同（空白字串元素被丟棄、重複去重、其餘原樣）。
+
+錯誤處置：
+
+| Body 的值 | 結果 |
+|---|---|
+| `["hr_dept"]` / `"hr_dept,finance"` | 接受 |
+| `["hr_dept", 123]`（元素非字串） | **400**，訊息指名第幾個元素、什麼型別 |
+| `123` / `true` / `{}`（整個欄位型別錯） | **400** |
+| `null` / 未提供 | 視為未指定 |
+| `[]` / `["  "]` | 視為未指定任何群組 → 觸發「必須指定 `firstTaskAssignee` 或 `firstTaskCandidateGroups`」的 400 |
+
+⚠️ 形狀錯誤回 **400**（呼叫端該改 payload）而不是 500：500 的語意是「稍後重試」，
+但 payload 不變就永遠不會成功，批次會無限重試。
+
+⚠️ 每一個群組都必須在該外部系統的 `allowedCandidateGroups` 白名單內，
+否則回 **403**。陣列與字串形狀都一樣（見 `ExternalSystemPolicy.isCandidateGroupAllowed`）。
+
+⚠️ `firstTaskCandidateGroups` 與 `firstTaskAssignee` 至少要有一個，否則回 400。
+
 #### 外部 initiator 處理規則
 
 外部系統發起的流程，`initiator` 格式為 `system:{systemId}`，非真實用戶。BPMN 中依賴 `initiator` 的 EL 函數（如 `orgService.getDirectManager(initiator)`）會無法解析。
