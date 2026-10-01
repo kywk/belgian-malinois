@@ -368,10 +368,6 @@ public class TaskController {
                         ? OperationType.TASK_RESUBMIT : resolveCompleteAuditType(vars);
             }
             case "delegate" -> {
-                if (req.delegateUser() == null || req.delegateUser().isBlank()) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                            "delegate 必須指定 delegateUser");
-                }
                 // 語意檢查（#77）：被 delegate 出去之後 delegatee 必須能簽。
                 // 這是本次修改最大的迴歸風險 —— Flowable 的 delegateTask 會把
                 // assignee 換成 delegatee、把原本的 assignee 寫進 owner，
@@ -379,16 +375,60 @@ public class TaskController {
                 // 由 TaskHolderGuard 的條件 1（assignee）涵蓋，
                 // 見 TaskHolderGuard 類別註解的 delegate／resolve 生命週期分析。
                 //
-                // ⚠️ 已知缺口（**刻意不在本工項修**，回報給 PM）：delegateUser
-                // 與 #92 修掉的 reassign assignee 是**同一個形狀的缺陷** ——
-                // 指給一個組織系統不認識的字串，任務就沒有人能簽、也沒有告警。
-                // 兩者的差別只有一個：delegate 之後 assignee 會變成 delegatee，
-                // 而 owner 仍然是原指派人（TaskHolderGuard 條件 2），
-                // 所以 owner 還能 resolve 把它收回來 —— 後果比 reassign 輕，
-                // 但缺陷本質相同。
-                // 沒有順手修的理由：本工項的範圍由 PM 界定為 reassign，
-                // 而在 delegate 加上網路查詢會擴大這個端點的交易內 HTTP 呼叫量
-                // （委派可以連續發生好幾輪）。是否併入同一個工項是政策決定。
+                // 形狀檢查（必須指定 delegateUser）：刻意保留在本地，
+                // 與上面 reassign 分支的理由相同 —— actorGuard 對空白的訊息
+                // 會叫人「改用 firstTaskCandidateGroups」，而 delegate 的 body
+                // 裡沒有那個欄位。「沒給 delegateUser」在這裡只有一種意義。
+                if (req.delegateUser() == null || req.delegateUser().isBlank()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "delegate 必須指定 delegateUser");
+                }
+
+                // ── #93a：委派對象必須是組織系統認識的人 ────────────────
+                //
+                // 這是 #92 已在 reassign 分支修掉的<b>同一個形狀的缺陷</b>，
+                // 而且在 PM 裁決之前就以註解形式回報過（「已知缺口，刻意不在
+                // 本工項修」）。#93a 就是那個裁決的執行：併入同一條規則。
+                //
+                // 缺陷（#93a 之前這裡只有上面的空白檢查）：
+                //   holder = mgr001 送出 {"action":"delegate","delegateUser":"nobody-xyz"}
+                //   → delegateTask(id, "nobody-xyz") 成功 → 200 {"status":"ok"}
+                //   → assignee = nobody-xyz，非 null → 候選人查詢帶著
+                //     ASSIGNEE_ IS NULL，候選人救不了它（互斥）
+                //   → UnreachableTaskListener 的判準是「有沒有人能動它」，
+                //     nobody-xyz 非空白、非 system: 前綴 → **不告警**
+                //
+                // 與 reassign 的差別只有一個，所以不要誤判成兩種問題：
+                // delegate 之後 owner 仍是原指派人（TaskHolderGuard 條件 2），
+                // owner 還能 resolve 收回來 —— 後果較輕、可恢復，
+                // 但<b>缺陷本質完全相同</b>，而且「可以 resolve 收回來」不是
+                // 緩解理由：owner 必須自己察覺到不對，而沒有任何人收到告警。
+                // #92 的註解裡「沒有順手修的理由」是當時的範圍界定，
+                // 不是對這個缺陷的技術判斷。
+                //
+                // 為什麼重用 actorGuard 而不寫一份：見上面 reassign 分支的
+                // 「為什麼重用 ExternalActorGuard.requireKnownPerson」。
+                // 「指派給誰」只有一份實作 —— 這正是 #92 那段註解主張的。
+                //
+                // 驗的是「是不是人」而不是「是不是候選人」：委派給一位
+                // 不在候選清單裡、但確實該處理的人（出差、代班、跨部門支援）
+                // 是正常業務行為。若拿候選清單當白名單，唯一合法結果是把
+                // 「委派」功能整個打死。
+                //
+                // 排序：requireHolder（本方法的第 1 段）之後、形狀檢查之後、
+                // delegateTask 之前。
+                //   * 必須在 requireHolder 之後：委派是把工作轉給別人的權力，
+                //     屬於持有者。對非持有者應該是 404（授權）而不是 400
+                //     （payload 形狀）—— 狀態碼的差異就是枚舉管道。
+                //     這一條由 DelegateKnownPersonTest 的 GuardsNotWeakened 釘住。
+                //   * 必須在形狀檢查之後：與 reassign 一致，且空白訊息才指得準。
+                //   * 必須在 delegateTask 之前：擋在寫入之後就留下一個已經
+                //     委派給沒有人能認得的人、而沒有任何人收到告警的任務。
+                //
+                // 狀態碼沿用 actorGuard 既有行為（不自創第四組政策）：
+                // 組織系統「查無此人」→ 400；「故障」→ 503（此時尚未寫入任何東西，
+                // 重試安全 —— 委派不會產生重複的子流程之類的東西）。
+                actorGuard.requireKnownPerson("delegateUser", req.delegateUser());
                 taskService.delegateTask(id, req.delegateUser());
                 auditType = OperationType.TASK_DELEGATE;
             }
