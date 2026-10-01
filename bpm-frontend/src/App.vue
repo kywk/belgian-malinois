@@ -32,15 +32,23 @@
         <el-menu-item index="/start">發起申請</el-menu-item>
         <el-menu-item index="/tasks">待辦清單</el-menu-item>
         <el-menu-item index="/my-applications">我的申請</el-menu-item>
-        <!-- 與 router 的 requiresRole: auditor 一致。不加 v-if 的話，
-             非稽核人員會看到一個點下去馬上被守衛彈回首頁的選項。 -->
+        <!-- 與 router 的 requiresPermission: audit:log:read 一致（#82）。
+             ⚠️ 這裡**刻意不**看 isAdmin：後端 /api/audit-logs/** 只認
+             audit:log:read，通配持有者（admin001）刻意不被放行 ——
+             稽核紀錄含全公司薪資與簽核意見。放行的話管理員會看到頁面
+             然後吃 403（正是 #82 要修的那個症狀）。 -->
         <el-menu-item v-if="isAuditor" index="/audit-log">稽核 Log</el-menu-item>
+        <!-- ⚠️ 表單編輯器刻意放在管理子選單**外**：它的後端規則是
+             bpm:form:design（**或** ROLE_ADMIN），而業務人員 mgr001 持有
+             權限碼卻不是管理員。留在子選單裡會讓這整個工項白做 ——
+             路由放行了但選單看不到，等於功能仍然不存在。
+             這是「讓業務人員自行設計流程與表單」這個產品目標的入口。 -->
+        <el-menu-item v-if="canDesignForms" index="/admin/form-editor">表單編輯器</el-menu-item>
         <el-sub-menu v-if="isAdmin" index="/admin">
           <template #title>管理</template>
           <el-menu-item index="/admin/processes">流程管理</el-menu-item>
           <el-menu-item index="/admin/bpmn-editor">BPMN 編輯器</el-menu-item>
           <el-menu-item index="/admin/forms">表單管理</el-menu-item>
-          <el-menu-item index="/admin/form-editor">表單編輯器</el-menu-item>
           <el-menu-item index="/admin/external-systems">外部系統</el-menu-item>
         </el-sub-menu>
         <el-menu-item style="margin-left:auto" @click="logout">
@@ -67,6 +75,10 @@ const pastedToken = ref('')
 const loginError = ref('')
 const isAdmin = computed(() => auth.isAdmin)
 const isAuditor = computed(() => auth.isAuditor)
+// 表單編輯器：bpm:form:design 或 ROLE_ADMIN（後端 /api/forms/** 寫入的規則）。
+// 與 router 的 acceptsAdmin 必須一致 —— 選單看得到但路由擋掉（或反過來）
+// 都會回到 #82 那個症狀。
+const canDesignForms = computed(() => auth.canDesignForms)
 
 /**
  * dev 登入。
