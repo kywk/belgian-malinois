@@ -37,36 +37,37 @@ import { createPinia, setActivePinia } from 'pinia'
  * {@code wrapper.text()} 會是空字串 —— 那樣「斷言綠了」與「畫面上什麼都沒有」
  * 變成同一件事（同 {@code OnBehalfOfMarker.spec.js} 的記錄）。
  *
- * <h3>⚠️⚠️ 為什麼 mount 要帶 {@code config.warnHandler}（既有缺陷造成的必要手段）</h3>
+ * <h3>⚠️ 這個測試組曾經<b>必須</b>掛 {@code config.warnHandler}，而那個需求已消失</h3>
  *
- * <p>這不是本工項造成的，是<b>先於本工項存在</b>的問題，而且不處理就<b>掛住整個
- * worker</b>（不是測試失敗，是 vitest 整個 run 卡死）。
+ * <p><b>記在這裡是為了讓下一個人不要重新引入它。</b>
  *
- * <p>{@code MyApplications.vue} 的「狀態」欄是
+ * <p>發現過程：{@code MyApplications.vue} 的「狀態」欄是
  * {@code <el-tag :type="statusType(row.status)">}，而
- * {@code statusType('running')} 回傳 {@code ''}。element-plus 的
- * {@code ElTag} 對 {@code type} 宣告的是
+ * {@code statusType('running')} 回傳 {@code ''}。element-plus 2.7.3 的
+ * {@code ElTag} 對 {@code type} 宣告
  * {@code values: ['primary','success','info','warning','danger'], default: 'primary'}
- * —— 所以 {@code ''} 是<b>允許值以外</b>的 prop，dev 模式會觸發 Vue 的驗證警告。
- * 而那個警告在 jsdom 下會把 Node 的 {@code util.inspect} 帶進無窮遞迴
+ * —— {@code ''} 是<b>允許值以外</b>的 prop（實測會噴
+ * {@code Invalid prop: validation failed for prop "type" ... got value ""}）。
+ * 而那個警告在 jsdom 下把 Node 的 {@code util.inspect} 帶進無窮遞迴
  * （{@code formatProperty → formatValue → formatRaw → formatValue}），
- * 結果是 {@code Maximum call stack size exceeded}，接著整個測試行程卡住。
+ * {@code Maximum call stack size exceeded}，接著<b>整個 vitest worker 卡死</b>
+ * —— 不是測試失敗，是 run 沒有終止。
  *
  * <p>實測對照（每一個都是完整 mount，沒有 stub 任何元件）：
- * {@code :type="statusType(row.status)"} → 掛住；
+ * {@code :type="statusType(row.status)"} → 掛住（120 秒無輸出）；
  * 換成 {@code type="warning"} 或 {@code type="primary"} → 26ms 正常；
- * 拿掉 {@code el-tag} → 正常。見本工項報告的既有缺陷段落。
+ * 拿掉 {@code el-tag} → 正常。
  *
- * <p>所以這裡用 {@code config: { warnHandler: () => {} }} 壓掉警告輸出。
- * <b>它不等於 stub</b>：元件照常完整渲染（列、tag、文字都在，
- * {@code wrapper.text()} 拿到的是真實畫面文字），所以本檔的斷言不會因此
- * 變成假綠燈。
+ * <p><b>現況：{@code statusType('running')} 已改成 {@code 'primary'}，
+ * 所以本檔不再掛 {@code warnHandler}。</b> 順帶說明為什麼是 {@code 'primary'}
+ * 而不是「乾脆不傳」：2.7.3 的 {@code ElTag} <b>沒有「無色」這個合法值</b>，
+ * {@code default} 本身就是 {@code 'primary'} —— 所以 {@code ''} 從來沒有生效過，
+ * 它產生的是 {@code el-tag--}（沒有任何 CSS 變數匹配）。「維持原外觀」不可達，
+ * 而 {@code 'primary'} 是函式庫自己的預設。
  *
- * <p>⚠️ <b>但它確實有代價，必須說明</b>：這個 warnHandler 會連帶壓掉本頁
- * <b>其他</b>的 Vue 警告，也就是說若 {@code MyApplications.vue} 日後有
- * 與本工項無關的無效 prop，這個測試組<b>不會</b>再提醒。
- * 我沒有把它做成「只壓 el-tag type 那一則」，因為那會讓這個檔案變成
- * 在斷言一個會隨修掉而失效的警告集合。這個取捨是刻意的，取捨的責任寫在這裡。
+ * <p>⚠️ <b>若日後有人把 {@code statusType} 改回回傳 {@code ''}（或任何
+ * {@code ElTag} 允許值以外的值），本檔會直接卡住而不會給出任何斷言失敗</b> ——
+ * 那個失敗型狀比紅掉更難察覺，所以特別記錄。
  *
  * <h3>⚠️ 為什麼用 {@code .on-behalf-tag} 而不是全域 {@code toContain}</h3>
  *
@@ -190,9 +191,6 @@ function mountPage() {
   return mount(MyApplications, {
     global: {
       plugins: [ElementPlus, pinia],
-      // 見檔案註解「為什麼 mount 要帶 config.warnHandler」：只壓警告輸出，
-      // 不 stub 任何元件，因此列與 tag 仍然是真實渲染出來的。
-      config: { warnHandler: () => {} },
     },
   })
 }

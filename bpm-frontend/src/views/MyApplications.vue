@@ -92,7 +92,26 @@ const activeTab = ref('running')
 const list = ref([])
 const fmt = (t) => formatDateTime(t)
 
-const statusType = (s) => ({ running: '', completed: 'success', rejected: 'danger', cancelled: 'info' }[s] || '')
+// ⚠️ #90 連帶修掉一個既有缺陷：'running' 原本回傳 ''，而 element-plus 2.7.3
+// 的 ElTag 對 type 宣告的允許值是
+// ['primary','success','info','warning','danger']、default: 'primary' ——
+// '' 是允許值以外的 prop。
+//
+// 兩個性質完全不同的後果：
+//   1. 正式環境 dev 模式：「進行中」是**最常見**的狀態，所以每一列都噴一次
+//      Vue 驗證警告。
+//   2. 測試：該警告在 jsdom 下把 Node 的 util.inspect 帶進無窮遞迴
+//      （formatProperty → formatValue → formatRaw → formatValue），
+//      Maximum call stack size exceeded，接著**整個 vitest worker 卡死**
+//      （不是測試失敗）。MyApplicationsOnBehalf.spec.js 為此必須掛
+//      config.warnHandler 才能跑。
+//
+// 為什麼是 'primary' 而不是「乾脆不傳 type」：**2.7.3 的 ElTag 沒有「無色」
+// 這個合法值**，default 本身就是 'primary'。所以 '' 從來沒有生效過 ——
+// 它產生的是 el-tag--（沒有任何 CSS 變數匹配），而不是「不特別上色」。
+// 換句話說「維持原外觀」這個選項不可達，而 'primary' 是函式庫自己的預設、
+// 最接近原本想表達的意思，且一次解決兩個問題。
+const statusType = (s) => ({ running: 'primary', completed: 'success', rejected: 'danger', cancelled: 'info' }[s] || 'primary')
 const statusLabel = (s) => ({ running: '進行中', completed: '已完成', rejected: '已拒絕', cancelled: '已取消' }[s] || s)
 
 async function loadData() {
