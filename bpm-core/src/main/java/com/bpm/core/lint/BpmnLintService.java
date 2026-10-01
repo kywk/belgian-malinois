@@ -272,7 +272,7 @@ public class BpmnLintService {
         // assignee 與 candidateGroups 空白時的後果不同（見規則 j 的訊息），
         // 管理者要能一眼看出要改哪裡。
         List<Assignment> assignments = List.of(
-                new Assignment("flowable:assignee", assignee != null ? assignee : ""),
+                new Assignment(ASSIGNEE_ATTRIBUTE, assignee != null ? assignee : ""),
                 new Assignment("flowable:candidateUsers", candidateUsers),
                 new Assignment("flowable:candidateGroups", candidateGroups));
 
@@ -428,8 +428,11 @@ public class BpmnLintService {
      * 純變數參照（整個運算式就是 {@code ${name}}，前後沒有多餘字元）。
      *
      * <p>與 {@link #BARE_VARIABLE} 的差別是<b>錨定</b>：那個找出字串裡出現的
-     * 所有裸變數，這個只認「整個運算式就是它」。兩者刻意分開，因為它們回答
-     * 不同的問題 —— 見 {@link #checkOptionalAssigneeVariable} 的註解。
+     * 所有裸變數，這個只認「整個運算式就是它」。
+     *
+     * <p><b>只有 {@code candidateUsers}／{@code candidateGroups} 用它</b>。
+     * {@code assignee} 改用 {@link #BARE_VARIABLE} 放寬 —— 理由見
+     * {@link #checkOptionalAssigneeVariable} 的「不對稱」一節。
      */
     private static final java.util.regex.Pattern PURE_BARE_VARIABLE =
             java.util.regex.Pattern.compile("^\\$\\{(\\w+)}$");
@@ -438,8 +441,11 @@ public class BpmnLintService {
     private static final java.util.regex.Pattern BARE_VARIABLE =
             java.util.regex.Pattern.compile("\\$\\{(\\w+)\\}");
 
+    /** assignee 屬性的名字。指派欄位「放寬 vs 維持純參照」的不對稱以此為界。 */
+    private static final String ASSIGNEE_ATTRIBUTE = "flowable:assignee";
+
     /**
-     * 規則 k：指派欄位用<b>非必填</b>的流程變數（#91 方向 A）。
+     * 規則 k：指派欄位用<b>非必填</b>的流程變數（#91 方向 A；#91c 對 assignee 放寬）。
      *
      * <h2>後果是什麼（證據來自位元碼，不是推論）</h2>
      *
@@ -464,24 +470,41 @@ public class BpmnLintService {
      * 案件靜默卡死。（{@code UnreachableTaskListener} 會告警，所以是看得見的 —
      * 但那是執行期，而這裡是部署期：部署到第一個人送出之間可能已經過了幾個月。）
      *
-     * <h2>為什麼只認「純」參照，而字串裡出現就發警告</h2>
+     * <h2>#91c 放寬：為什麼 assignee 認「有參照到」、候選欄位只認「純參照」</h2>
      *
-     * <p>因為<b>只有純參照才必然變成空白 assignee</b>：混合式 assignee 與逗號並接的
-     * 候選群組會退化，但退化的方式不同 —— 一個是整個值變成空白，另一個是其中一項
-     * 變空而其餘仍有效。兩者的界線寫在下面。
+     * <p>這個不對稱來自<b>欄位是單一值還是多值</b>：
      *
-     * <p>而逗號並接的候選群組<b>不會</b>退化：{@code extractCandidates} 對字串
-     * 做的是 {@code s.split("[\\s]*,[\\s]*")}，所以 {@code "DEP01,"} 會得到
-     * {@code ["DEP01", ""]} —— 空的只是其中一項，其餘候選群組照常掛上去，
-     * 任務仍然有人看得到。對那個形狀發警告就是<b>假警告</b>：管理員無法
-     * 解決一個不存在的問題，而假警告會訓練大家忽略警告（見
-     * {@code LintRuleCorrectnessTest} 類別註解為什麼誤擋比漏放更貴）。
+     * <ul>
+     *   <li><b>{@code assignee} 是單一值</b>：整串求值結果就是那個任務的唯一受理人 id。
+     *       任何一個非必填變數在執行期沒有值，都會讓<b>整個值</b>壞掉 ——
+     *       {@code ${dept}-01} 在 dept 為空時是 {@code "-01"}、
+     *       {@code ${a}-${b}} 是 {@code "alice-"}，兩者都是<b>沒有人持有</b>的 id。
+     *       這與純 {@code ${dept}} 求值成空白是同一種靜默卡死，所以判準放寬成
+     *       「運算式裡用 {@link #BARE_VARIABLE} 找到任一個 required=false 的已宣告變數」。</li>
+     *   <li><b>{@code candidateUsers}／{@code candidateGroups} 是多值</b>（逗號分隔）：
+     *       {@code extractCandidates} 對字串做的是 {@code s.split("[\\s]*,[\\s]*")}。
+     *       Java 的 split 預設<b>丟掉尾端空字串</b>、<b>保留前端與中間的空字串</b>，
+     *       所以（{@code javap -c} 讀 Flowable 7.2.0 的 {@code extractCandidates} 後
+     *       以 Java 實測）：{@code "DEP01,"} → {@code ["DEP01"]}、
+     *       {@code ",hr"} → {@code ["", "hr"]}、{@code "a,,b"} → {@code ["a", "", "b"]}。
+     *       也就是<b>只要還留下一個有效項，任務就仍有人看得到</b>
+     *       —— {@code "hr,${dept}"} 在 dept 為空時仍留有 {@code "hr"}。
+     *       對這些形狀發警告就是<b>假警告</b>：管理員無法解決一個不存在的問題，
+     *       而假警告會訓練大家忽略警告（見 {@code LintRuleCorrectnessTest} 類別註解
+     *       為什麼誤擋比漏放更貴）。所以這裡維持只認純參照。</li>
+     * </ul>
      *
-     * <p>混合式 assignee（{@code ${a}-${b}}，其中 b 非必填且為空 → assignee 變成
-     * {@code "alice-"}，沒有人持有這個 id）確實會靜默卡死，本規則<b>沒有</b>涵蓋它。
-     * 涵蓋它需要把判準從「純參照」放寬成「參照了任一非必填變數」，
-     * 那會讓所有 {@code ${必填}-${選擇性}} 的合法寫法都被噴 —— 屬於規則範圍的
-     * 擴大，須由 PM 裁決，不在 #91 方向 A 內。
+     * <p>⚠️ <b>本不對稱刻意不涵蓋的殘餘邊界</b>：{@code "${a},${b}"} 若兩者皆為
+     * required=false 且執行期皆為空，split 的結果是 {@code "," → []}
+     * —— 一個候選人都沒有，任務確實不可達，與 assignee 的靜默卡死同級。
+     * 之所以仍然不警告，是因為把候選欄位放寬成「任一可選參照就警告」會對最常見的
+     * {@code "hr,${dept}"}（固定群組 ＋ 可選變數，dept 空時仍有 hr）製造大量假警告；
+     * 兩害相權取其輕，選擇漏放這個較少見、且需要「所有元素皆為可選且皆空」才成立的形狀。
+     * 這是<b>已知的取捨</b>，不是沒想到。
+     *
+     * <p>⚠️ 這個不對稱是<b>刻意</b>的，不是沒寫完：{@code assignee} 放寬後，
+     * 純 {@code ${dept}} 仍會被警告，但只會有一條 —— 放寬的判準（{@link #BARE_VARIABLE}）
+     * 涵蓋了純參照的情形，兩者共用同一條路徑，不會各發一次。
      *
      * <h2>為什麼是 warning 而不是 error</h2>
      *
@@ -500,32 +523,66 @@ public class BpmnLintService {
                                                String elementId, String elementName,
                                                List<LintError> errors) {
         if (a.expr() == null) return;
-        // 去掉前後空白再比對：字面空白會讓結果變成非空白的無效 assignee
-        // （" ${dept} " 在 dept 為空時求值成 " "），那正是本規則要抓的形狀。
+
+        if (ASSIGNEE_ATTRIBUTE.equals(a.attribute())) {
+            // 放寬：assignee 是單一值，任一非必填變數都會讓整個 id 無效。
+            // 用 BARE_VARIABLE 找出運算式裡所有 ${name} —— 純參照 ${dept} 也在其中，
+            // 所以只有這一條路徑，不會對純 ${dept} 發兩次警告。
+            var matcher = BARE_VARIABLE.matcher(a.expr());
+            Set<String> alreadyWarned = new HashSet<>();
+            while (matcher.find()) {
+                String name = matcher.group(1);
+                if (!isOptionalDeclaredVariable(name, declaredVariables)) continue;
+                // 同一變數在運算式裡出現多次（${dept}-${dept}）只警告一次。
+                if (!alreadyWarned.add(name)) continue;
+                errors.add(new LintError(elementId, elementName, "optional-assignee",
+                        "指派欄位 " + a.attribute() + " 參照了非必填的流程變數 '" + name
+                                + "'（required=false）。assignee 是單一值：只要該變數在執行期"
+                                + "沒有值或只有空白，整個值就會變成沒有人持有的無效 id"
+                                + "（例如 \"alice-\"、\"-01\"）；候選群組查詢帶著 ASSIGNEE_ IS NULL，"
+                                + "因此沒有任何人看得到這個任務，而且不會有任何錯誤訊息。"
+                                + "請改用 required=true 的變數、給它一個非空的預設值，"
+                                + "或改用方法呼叫（${orgService.…}）在執行期推導出實際值。",
+                        "warning"));
+            }
+            return;
+        }
+
+        // candidateUsers／candidateGroups：刻意只認純參照（多值欄位放寬會製造假警告，
+        // 理由見上方「#91c 放寬」一節）。去掉前後空白再比對：字面空白會讓結果變成
+        // 非空白的無效值（" ${dept} " 在 dept 為空時求值成 " "），那正是本規則要抓的形狀。
         var matcher = PURE_BARE_VARIABLE.matcher(a.expr().trim());
         if (!matcher.matches()) return;
 
         String name = matcher.group(1);
-        // 平台變數恆存在，不是「選擇性」的流程變數。
-        // 特別是 firstTaskAssignee／firstTaskCandidateGroups：它們在指派欄位
-        // 位置出現時常是字面值而非變數參照，但即使被包成 ${} 也不該被警告 ——
-        // 否則會蓋掉 checkBareVariableReferences 刻意放行的那些 BPMN。
-        if (PLATFORM_VARIABLES.contains(name)) return;
-        // get() 對未宣告的變數回 null → 不警告（那由 undeclared-variable 擋，error）。
-        // 讀不到規格而退化成空 Map 時也是同一條路徑：漏發警告而非誤擋。
-        // 這是刻意的取捨 —— 警告是諮詢性的，讀不到規格時少講一句不會造成事故，
-        // 反之若因此誤擋，就等於讓資料庫逾時變成「所有人都不能部署流程」。
-        if (!Boolean.FALSE.equals(declaredVariables.get(name))) return;
+        if (!isOptionalDeclaredVariable(name, declaredVariables)) return;
 
         errors.add(new LintError(elementId, elementName, "optional-assignee",
                 "指派欄位 " + a.attribute() + " 直接使用非必填的流程變數 '" + name
                         + "'（required=false）。若執行期該變數沒有值或只有空白，"
-                        + "assignee 會被設成空白字串；候選群組查詢帶著 ASSIGNEE_ IS NULL，"
+                        + "會產生一個無效的候選人／群組 id；候選群組查詢帶著 ASSIGNEE_ IS NULL，"
                         + "因此沒有任何人看得到這個任務，而且不會有任何錯誤訊息"
                         + "（候選人／candidateGroups 必須另外設定才看得到）。"
                         + "請改用 required=true 的變數、給它一個非空的預設值，"
                         + "或改用方法呼叫（${orgService.…}）在執行期推導出實際值。",
                 "warning"));
+    }
+
+    /**
+     * 這個裸變數參照是不是「已宣告且 required=false」的流程變數
+     * —— 也就是規則 k 唯一會警告的那一種。
+     */
+    private static boolean isOptionalDeclaredVariable(String name, Map<String, Boolean> declaredVariables) {
+        // 平台變數恆存在，不是「選擇性」的流程變數。
+        // 特別是 firstTaskAssignee／firstTaskCandidateGroups：它們在指派欄位
+        // 位置出現時常是字面值而非變數參照，但即使被包成 ${} 也不該被警告 ——
+        // 否則會蓋掉 checkBareVariableReferences 刻意放行的那些 BPMN。
+        if (PLATFORM_VARIABLES.contains(name)) return false;
+        // get() 對未宣告的變數回 null → 不警告（那由 undeclared-variable 擋，error）。
+        // 讀不到規格而退化成空 Map 時也是同一條路徑：漏發警告而非誤擋。
+        // 這是刻意的取捨 —— 警告是諮詢性的，讀不到規格時少講一句不會造成事故，
+        // 反之若因此誤擋，就等於讓資料庫逾時變成「所有人都不能部署流程」。
+        return Boolean.FALSE.equals(declaredVariables.get(name));
     }
 
     /**
