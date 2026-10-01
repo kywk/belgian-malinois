@@ -54,22 +54,44 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>{@code flowable:assignee="${var}"} 而 {@code var} 為空白字串 ——
  *       運算式求值<b>繞過</b>那道 isNotEmpty（判斷的是運算式<b>字串</b>非空，
  *       不是求值<b>結果</b>非空），所以 {@code "  "} 照樣寫入。
- *       <b>這一條管理員部署的流程就能觸發，不經任何 API。</b></li>
+ *       <b>這一條管理員部署的流程就能觸發，不經任何 API。
+ *       ⚠️ 已由 #91 方向 B 根治，見下一節。</b></li>
  * </ol>
+ *
+ * <h2>⚠️ 2026-10-01（#91 方向 B）：路徑 2 已在寫入端根治</h2>
+ *
+ * <p>路徑 2（{@code flowable:assignee="${var}"} 求值為空白）<b>已由
+ * {@link BlankAssigneeNormalizingInterceptor}（全域 {@code CreateUserTaskInterceptor}）
+ * 根治</b>：它在 {@code handleAssignments} 之後把空白 assignee 收斂成 null。
+ * 因此這條路徑<b>不再產生空白 assignee</b> → 候選群組查得到 → 不告警。
+ * 這一條的性質從「重現 #89 缺陷」變成「#91 方向 B 的迴歸釘」，
+ * 測試名也改為 {@code blankAssigneeFromExpressionIsNormalizedByDirectionB}。
+ *
+ * <p>⚠️ <b>這不代表 {@code assignee-blocks-candidates} 這個 reason 死了。</b>
+ * 剩下的可達路徑<b>只有 API 寫入端</b>（路徑 1）：{@code TaskService.setAssignee}
+ * 在任務<b>建立之後</b>才寫值，不經過只管建立任務的 interceptor，仍會把空字串
+ * 原樣寫入。所以 {@code blankAssigneeSetByApiIsAlerted} 與
+ * {@code whitespaceAssigneeIsAlerted} 仍走舊路徑、仍告警
+ * {@code assignee-blocks-candidates} —— <b>那兩條就是這個 reason 還活著的證據。</b>
  *
  * <h2>非回歸對照組是必要的，不是多餘的</h2>
  *
  * <p>{@code nullAssigneeWithCandidateIsStillNotAlerted} 與
  * {@code candidateAddedInSameTransactionIsStillNotAlerted} 不是「多測一點」：
- * 一個「全部都告警」的實作能讓下面三條紅的測試全部通過。
+ * 一個「全部都告警」的實作能讓下面<b>兩條</b>紅的測試（API 寫入端）全部通過。
  * <b>兩組必須成組存在</b>，否則這個判準可以被「一律告警」 trivially 滿足。
  *
  * <h2>為什麼每條都附帶「候選人查得到嗎」的斷言</h2>
  *
  * <p>只斷言「有告警」不足以證明修的是對的東西 —— 它可能只是<b>告警得太寬</b>。
- * 所以每條缺陷測試都先斷言 {@code taskCandidateGroup(...).count() == 0}：
- * <b>證實候選人確實看不到</b>，告警才是對應到真實的卡死，而不是憑空亂報。
+ * 所以<b>兩條 API 寫入端的缺陷測試</b>都先斷言
+ * {@code taskCandidateGroup(...).count() == 0}：<b>證實候選人確實看不到</b>，
+ * 告警才是對應到真實的卡死，而不是憑空亂報。
  * 這是「判準與 assignee 的實際形狀一致」的實證，而不是只看 listener 的輸出。
+ *
+ * <p>⚠️ #91 方向 B 之後，{@code blankAssigneeFromExpressionIsNormalizedByDirectionB}
+ * 反過來斷言 {@code count() == 1}：它要證明的正是「修好之後候選人<b>真的看得到</b>」，
+ * 與上面兩條互為對照。
  *
  * <h2>⚠️ 負向控制組實測（2026-09-30，整份還原缺陷版本後重跑）</h2>
  *
@@ -80,13 +102,17 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p><b>8 條中 3 紅 5 綠</b>。綠的那五條<b>不是漏抓</b>，而是他們存在的理由。
  *
+ * <p>⚠️ <b>2026-10-01（#91 方向 B）後，這張表有一處變動</b>：原列為紅的
+ * {@code blankAssigneeFromExpressionIsAlerted}（已改名為
+ * {@code blankAssigneeFromExpressionIsNormalizedByDirectionB}）<b>不再是缺陷
+ * 重現，也不在負向控制組裡了</b> —— 原因見下一段。其餘敘述保留原意。
+ *
  * <table border="1">
- *   <caption>負向控制組結果</caption>
+ *   <caption>負向控制組結果（2026-09-30 實測；2026-10-01 移除一條，見下方說明）</caption>
  *   <tr><th>結果</th><th>測試</th><th>意義</th></tr>
  *   <tr><td>🔴 紅</td>
  *       <td>{@code blankAssigneeSetByApiIsAlerted}<br>
- *           {@code whitespaceAssigneeIsAlerted}<br>
- *           {@code blankAssigneeFromExpressionIsAlerted}</td>
+ *           {@code whitespaceAssigneeIsAlerted}</td>
  *       <td>缺陷期間 {@code hasCandidate && !assigneeIsSystemActor} 讓候選人
  *           「救」成功 → 直接 return → 一筆告警都沒有。實際是
  *           {@code expected: assignee-blocks-candidates but was: []}。</td></tr>
@@ -97,9 +123,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  *           {@code missingAssigneeKeepsOriginalReason}<br>
  *           {@code candidateAddedInSameTransactionIsStillNotAlerted}</td>
  *       <td>它們與本缺陷無關（缺陷期間就該綠）。<b>重點是修好之後仍必須綠</b> ——
- *           一個「有候選人就全部告警」的實作能讓三條紅的通過，卻會讓這五條紅。
+ *           一個「有候選人就全部告警」的實作能讓兩條紅的通過，卻會讓這五條紅。
  *           兩組必須成組存在。</td></tr>
  * </table>
+ *
+ * <h3>⚠️ 為什麼把 {@code blankAssigneeFromExpressionIsAlerted} 移出負向控制組</h3>
+ *
+ * <p>它在 2026-09-30 的負向控制組裡<b>確實是紅的</b>，但那是在 #91 方向 B
+ * 之前。方向 B 把 BPMN 運算式的空白 assignee 在<b>寫入端</b>收斂成 null，
+ * 於是這條測試驗的對象整個換了：從「重現缺陷（空白 assignee + 候選人看不到
+ * + 告警）」變成「<b>方向 B 的迴歸釘</b>（assignee 為 null + 候選人看得到 +
+ * 不告警）」。<b>性質變了，所以不能繼續放在「缺陷期間該紅」的表裡。</b>
+ * 這不是把歷史刪掉 —— 上述 2026-09-30 的紀錄與「3 紅」的數字原樣保留，
+ * 只是標明它現在的角色。
  *
  * <p>⚠️ 另外兩組測試（{@code UnreachableTaskAlertTest} 3 條、
  * {@code UnreachableSystemAssigneeAlertTest} 6 條）在本輪缺陷期間<b>全綠</b>，
@@ -145,7 +181,9 @@ class UnreachableBlankAssigneeAlertTest extends IntegrationTestBase {
         if (repositoryService.createProcessDefinitionQuery().processDefinitionKey(BLANK_VIA_API).count() == 0) {
             repositoryService.createDeployment().addString(BLANK_VIA_API + ".bpmn20.xml",
                     bpmn(BLANK_VIA_API, "flowable:candidateGroups=\"" + GROUP + "\"")).deploy();
-            // 路徑 2：運算式求值為空白 → 繞過 isNotEmpty。
+            // 路徑 2：運算式求值為空白 → 原本繞過 isNotEmpty。
+            // ⚠️ #91 方向 B 之後，這一條已是「方向 B 的迴歸釘」：空白 assignee
+            // 會被正規化成 null，不再產生缺陷形狀（見類別 javadoc）。
             repositoryService.createDeployment().addString(BLANK_VIA_EXPRESSION + ".bpmn20.xml",
                     bpmn(BLANK_VIA_EXPRESSION,
                             "flowable:assignee=\"${blankVar}\" flowable:candidateGroups=\"" + GROUP + "\"")).deploy();
@@ -236,23 +274,34 @@ class UnreachableBlankAssigneeAlertTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("#89：BPMN 運算式求值為空白 + 有候選群組 → 必須告警（不經任何 API 的路徑）")
-    void blankAssigneeFromExpressionIsAlerted() {
-        // ⚠️ 這一條是 #89 唯一「不需要任何寫入端配合」的路徑：
-        // 管理員部署一個 flowable:assignee="${var}" 的流程，有人把 var 設成空白
-        // 就會命中。#88 擋的是外部 API 的 firstTaskAssignee 欄位，管不到這裡。
+    @DisplayName("#91 方向 B：BPMN 運算式求值為空白 + 有候選群組 → 正規化成 null、候選人看得到、不告警"
+            + "（#89 的這條路徑已由方向 B 根治）")
+    void blankAssigneeFromExpressionIsNormalizedByDirectionB() {
+        // ⚠️ 這一條原本是 #89「不需要任何寫入端配合」的缺陷路徑：管理員部署一個
+        // flowable:assignee="${var}" 的流程，有人把 var 設成空白就會命中。
+        // #91 方向 B 的 BlankAssigneeNormalizingInterceptor 在 handleAssignments
+        // 之後把空白 assignee 收斂成 null，於是這條路徑不再產生空白 assignee。
+        //
+        // 因此本測試的斷言整個反轉：不再是「非 null 空白 + 看不到 + 告警」，
+        // 而是「null + 看得到 + 不告警」。舊斷言釘的是缺陷期間的舊行為。
         String pid = runtimeService.startProcessInstanceByKey(BLANK_VIA_EXPRESSION,
                 Map.of("blankVar", "   ")).getId();
 
-        String assignee = taskService.createTaskQuery().processInstanceId(pid).singleResult().getAssignee();
-        assertThat(assignee)
-                .as("前置條件：運算式求值結果是空白字串而非 null —— "
-                        + "UserTaskActivityBehavior 的 isNotEmpty 判斷的是運算式"
-                        + "**字串**非空，不是求值**結果**非空，所以擋不住")
-                .isNotNull().isBlank();
+        assertThat(taskService.createTaskQuery().processInstanceId(pid).singleResult().getAssignee())
+                .as("方向 B 之後：運算式求值為空白會被正規化成 null，"
+                        + "不再是「非 null 的空白字串」")
+                .isNull();
 
-        assertThat(candidatesCanSee(pid)).as("候選人查不到").isZero();
-        assertThat(alertReasons(pid)).containsExactly("assignee-blocks-candidates");
+        assertThat(candidatesCanSee(pid))
+                .as("正規化成 null 之後候選群組查得到（count=1）—— 這正是方向 B 的目的："
+                        + "任務不再靜默卡死。舊斷言是 count=0，那是缺陷期間的形狀")
+                .isEqualTo(1);
+
+        assertThat(alertReasons(pid))
+                .as("候選人看得到了，因此不告警。⚠️ assignee-blocks-candidates 這個 "
+                        + "reason 仍活著，只是可達路徑剩下 API 寫入端"
+                        + "（blankAssigneeSetByApiIsAlerted／whitespaceAssigneeIsAlerted）")
+                .isEmpty();
     }
 
     // ── 非缺陷路徑：釘住「BPMN 字面值空字串」不是這個缺陷 ─────────────
