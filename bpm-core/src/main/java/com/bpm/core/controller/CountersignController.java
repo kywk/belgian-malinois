@@ -192,7 +192,23 @@ public class CountersignController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "countersignUserId 為必填（注意：欄位名不是 assignee）");
         }
-        assignee = assignee.trim();
+        //
+        // ⚠️ #93a 連帶**移除**了這裡原本的 `assignee = assignee.trim();`。
+        //
+        // 為什麼要拿掉：加簽是「指派給誰必須是組織系統認識的人」這條規則的
+        // 第三個入口，而 reassign（#92）與 delegate（#93a）**都不 trim** ——
+        // 它們遇到 `" mgr002 "` 會回 400，理由寫在 ExternalActorGuard：
+        // **對組織系統而言 `" mgr002 "` 是另一個人**，靜默修掉等於讓呼叫端
+        // 永遠不知道自己送錯了。三個入口對同一種輸入給出兩種答案，就是
+        // 「同一條規則有兩套形狀」—— 正是本 repo 反覆記載的缺陷成因。
+        //
+        // 這個 trim 原本是為了前端欄位名不一致（送 {assignee, description}）
+        // 的問題，而那個欄位名問題早已修好（見上面的 400 訊息），
+        // trim 因此只是沒被清掉的殘留。
+        //
+        // ⚠️ 行為變更：以前 `" mgr002 "` 會被靜默 trim 後放行（200），
+        // 現在回 400。經 PM 裁決。送出空白邊界 id 的呼叫端本來就送錯了，
+        // 而 400 的訊息會指名它該改哪裡（比靜默接受更有診斷價值）。
 
         // ── 3. 目標對象必須是組織系統認識的人 ────────────────────
         //
@@ -239,7 +255,10 @@ public class CountersignController {
         //     系統會捏造預設值，這條規則會退化 —— 正確的補法是改用明確的存在性
         //     查詢（OrgRestClient 已有 getUser，但 OrgService 尚未暴露它，
         //     也沒有為它決定快取政策）。那是另一個工項，不在這裡順手決定。
-        actorGuard.requireKnownPerson("countersignUserId", assignee);
+        // action 傳「建立加簽子任務」而不是預設的「發起流程」：這個端點
+        // 不發起流程，訊息若那樣寫就是對呼叫端說謊（見 ExternalActorGuard
+        // 對 action 參數的說明）。
+        actorGuard.requireKnownPerson("countersignUserId", assignee, "建立加簽子任務");
 
         Task subtask = taskService.newTask();
         subtask.setParentTaskId(taskId);

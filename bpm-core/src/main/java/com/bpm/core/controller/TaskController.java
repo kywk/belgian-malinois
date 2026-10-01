@@ -428,7 +428,9 @@ public class TaskController {
                 // 狀態碼沿用 actorGuard 既有行為（不自創第四組政策）：
                 // 組織系統「查無此人」→ 400；「故障」→ 503（此時尚未寫入任何東西，
                 // 重試安全 —— 委派不會產生重複的子流程之類的東西）。
-                actorGuard.requireKnownPerson("delegateUser", req.delegateUser());
+                // action 傳「委派任務」：這個端點不發起流程（見
+                // ExternalActorGuard 對 action 參數的說明）。
+                actorGuard.requireKnownPerson("delegateUser", req.delegateUser(), "委派任務");
                 taskService.delegateTask(id, req.delegateUser());
                 auditType = OperationType.TASK_DELEGATE;
             }
@@ -511,7 +513,9 @@ public class TaskController {
                 // 狀態碼沿用 ExternalActorGuard 既有行為（不自創第四組政策）：
                 // 組織系統「查無此人」→ 400（呼叫端該改 payload）；
                 // 組織系統「故障」→ 503（可安全重試，此時尚未寫入任何東西）。
-                actorGuard.requireKnownPerson("assignee", req.assignee());
+                // action 傳「改派任務」：這個端點不發起流程（見
+                // ExternalActorGuard 對 action 參數的說明）。
+                actorGuard.requireKnownPerson("assignee", req.assignee(), "改派任務");
                 taskService.setAssignee(id, req.assignee());
                 auditType = OperationType.TASK_REASSIGN;
             }

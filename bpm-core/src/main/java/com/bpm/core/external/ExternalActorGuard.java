@@ -200,12 +200,40 @@ public class ExternalActorGuard {
      * 「沒有指名」是呼叫端合法的選擇（改用候選群組或代發），
      * 由呼叫端自己的「至少有一個」規則處理，不是這條規則的事。
      *
-     * @param field  body 欄位名，放進錯誤訊息讓呼叫端知道要改哪一個
+     * <p>⚠️ <b>呼叫端不是都「發起流程」</b>。本方法在 #93a 之後有五個呼叫點，
+     * 其中四個（reassign／delegate／countersign，以及外部 API 的 onBehalfOf）
+     * <b>不會發起流程</b>。錯誤訊息若寫死「未發起流程」「請改用
+     * {@code onBehalfOf}」，就是在對改派／委派／加簽的呼叫端說一件他們的
+     * 請求裡根本不存在的事 —— <b>診斷訊息指向錯誤的欄位比沒有訊息更糟</b>。
+     * 所以 action 由呼叫端傳入。
+     *
+     * @see #requireKnownPerson(String, String, String)
+     */
+    public void requireKnownPerson(String field, String userId) {
+        requireKnownPerson(field, userId, DEFAULT_ACTION);
+    }
+
+    /** 未指定 action 時的預設值 —— 只有外部 API 那個呼叫點適用。 */
+    private static final String DEFAULT_ACTION = "發起流程";
+
+    /**
+     * 這個欄位指名的身分必須是組織系統認識的人。
+     *
+     * <p>{@code userId} 為 {@code null} 時<b>直接放行</b>：
+     * 「沒有指名」是呼叫端合法的選擇（改用候選群組或代發），
+     * 由呼叫端自己的「至少有一個」規則處理，不是這條規則的事。
+     *
+     * @param field   body 欄位名，放進錯誤訊息讓呼叫端知道要改哪一個
+     * @param userId  要指派的人員 id；{@code null} = 未指名（放行）
+     * @param action  這個呼叫點「做了什麼」，放進錯誤訊息。⚠️ **它不是裝飾**：
+     *                五個呼叫點裡只有一個真的會發起流程，見類別註解與
+     *                {@link #requireKnownPerson(String, String)} 的說明
      * @throws ResponseStatusException 400（查無此人）或 503（組織系統故障），
      *         分界線見類別註解「故障與拒絕必須分開」
      */
-    public void requireKnownPerson(String field, String userId) {
+    public void requireKnownPerson(String field, String userId, String action) {
         if (userId == null) return;
+
 
         // ── 1. 空白 ────────────────────────────────────────────────────
         //
@@ -266,23 +294,23 @@ public class ExternalActorGuard {
         } catch (Exception e) {
             if (isDefinitiveRejection(e)) {
                 // 組織系統明確回答「查無此人」：呼叫端該改 payload。
-                log.warn("外部系統指定的 {}={} 不是組織系統認識的人員，拒絕發起流程: {}",
-                        field, userId, e.toString());
+                log.warn("指定的 {}={} 不是組織系統認識的人員，拒絕（{}）: {}",
+                        field, userId, action, e.toString());
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         field + "=" + userId + " 不是組織系統認識的人員，無法指派給他。"
                                 + "請確認 id 拼寫（大小寫、前後空白都會影響比對）。"
-                                + "若該人員確實存在，請改用 onBehalfOf 代員工發起。",
+                                + "若該人員確實存在，請改用確實存在的員工編號。",
                         e);
             }
             // 我們沒拿到答案（連線逾時／無法連線／5xx／其他 4xx／無法解析）。
             // log.error 而非 warn：這一筆是基礎設施故障，需要有人被通知。
             log.error("組織系統查詢失敗（{}={}），無法判定該人員是否存在，"
-                    + "回 503 讓呼叫端稍後重試: {}", field, userId, e.toString(), e);
+                    + "回 503 讓呼叫端稍後重試（{}）: {}", field, userId, action, e.toString(), e);
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "組織系統目前無法查詢（" + e.getClass().getSimpleName() + "），"
-                            + "無法確認 " + field + "=" + userId + " 是否為有效人員，因此未發起流程。"
+                            + "無法確認 " + field + "=" + userId + " 是否為有效人員，因此未執行 " + action + "。"
                             + "這是暫時性問題，請稍後以相同的參數重試 —— "
-                            + "本次請求未建立任何流程實例，重試不會產生重複案件。",
+                            + "本次請求未做任何變更，重試不會產生重複案件。",
                     e);
         }
     }

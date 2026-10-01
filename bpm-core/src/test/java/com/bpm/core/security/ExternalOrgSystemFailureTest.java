@@ -166,7 +166,14 @@ class ExternalOrgSystemFailureTest extends IntegrationTestBase {
                             + "只看狀態碼的呼叫端無從判斷該不該重試")
                     .contains("組織系統目前無法查詢")
                     .contains("請稍後以相同的參數重試")
-                    .contains("本次請求未建立任何流程實例");
+                    // ⚠️ #93a：措辭由「未建立任何流程實例」改為動作中立的
+                    // 「未做任何變更」。本條斷言的**意圖**（讓只看狀態碼的
+                    // 呼叫端知道可以安全重試）一字未減，而舊措辭對
+                    // reassign／delegate／countersign 那三個呼叫點是假的
+                    // —— 它們不發起流程。見 ExternalActorGuard 的
+                    // requireKnownPerson(String,String,String)。
+                    .contains("本次請求未做任何變更")
+                    .contains("重試不會產生重複案件");
         }
 
         @Test
