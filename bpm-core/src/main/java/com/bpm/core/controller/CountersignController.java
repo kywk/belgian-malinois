@@ -3,7 +3,7 @@ package com.bpm.core.controller;
 import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.security.TaskHolderGuard;
-import com.bpm.core.service.OrgService;
+import com.bpm.core.external.ExternalActorGuard;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import org.flowable.engine.TaskService;
@@ -11,7 +11,6 @@ import org.flowable.task.api.Task;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.web.client.HttpClientErrorException;
 
 import java.util.HashMap;
 import java.util.List;
@@ -68,14 +67,17 @@ public class CountersignController {
     private final TaskService taskService;
     private final AuditEventPublisher auditPublisher;
     private final TaskHolderGuard holderGuard;
-    private final OrgService orgService;
+    // #93a：「加簽對象必須是組織系統認識的人」的實作只有這一份
+    // （ExternalActorGuard.requireKnownPerson），與 #88 的 firstTaskAssignee／
+    // onBehalfOf、#92 的 reassign assignee 共用。
+    private final ExternalActorGuard actorGuard;
 
     public CountersignController(TaskService taskService, AuditEventPublisher auditPublisher,
-                                 TaskHolderGuard holderGuard, OrgService orgService) {
+                                 TaskHolderGuard holderGuard, ExternalActorGuard actorGuard) {
         this.taskService = taskService;
         this.auditPublisher = auditPublisher;
         this.holderGuard = holderGuard;
-        this.orgService = orgService;
+        this.actorGuard = actorGuard;
     }
 
     /**
@@ -117,9 +119,21 @@ public class CountersignController {
      * 空白至少會回 400 讓前端立刻發現；打錯一個員工編號不會有任何訊號。
      *
      * <p><b>先例</b>：{@code ExternalApiController.startProcess} 對
-     * {@code onBehalfOf} 做的正是這件事（try {@code orgService.getDirectManager}，
-     * 例外即「不是組織系統認識的人」）。沿用同一個做法與同一個理由：
-     * 一個查不到的對象會讓下游無法路由，且只會製造混亂。
+     * {@code onBehalfOf} 做的正是這件事（問組織系統，例外即「不是組織系統認識的人」）。
+     * 沿用同一個做法與同一個理由：一個查不到的對象會讓下游無法路由，
+     * 且只會製造混亂。
+     *
+     * <h2>⚠️ #93a：這條規則的實作只有一份，在 {@code ExternalActorGuard}</h2>
+     *
+     * <p>本方法原本自己有一份私有實作（只問一次組織系統）。現在改為呼叫
+     * {@code ExternalActorGuard.requireKnownPerson}，與 {@code firstTaskAssignee}／
+     * {@code onBehalfOf}（#88）、{@code reassign} 的 assignee（#92）共用同一份。
+     * 收斂的完整理由見下方呼叫處的註解；這裡只補一句本方法特有的：
+     * 空白那一層對本端點是死碼（第 2 段的形狀檢查先擋掉），但仍然呼叫完整的
+     * 三層，因為「規則只有一份」意味著呼叫端不該知道哪一層對它有意義 ——
+     * 而 {@code actorGuard} 的空白訊息會提到 {@code firstTaskCandidateGroups}，
+     * 那是 {@code firstTaskAssignee} 的欄位，本 body 沒有。與 #92 的
+     * {@code reassign} 完全同理。
      *
      * <p>⚠️ <b>交易內的外部呼叫</b>：這一次查詢發生在
      * {@code @Transactional("primaryTransactionManager")} 之内，
@@ -181,7 +195,51 @@ public class CountersignController {
         assignee = assignee.trim();
 
         // ── 3. 目標對象必須是組織系統認識的人 ────────────────────
-        requireKnownEmployee(assignee);
+        //
+        // ⚠️ #93a：這裡原本呼叫本檔的私有實作 requireKnownEmployee(userId)，
+        // 內容是「try orgService.getDirectManager(userId)，404 → 400、
+        // 其他例外 → 503」。它已刪除，現在與 firstTaskAssignee／onBehalfOf（#88）、
+        // reassign 的 assignee（#92）共用 ExternalActorGuard 這一份。
+        //
+        // 為什麼刪除而不是只在舊實作上補掉缺的兩層：
+        //
+        //   1. 同一條規則有兩份實作，正是本專案反覆記載的缺陷成因
+        //      （#84／#86／#87）。若本檔留著私有實作，就會變成
+        //      「外部入口擋一種形狀、加簽擋另一種形狀」——
+        //      而兩邊的錯誤訊息不一致，正是本 repo 記錄過的失敗型態。
+        //   2. 舊實作缺的「system: 前綴」那一層<b>不是裝飾</b>：舊實作只能靠
+        //      「組織系統查不到」擋下 system:evil，而那個證據
+        //      <b>只有在組織系統 fail-closed 時才可信</b>。本專案自己的
+        //      MockOrgController 整整兩輪都是 fail-open（對不認識的 id 回 mgr001），
+        //      而那正是 #83 的缺陷兩輪沒被任何測試抓到的原因。收斂之後
+        //      system: 前綴由<b>不打網路</b>的純字串比對擋下，不依賴任何前提。
+        //
+        // 狀態碼語意<b>不變</b>（舊實作本來就分 400／503，ExternalActorGuard
+        // 是同一組政策），差異只在多了兩層與統一了訊息。刻意不在本檔自創第四組
+        // 狀態碼。
+        //
+        // 不寫稽核事件：這是一個<b>已授權</b>操作上的輸入錯誤（400），
+        // 不是授權拒絕。DATA_ACCESS {denied:true} 的語意是「有人嘗試存取
+        // 他沒有權限的東西」，把它用在打錯字上會稀釋它的訊號。
+        //
+        // ⚠️ 空白那一層對本端點是<b>死碼</b>（第 2 段的形狀檢查先擋掉），
+        // 而這一點必須寫下來。仍然呼叫完整的三層是刻意的 ——
+        // 「規則只有一份」意味著呼叫端不該知道哪一層對它有意義；
+        // 而且 actorGuard 的空白訊息提到 firstTaskCandidateGroups
+        // （那是 firstTaskAssignee 的欄位），若真的讓它觸發，
+        // 訊息會指向一個本 body 沒有的欄位。與 #92 的 reassign 同理：
+        // 空白形狀檢查保留在本地，訊息才指得準。
+        //
+        // 舊實作註解裡記錄的兩個仍然有效的觀察，一併留在這裡以免遺失：
+        //   * 鏈頂人員（dir001／admin001）回 null 而非例外 —— 「此人存在但沒有主管」。
+        //     所以判斷依據是「有沒有拋例外」，絕不可寫成
+        //     `if (getDirectManager(x) == null) reject`（那會擋掉總監本人）。
+        //     ExternalActorGuard 的第三層正是這樣寫的。
+        //   * 「組織系統說這個人存在」只在 fail-closed 時可信。若對接的真實組織
+        //     系統會捏造預設值，這條規則會退化 —— 正確的補法是改用明確的存在性
+        //     查詢（OrgRestClient 已有 getUser，但 OrgService 尚未暴露它，
+        //     也沒有為它決定快取政策）。那是另一個工項，不在這裡順手決定。
+        actorGuard.requireKnownPerson("countersignUserId", assignee);
 
         Task subtask = taskService.newTask();
         subtask.setParentTaskId(taskId);
@@ -218,47 +276,6 @@ public class CountersignController {
         result.put("assignee", assignee);
         result.put("name", subtask.getName());
         return result;
-    }
-
-    /**
-     * 加簽對象必須是組織系統認識的人。
-     *
-     * <p>沿用 {@code ExternalApiController.startProcess} 對 {@code onBehalfOf}
-     * 的做法：以 {@code getDirectManager} 是否拋例外當作「這個人存不存在」，
-     * 因為 mock 是 fail-closed 的（{@code MockOrgController} 刻意不捏造預設值），
-     * 而真實組織系統對未知員工同樣回 404。
-     *
-     * <p><b>鏈頂人員回 null 而非例外</b>（dir001／admin001）——
-     * 那是「此人存在但沒有主管」，不是錯誤，所以 null 不能當成拒絕的依據。
-     * 這也是為什麼判斷寫成 try/catch 而不是「查到的值為 null 就拒絕」。
-     *
-     * <p>⚠️ <b>已知的弱點：這個判斷繼承了組織系統的 fail-open 行為</b>。
-     * 若對接的組織系統對未知員工捏造一個預設值（改動前的 {@code MockOrgController}
-     * 就是這樣），就不會拋例外，這個檢查會變成空轉。{@code MockOrgController}
-     * 改成 fail-closed 正是為了消除這個前提（security-audit P2-7），
-     * 所以在這個 repo 內它是有效的；對接真實系統時，若不確定它是否 fail-closed，
-     * 應改用明確的存在性查詢（{@code OrgRestClient} 已有 {@code getUser}，
-     * 但 {@code OrgService} 尚未暴露它，也沒有為它決定快取政策）——
-     * 那需要另外決定「一個人的基本資料要快多久」，不該在授權修正裡順手決定。
-     *
-     * <p>不寫稽核事件：這是一個<b>已授權</b>操作上的輸入錯誤（400），
-     * 不是授權拒絕。{@code DATA_ACCESS {denied:true}} 這個型別的語意是
-     * 「有人嘗試存取他沒有權限的東西」，把它用在打錯字上會稀釋它的訊號。
-     */
-    private void requireKnownEmployee(String userId) {
-        try {
-            orgService.getDirectManager(userId);
-        } catch (HttpClientErrorException.NotFound e) {
-            // 組織系統明確回答「沒有這個人」→ 呼叫端的輸入錯誤。
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "countersignUserId=" + userId + " 不是組織系統認識的人員。", e);
-        } catch (Exception e) {
-            // 連不上／逾時／5xx —— 我們<b>無法確認</b>，不是「確認他不存在」。
-            // 擋下（fail-closed）：放行等於在故障期間持續製造死鎖。
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "無法確認 " + userId + " 是否為組織系統的人員（組織系統暫時無法查詢），"
-                            + "請稍後再試。本次未建立任何加簽任務。", e);
-        }
     }
 
     /**
