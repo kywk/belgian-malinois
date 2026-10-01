@@ -419,3 +419,111 @@ WebhookConfigResolver       從 BPMN 的 extensionElements 讀 webhook 設定
 #93 的若干、#94 的 4 條、#90 的 1 條）。**若日後改寫那些訊息，這些會紅** ——
 這是刻意的取捨（與 repo 既有先例一致），但要改訊息時**預期會有多個類別轉紅**，
 那是訊息改動的成本，不是測試壞掉。
+
+---
+
+## 11. 🔴🔴 `git commit` 會提交**整個 index**，不只是你 `git add` 的東西
+
+**2026-10-01 PM 真的踩到了，而且差點刪掉一整輪的成果。**
+
+### 發生什麼
+
+PM 跑 `git add docs/handoff/ && git diff --cached --stat && git commit`，
+要提交兩份交接文件。結果那個 commit **把 20 多個程式碼檔案記成刪除**
+（`MeController.java` 等全部從 HEAD 消失，4697 行刪除）。
+
+### 成因
+
+`git add <path>` **只會把東西加進 index**，但 `git commit` 提交的是
+**整個 index** —— 包括**別人在更早的時候 staged 進去的狀態**。
+
+那個「更早的 staged 刪除」不是 PM 做的。同一時間點（約 18:56）有另一個
+外部動作（見第 12 節）改了 index。PM 的指令只是**順手把它一起提交了**。
+
+### 為什麼防護欄失效了
+
+`git diff --cached --stat` **有執行，而且輸出就印在眼前**
+（28 個檔案、845 新增、**4697 刪除**）。PM 沒有把它讀成
+「**這不是我改的**」就 commit 了。
+
+**所以那條規則不是「跑一下」就完成 —— 它的價值全在於你逐行讀那個輸出，
+並且問「每一項都是我要提交的嗎」。**
+
+### 正確做法
+
+```bash
+git add <明確路徑>
+git diff --cached --name-only    # ← 逐行確認清單，不要只看 --stat 的加總
+git diff --cached --stat
+# ⚠️ 看到自己沒碰過的檔案、或任何刪除，先查清楚再 commit
+```
+
+**更快更安全的做法**：不要依賴 `git add <path>` 的局部性假設。
+`git commit <path>` 會**直接從工作樹取那些路徑**、不動 index 其他內容 ——
+但同樣要看 `git show --stat` 確認。
+
+### 復原方式（有效，已實測）
+
+```bash
+git reset --mixed HEAD~1     # 移動 HEAD，unstage 全部，**不動工作樹**
+git status                   # 確認工作樹檔案都還在
+cd bpm-core && mvn clean verify   # 用測試證明無損，不要只信 git
+```
+
+⚠️ **絕對不要用 `git reset --hard`** —— 那會刪掉工作樹的檔案，
+而那些檔案正是你要救的東西。
+
+### 這個坑的通用形狀
+
+**「工作樹乾淨」不等於「index 乾淨」。** `git status` 顯示乾淨時，
+index 仍然可能與 HEAD 不同（staged 的新增／刪除／修改）。
+`git status --short` 的第一欄就是 index 相對 HEAD 的狀態 ——
+**提交前要看的正是那一欄。**
+
+---
+
+## 12. ⚠️ remote 設定有誤，而且有東西被推上去了
+
+### 現況（2026-10-01 18:56 實測）
+
+| remote | URL | 狀態 |
+|---|---|---|
+| `github` | `git@github.com:kywk/belgian-malinois.git` | ⚠️ **無關的 repo**（比利時 Malinois 犬舍），已有 **190 個 commit** = **本專案完整歷史** |
+| `nsl` | `git@10.127.42.141:dtc_ad/greyhound.git` | ✅ 正確的內網 remote，**165 個 commit**（落後 26） |
+
+**2026-10-01 18:56:07** 有一次 `push` 把 `github/main` 推到 `316a35f`，
+`git reflog` 的記錄是 `refs/remotes/github/main@{0}: update by push`。
+**PM 整個 session 沒有執行過任何 `git push`。**
+
+⚠️ 這個 remote 是**本專案既有的設定錯誤**（handoff 第 9 節說 main 要 push 到
+`github` 與 `nsl` 兩邊，但 `github` 那個 URL 明顯不對）。
+它**不是本輪造成的**，但每一輪的成果都被送進去了。
+
+### 洩漏範圍（實測）
+
+- **本輪那 25 個 commit 不含任何憑證** —— 逐一檢查過，命中的
+  `${bpm.security.jwt.dev-secret}`（設定占位符）與
+  `TestGatewayMockMvcCustomizer.GATEWAY_SECRET`（測試常數）都不是真值。
+- ⚠️ **但 `docker-compose.yml` 裡的真實 dev 密碼
+  （`MSSQL_SA_PASSWORD: "BpmDev@2026!"`）自 `f138799`（第一個 commit）起
+  就在這個 repo 的歷史裡**，所以在 `github/main` 的 190 個 commit 中。
+  `nsl/main` 同樣有（那是內網 remote，可接受）。
+- 內部文件也一併出去了：`docs/backend-development-backlog.md`（含組織結構、
+  權限碼名稱、mock fixture 的權限對應）、`docs/handoff/**`（含
+  `dev-token.sh` 的權限說明與資料庫密碼）、`docs/bpm-platform-spec.md`。
+
+**這是既有技術債 R-04（密碼治理）的一部分**，backlog 有記
+（「開發密碼仍散落於兩個 `application.yml` 與 `docker-compose.yml`」）。
+
+### 建議（**需要使用者決定，不要自行 push**）
+
+1. 把 `github` remote 改掉或移除 —— 在它被修正之前，
+   **每一次 push 都會把成果送到錯誤的地方**
+2. 評估 `kywk/belgian-malinois` 是否為公開 repo；若是，
+   那些內部文件與 dev 密碼已經暴露
+3. `BpmDev@2026!` 既然已經在歷史裡，**改成新密碼才有意義**
+   （單純從現有檔案刪掉沒用，git 歷史裡還在）
+4. `nsl` 才是正確的內網 remote
+
+⚠️ **不要擅自改 remote 或 force-push** —— 使用者的硬規則是
+「不要擅自 push」，而清理歷史更需要明確授權。

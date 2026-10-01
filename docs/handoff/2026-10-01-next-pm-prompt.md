@@ -260,3 +260,38 @@ dev 環境的 `MockPermController` 已有 `dir001` 的 fixture，所以**測試�
 
 另外 `bpm:form:design` 與 `audit:log:read` 也必須在真實權限中心指派給正確的人員，
 否則 #82 修好的前端會忠實地顯示「你沒有這個功能」。
+
+## 10. 🔴 兩個必須先知道的環境風險
+
+### 10.1 `git commit` 會提交**整個 index**，不只是你 `git add` 的東西
+
+PM 在這一輪真的踩到，**差點把一整輪 25 個 commit 的成果從 HEAD 刪掉**。
+成因與正確做法見 `docs/handoff/2026-10-01-round4-handoff.md` 第 11 節。
+
+最精要的三句：
+
+1. `git add <path>` 只加進 index，但 **`git commit` 提交的是整個 index** ——
+   包括別人更早 staged 進去的狀態
+2. **`git status` 顯示乾淨不等於 index 乾淨** —— `git status --short`
+   的第一欄才是 index 相對 HEAD 的狀態
+3. **`git diff --cached --stat` 的價值不在「跑一下」，而在逐行讀它** ——
+   PM 有跑、有看到 4697 行刪除，**卻沒有把它讀成「這不是我改的」就提交了**。
+   看到自己沒碰過的檔案或任何刪除，先查清楚
+
+復原方式（已實測有效）：`git reset --mixed HEAD~1`（不動工作樹），
+然後用 `mvn clean verify` 證明無損。**絕對不要用 `--hard`** ——
+那會刪掉你要救的檔案。
+
+### 10.2 `github` remote 指向一個無關的 repo，而且有東西被推上去了
+
+`github` = `git@github.com:kywk/belgian-malinois.git`（**無關的公開 repo**），
+上面已有本專案**完整歷史 190 個 commit**，包含 `docker-compose.yml` 裡的真實
+dev 密碼（自第一個 commit 起）與全部內部文件。
+正確的 remote 是 `nsl`（內網）。
+
+2026-10-01 18:56 有一次 push 把本輪 25 個 commit 送進去（**PM 沒執行 push**）。
+細節與建議見 round4 handoff 第 12 節。
+
+⚠️ **在 `github` remote 被修正之前，不要 push。** 而修改 remote 或清理歷史
+**需要使用者明確授權** —— 使用者的硬規則是「不要擅自 push」，
+清理歷史更需要授權。
