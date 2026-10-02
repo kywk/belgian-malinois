@@ -293,6 +293,7 @@ public class ProcessController {
                     if (!tasks.isEmpty()) {
                         Task task = tasks.get(0);
                         m.put("currentTask", Map.of(
+                                "taskId", task.getId(),
                                 "taskName", task.getName() != null ? task.getName() : "",
                                 "assignee", task.getAssignee() != null ? task.getAssignee() : ""));
                         // 併發時只顯示其中一個會讓使用者以為案件只等一個人；
@@ -356,6 +357,7 @@ public class ProcessController {
                     if (!tasks.isEmpty()) {
                         Task task = tasks.get(0);
                         m.put("currentTask", Map.of(
+                                "taskId", task.getId(),
                                 "taskName", task.getName() != null ? task.getName() : "",
                                 "assignee", task.getAssignee() != null ? task.getAssignee() : ""));
                         // 併發時只顯示其中一個會讓使用者以為案件只等一個人，

@@ -336,6 +336,7 @@ public class HistoryController {
                     if (!tasks.isEmpty()) {
                         Task task = tasks.get(0);
                         m.put("currentTask", Map.of(
+                                "taskId", task.getId(),
                                 "taskName", task.getName() != null ? task.getName() : "",
                                 "assignee", task.getAssignee() != null ? task.getAssignee() : ""));
                         m.put("currentTaskCount", tasks.size());
