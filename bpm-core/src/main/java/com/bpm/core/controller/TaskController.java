@@ -432,6 +432,14 @@ public class TaskController {
                 //
                 // ⚠️ standalone 加簽子任務沒有 processInstanceId：
                 // 它不屬於任何流程，不該發 process_* 事件。
+                //
+                // ⚠️ 與既有 listener／稽核的順序：本通知在 complete() 返回、
+                // ProcessCompletedListener（webhook 與 PROCESS_COMPLETE 稽核）
+                // 之後立即送出；本方法的稽核則在尾端才 publish（掛在交易的
+                // beforeCommit）。若稽核最後失敗導致交易回滾，通知已經送出
+                // —— 這與既有 webhook listener 是同一個取捨（通知不進交易），
+                // 不是新風險；反過來把通知綁進交易，RabbitMQ 故障時會讓
+                // 簽核整個失敗，代價更大。
                 if (processInstanceId != null && auditType != OperationType.TASK_RESUBMIT) {
                     notifyPublisher.taskCompleted(processInstanceId, task.getProcessDefinitionId(),
                             id, task.getName(), vars, processEnded(processInstanceId),

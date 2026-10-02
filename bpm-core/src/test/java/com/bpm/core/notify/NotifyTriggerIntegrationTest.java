@@ -282,6 +282,27 @@ class NotifyTriggerIntegrationTest extends IntegrationTestBase {
         assertThat(NotifyTestSink.events(msgs, "task_assigned")).hasSize(1);
     }
 
+    @Test
+    @DisplayName("#33 代發案件（R-20）：退回通知給被代的員工，不是 system:erp")
+    void returnedOfOnBehalfCaseNotifiesTheEmployee() throws Exception {
+        var pi = runtimeService.startProcessInstanceByKey("leave-approval",
+                Map.of("initiator", "system:erp", "onBehalfOf", "user001",
+                        "leaveType", "annual", "days", 1));
+        Task manager = taskService.createTaskQuery().processInstanceId(pi.getId()).singleResult();
+        // 前置條件：主管關卡依 onBehalfOf 路由（InitialAssigneeResolver）
+        assertThat(manager.getAssignee()).isEqualTo("mgr001");
+        NotifyTestSink.reset();
+
+        complete(manager.getId(), "mgr001", vars("[{\"name\":\"approved\",\"value\":false}]"))
+                .andExpect(status().isOk());
+
+        Map<String, Object> returned = only(NotifyTestSink.drain(), "process_returned");
+        assertThat(returned)
+                .as("initiator 是 system:erp（不是人）；收件人必須取 onBehalfOf")
+                .containsEntry("assignee", "user001")
+                .doesNotContainValue("system:erp");
+    }
+
     // ── 認領（#33）─────────────────────────────────────────────────
 
     @Test
@@ -408,6 +429,25 @@ class NotifyTriggerIntegrationTest extends IntegrationTestBase {
         urge(first.pid(), "user001").andExpect(status().isOk());
         // key 若只用 taskId 或全域，下面這一行會被誤擋（冷卻還沒過）。
         urge(second.pid(), "user001").andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("#6 代發案件（R-20）：被代的員工可以催辦，不是只認 initiator")
+    void onBehalfApplicantCanUrge() throws Exception {
+        var pi = runtimeService.startProcessInstanceByKey("leave-approval",
+                Map.of("initiator", "system:erp", "onBehalfOf", "user001",
+                        "leaveType", "annual", "days", 1));
+        Task manager = taskService.createTaskQuery().processInstanceId(pi.getId()).singleResult();
+        assertThat(manager.getAssignee()).isEqualTo("mgr001");
+        NotifyTestSink.reset();
+
+        // initiator 是 system:erp；能催辦的是 onBehalfOf 指到的員工。
+        urge(pi.getId(), "user001").andExpect(status().isOk());
+
+        Map<String, Object> urged = only(NotifyTestSink.drain(), "task_urged");
+        assertThat(urged)
+                .containsEntry("assignee", "mgr001")
+                .containsEntry("initiator", "user001");
     }
 
     // ── 催辦：授權拒絕與零副作用 ────────────────────────────────────
