@@ -39,10 +39,10 @@ import java.util.TreeSet;
  *       <td>route 要求 {@code requiresRole: 'auditor'} → 擋掉</td>
  *       <td>稽核職能<b>進不了頁面</b></td></tr>
  *   <tr><td>{@code admin001}（{@code *} → {@code ROLE_ADMIN}）</td>
- *       <td>管理頁可進，但 {@code /api/audit-logs} 刻意只認
+ *       <td>管理頁與表單設計放行，但 {@code /api/audit-logs} 刻意只認
  *           {@code audit:log:read} → 403</td>
- *       <td>看得見所有管理頁</td>
- *       <td>點下去全部 403</td></tr>
+ *       <td>roles claim 為空 → {@code isAdmin=false} → 擋掉</td>
+ *       <td>後端放行的管理頁前端看不到；稽核連 admin 都進不去</td></tr>
  * </table>
  *
  * <p>三列的成因都是同一個：<b>前端在猜</b>。前端猜錯時的症狀是
