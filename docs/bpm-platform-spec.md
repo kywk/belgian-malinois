@@ -1062,18 +1062,30 @@ public class WebhookTaskListener implements TaskListener {
 | `X-BPM-Timestamp` | ISO 8601 | 投遞時間（body 另含 `deliveryTimestamp` 同值） |
 | `X-BPM-Delivery-Id` | UUID | 投遞識別碼，供重放偵測（body 另含 `deliveryId` 同值） |
 
-各事件額外欄位：
+各事件額外欄位（**本表以實作為準**，#25，2026-10-02）：
 
 | 事件 | 額外欄位 | 說明 |
 |------|---------|------|
-| `task.created` | assignee, candidateUsers, candidateGroups, dueDate | 任務建立 |
-| `task.completed` (approved) | operatorId, operatorName, action="approved", comment | 同意 |
-| `task.completed` (returned) | operatorId, operatorName, action="returned", returnTo, comment | 退回 |
-| `task.rejected` | operatorId, operatorName, action="rejected", rejectReason | 拒絕（流程終止） |
-| `task.timeout` | assignee, createdAt, dueDate, overdueHours | 超時未處理 |
+| `task.created` | assignee, dueDate | 任務建立 |
+| `task.completed` (approved) | operatorId, action="approved" | 同意 |
+| `task.completed` (returned) | operatorId, action="returned" | 退回 |
+| `task.rejected` | operatorId, action="rejected", rejectReason | 拒絕（流程終止） |
+| `task.timeout` | assignee, dueDate, overdueHours | 超時未處理 |
 | `process.completed` | result ("approved"/"rejected"/"returned"/"unknown"), businessKey | 流程結案（刻意不送流程變數，見下） |
 
-Payload 範例（同意）：
+⚠️ **舊版本表列過、但實作刻意不送的欄位**（2026-10-02 使用者裁決沿用 P2-1 紅線）：
+
+- `candidateUsers`／`candidateGroups`（`task.created`）：候選簽核人名單屬人事資料，且外送沒有白名單 —— **P2-1 紅線**。接收端需要時應回頭呼叫 API（該路徑有授權）。
+- `operatorName`（所有簽核事件）：姓名個資 —— **P2-1 紅線**；`operatorId` 已足以識別。
+- `comment`（`task.completed`）：簽核意見是自由文字、可能夾帶表單內容或個資 —— **P2-1 紅線**。
+- `returnTo`（`task.completed` returned）：功能本身尚未實作（見工項 #1），不是紅線。
+- `createdAt`（`task.timeout`）：未納入本次範圍（非敏感，未來可補）。
+
+`task.timeout` 的 `overdueHours` 定義：`dueDate` 到事件發生時間的**整點小時數，無條件捨去、下限 0**；事件時間早於 `dueDate` 時為 `0`；`dueDate` 為 `null` 時值為 `null`（鍵仍存在，接收端 schema 固定）。
+
+⚠️ **`task.timeout` 目前在 Flowable 7.2.0 不會被觸發**：engine 只以 `create`／`assignment`／`complete`／`delete` 四個事件呼叫 task listener（2026-10-02 以 `javap -p -c` 驗證），`timeout` 是 Camunda 的事件名、Flowable 沒有。因此節點上設定 `event="timeout"` 目前永遠不會投遞；本表欄位已依合約實作，待替代機制（例如由 `delete` 事件推導，或換引擎）決定後才會真正外送。
+
+Payload 範例（同意）—— 刻意**不含** `operatorName`／`comment`（P2-1 紅線）：
 
 ```json
 {
@@ -1085,9 +1097,7 @@ Payload 範例（同意）：
     "taskId": "TSK-12345",
     "taskName": "主管審核",
     "operatorId": "manager001",
-    "operatorName": "李主管",
-    "action": "approved",
-    "comment": "同意報名"
+    "action": "approved"
 }
 ```
 
