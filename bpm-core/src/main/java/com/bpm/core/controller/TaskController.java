@@ -711,12 +711,12 @@ public class TaskController {
         // 收件人先解析：沒有可催辦的對象時回 409，且不消耗頻率限制。
         List<Task> currentTasks = taskService.createTaskQuery()
                 .processInstanceId(processInstanceId).list();
-        List<Task> deliverable = new ArrayList<>();
+        Map<Task, List<String>> deliverable = new LinkedHashMap<>();
         LinkedHashSet<String> recipients = new LinkedHashSet<>();
         for (Task t : currentTasks) {
             List<String> to = taskRecipients(t);
             if (!to.isEmpty()) {
-                deliverable.add(t);
+                deliverable.put(t, to);
                 recipients.addAll(to);
             }
         }
@@ -730,10 +730,9 @@ public class TaskController {
                     "已於 " + URGE_COOLDOWN.toMinutes() + " 分鐘內催辦過，請稍後再試");
         }
 
-        for (Task t : deliverable) {
-            notifyPublisher.taskUrged(t.getId(), t.getName(), processInstanceId,
-                    t.getProcessDefinitionId(), t.getAssignee(), taskRecipients(t), applicant);
-        }
+        deliverable.forEach((t, to) ->
+                notifyPublisher.taskUrged(t.getId(), t.getName(), processInstanceId,
+                        t.getProcessDefinitionId(), t.getAssignee(), to, applicant));
 
         Map<String, Object> result = new HashMap<>();
         result.put("status", "ok");
