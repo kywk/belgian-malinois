@@ -1,5 +1,11 @@
 # 開工 prompt — Greyhound BPM 平台，2026-10-01 第三輪收尾後
 
+> ⚠️ **已被取代（2026-10-02）** —— 請用 `docs/handoff/2026-10-02-next-pm-prompt.md`。
+> 本檔第 3 節列的 #91 三項（方向 B、漏報①②、測試缺口）與 `dev-token.sh` 之後的項目，
+> **#91 部分已於 2026-10-01 晚間全部完成**；而第 2.1 節「#91 方向 B 卡在 flush 順序兩難」
+> 的兩難是**假兩難** —— 正解是全域 `CreateUserTaskInterceptor`（見 round5 handoff）。
+> 留著這份供追溯，**不要照它當待辦**。
+
 > 給下一位 PM Agent。撰寫：2026-10-01。
 > **你現在讀的這份檔案就是給你的 prompt**（`docs/handoff/2026-10-01-next-pm-prompt.md`），
 > 已納入版控。
