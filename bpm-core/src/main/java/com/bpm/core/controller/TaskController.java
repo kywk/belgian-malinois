@@ -622,9 +622,10 @@ public class TaskController {
      *
      * <p>語意上也更貼近使用者：申請人催的是「這張單」，不是某個 taskId
      * ——平行關卡時一張單可能同時有多個待處理任務，全部一起催才對。
-     * 若產品偏好 taskId 端點，前置工作是先在
-     * {@code GET /api/process-instances} 的 currentTask 補上 taskId
-     * （一行），再把這裡換成路徑參數；本方法的授權與頻率邏輯可原樣沿用。
+     * 若產品偏好 taskId 端點，前置工作已完成（2026-10-03：
+     * {@code GET /api/process-instances}／{@code /involved}／歷史 involved 的
+     * currentTask 已補上 taskId）；把這裡換成路徑參數時，本方法的授權與
+     * 頻率邏輯可原樣沿用。目前維持案件 id 端點。
      *
      * <h2>授權：申請人本人，系統案件則是受理人（最小授權）</h2>
      *
