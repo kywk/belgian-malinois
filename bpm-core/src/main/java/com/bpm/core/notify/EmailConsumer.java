@@ -96,6 +96,13 @@ public class EmailConsumer {
                 body = "您好，\n\n申請人提醒您盡快處理任務：「" + taskName
                         + "」。\n申請人：" + initiator + "\n\n請登入 BPM 平台處理。";
             }
+            // #23：任務逾時提醒。由 TimeoutNotifyDelegate（boundary timer）觸發，
+            // 不是 Flowable 的 timeout task event（引擎不發，見 WebhookTaskListener.matches）。
+            // 收件人與催辦同一條規則：assignee 優先、候選任務送候選人。
+            case "task_timeout" -> {
+                subject = "【BPM】任務已逾時：" + taskName;
+                body = "您好，\n\n任務「" + taskName + "」已逾時，請盡快登入 BPM 平台處理。";
+            }
             case "process_returned" -> {
                 subject = "【BPM】您的申請已被退回";
                 body = "您好，\n\n您的申請「" + taskName + "」已被退回，請修改後重新提交。";
