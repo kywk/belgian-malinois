@@ -166,7 +166,7 @@ POST /api/deployments                          → 部署 BPMN
 |------|-----|-----------|------|
 | 同意 | complete + approved=true | ✅ 往下 | 正常核可 |
 | 退件 | complete + approved=false | ✅ 退件分支 | 不同意，退回上一節點 |
-| 退回申請人 | complete + returnTo=initiator | ✅ 回起點 | 資料有誤，退回修改（⚠️ 尚未實作，見下方加註） |
+| 退回申請人 | complete + returnTo=initiator | ✅ 回起點 | 資料有誤，退回修改（✅ 已實作，見下方加註） |
 | **拒絕（終止）** | complete + rejected=true | ✅ 流程結束 | 直接否決，流程終止 |
 | 轉發 | delegate | ❌ 等回覆 | 請人代審 |
 | 改派 | PUT assignee | ❌ 換人繼續 | 完全換人 |
@@ -174,7 +174,7 @@ POST /api/deployments                          → 部署 BPMN
 | 批註 | POST /api/tasks/{id}/comments | ❌ 不影響 | 留言備註 |
 | 催辦 | 通知服務 | ❌ 不影響 | 提醒處理 |
 
-> ⚠️ **2026-10-02 加註**：上表「退回申請人」的 `returnTo=initiator` **目前不存在於程式碼** —— 全 repo 無 `returnTo` 的處理路徑，退回走 BPMN 預設路徑到「申請者補件」（`bpm-core/src/main/java/com/bpm/core/controller/TaskController.java` 的 complete 分支只寫入 `approved`／`rejected`）。此功能列為 `docs/backend-development-backlog.md` 工項 #1（🟡），§11.4 的 webhook payload 表亦已註明。本列保留為規格目標，非現況。
+> ✅ **2026-10-03 加註（工項 #1 已完成）**：`returnTo=initiator` 已實作。`PUT /api/tasks/{id}` 的 complete body 新增可選 `returnTo` 欄位（只接受小寫 `initiator`，其餘值回 400；與 `approved=true`／`rejected=true` 同時出現回 400）。伺服器寫入 `approved=false`／`rejected=false`／`returnTo=initiator`，稽核型別為 `TASK_RETURN_INITIATOR`（一般退回仍是 `TASK_RETURN`）。路由：`purchase-approval` 的財務關卡（gw2）帶 `returnTo=initiator` 時走新條件分支回「申請者補件（主管退回）」（回起點）；`leave-approval` 的預設退回路徑本來就回 `applicantRevision`，未加分支。⚠️ **「退到任意節點」仍不在本工項**（需要 `ChangeActivityStateBuilder`，會繞過 BPMN 閘道與通知語意，須另立設計）。
 
 拒絕操作的流程設計：BPMN 中每個 UserTask 後的 ExclusiveGateway 需增加 `rejected` 分支，導向 End Event（流程終止），並觸發通知申請人。
 
@@ -1090,7 +1090,7 @@ public class WebhookTaskListener implements TaskListener {
 - `candidateUsers`／`candidateGroups`（`task.created`）：候選簽核人名單屬人事資料，且外送沒有白名單 —— **P2-1 紅線**。接收端需要時應回頭呼叫 API（該路徑有授權）。
 - `operatorName`（所有簽核事件）：姓名個資 —— **P2-1 紅線**；`operatorId` 已足以識別。
 - `comment`（`task.completed`）：簽核意見是自由文字、可能夾帶表單內容或個資 —— **P2-1 紅線**。
-- `returnTo`（`task.completed` returned）：功能本身尚未實作（見工項 #1），不是紅線。
+- `returnTo`（`task.completed` returned）：功能已於 2026-10-03 實作（工項 #1，見 §4.3），但 webhook payload 仍不送此欄位 —— 外送欄位是 webhook 合約變更，不在 #1 的範圍內；欄位本身不是紅線。
 - `createdAt`（`task.timeout`）：未納入本次範圍（非敏感，未來可補）。
 
 `task.timeout` 的 `overdueHours` 定義：`dueDate` 到事件發生時間的**整點小時數，無條件捨去、下限 0**；事件時間早於 `dueDate` 時為 `0`；`dueDate` 為 `null` 時值為 `null`（鍵仍存在，接收端 schema 固定）。

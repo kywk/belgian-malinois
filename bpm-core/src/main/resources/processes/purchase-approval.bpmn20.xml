@@ -38,6 +38,13 @@
     <sequenceFlow id="flowRejected1" sourceRef="gw1" targetRef="endRejected">
       <conditionExpression>${rejected != null &amp;&amp; rejected == true}</conditionExpression>
     </sequenceFlow>
+    <!--
+      #1：主管關卡帶 returnTo=initiator 時也走這條 default 到
+      revisionFromManager（與一般退回同一個目標），因此不需要另加條件分支
+      —— 多一條同目標的分支只會讓圖與規則各多一份，卻不改變行為。
+      退回申請人與退回上一站在此節點的路由本來就相同，差別只在稽核型別
+      （TASK_RETURN_INITIATOR vs TASK_RETURN，見 TaskController）。
+    -->
     <sequenceFlow id="flowReturn1" sourceRef="gw1" targetRef="revisionFromManager"/>
 
     <!-- 主管退回 → 補件 → 回主管 -->
@@ -71,6 +78,28 @@
     </sequenceFlow>
     <sequenceFlow id="flowRejected2" sourceRef="gw2" targetRef="endRejected">
       <conditionExpression>${rejected != null &amp;&amp; rejected == true}</conditionExpression>
+    </sequenceFlow>
+    <!--
+      #1 退回申請人：財務關卡帶 returnTo=initiator 時退回
+      「申請者補件（主管退回）」= 回起點，而不是退回上一站
+      （flowReturn2 → revisionFromFinance）。
+
+      ⚠️ 順序即語意（exclusive gateway 依序評估、default 最後）：
+        1. flowApproved2（approved == true）先判 —— 明確核准優先；
+        2. flowRejected2（rejected == true）次判 —— 拒絕優先於退回申請人；
+        3. flowReturnToInitiator 最後判；
+        4. flowReturn2 是 default（一般退回上一站）。
+      API 層（TaskController）已把 approved=true／rejected=true 與
+      returnTo=initiator 的組合擋成 400；這裡的順序是給非 HTTP 完成路徑
+      （外部 API、直接呼叫引擎）的縱深防禦。
+
+      ⚠️ returnTo 由 TaskController 在<b>每一次</b> complete 重寫（非退回
+      申請人時寫入空字串）：若只在退回申請人時寫入，前一輪留下的 initiator
+      會讓下一輪的一般退回（approved=false、無 returnTo）也被判成
+      退回申請人。
+    -->
+    <sequenceFlow id="flowReturnToInitiator" sourceRef="gw2" targetRef="revisionFromManager">
+      <conditionExpression>${returnTo != null &amp;&amp; returnTo == 'initiator'}</conditionExpression>
     </sequenceFlow>
     <sequenceFlow id="flowReturn2" sourceRef="gw2" targetRef="revisionFromFinance"/>
 
@@ -188,6 +217,14 @@
       <bpmndi:BPMNEdge bpmnElement="flowApproved2">
         <di:waypoint x="795" y="270" />
         <di:waypoint x="872" y="270" />
+      </bpmndi:BPMNEdge>
+
+      <!-- flowReturnToInitiator: gw2 → 申請者補件（主管退回，往下再往左，#1） -->
+      <bpmndi:BPMNEdge bpmnElement="flowReturnToInitiator">
+        <di:waypoint x="760" y="295" />
+        <di:waypoint x="760" y="365" />
+        <di:waypoint x="440" y="365" />
+        <di:waypoint x="440" y="400" />
       </bpmndi:BPMNEdge>
 
       <!-- flowReturn2: gw2 → 申請者補件（財務退回，往下） -->

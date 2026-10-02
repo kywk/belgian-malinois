@@ -45,6 +45,14 @@ public class TaskController {
      * <p>{@code effectiveInitiator} 是伺服器由外部系統請求推導出來的身分，
      * 同理不可由呼叫端指定。
      *
+     * <p>{@code returnTo}（#1）也是伺服器決定路由的變數：complete 分支由
+     * body 的 {@code returnTo} 欄位推導並自行寫入，呼叫端不得用 variables
+     * 改寫它。否則可以繞過 API 的語意檢查（approved=true／rejected=true
+     * 與 returnTo 互斥）與稽核判定 —— 用
+     * {@code variables:[{name:"returnTo",value:"initiator"}]} 讓 BPMN 走
+     * 退回申請人分支，稽核卻只留下 TASK_RETURN。正式入口是 body 的
+     * {@code returnTo} 欄位（見 complete 分支）。
+     *
      * <p>{@code _} 前綴的一律拒絕（R-23）：那是伺服器的內部狀態，
      * 包含 {@code _formVersions}（表單版本鎖定）與
      * {@code _externalSystemId}（外部系統擁有權判定的依據）。
@@ -55,7 +63,7 @@ public class TaskController {
      * 「改寫引擎與身分語意」的變數，而一般業務欄位照常放行。
      */
     private static final java.util.Set<String> PROTECTED_VARIABLES =
-            java.util.Set.of("initiator", "effectiveInitiator", "onBehalfOf");
+            java.util.Set.of("initiator", "effectiveInitiator", "onBehalfOf", "returnTo");
 
     private static boolean isProtectedVariable(String name) {
         if (name == null || name.isBlank()) return true;
@@ -325,6 +333,17 @@ public class TaskController {
         // 未認證 → 401。判斷規則見 TaskHolderGuard（與待辦清單同一份）。
         holderGuard.requireHolder(task, callerId);
 
+        // ── #1：returnTo 只對 complete 有意義 ─────────────────────────
+        //
+        // 其他 action 帶了它一律 400，不靜默忽略 —— 靜默忽略會讓呼叫端
+        // 以為「退回申請人」生效了（與 complete 分支對 variables 的
+        // 「拒絕而非靜默丟棄」同一政策）。排在持有者守衛<b>之後</b>：
+        // 對非持有者仍回 404，不新增「任務存在」的枚舉管道。
+        if (req.returnTo() != null && !"complete".equals(action)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "returnTo 僅適用於 action=complete（支援的值：initiator）");
+        }
+
         // 操作者就是呼叫者，一層 fallback 都不留。
         //
         // 改動前是 firstNonBlank(callerId, firstNonBlank(task.getAssignee(), req.assignee()))。
@@ -403,6 +422,23 @@ public class TaskController {
                     throw new ResponseStatusException(HttpStatus.CONFLICT,
                             "有未完成的加簽子任務");
                 }
+                // ── #1 退回申請人（returnTo=initiator）──────────────────
+                //
+                // 語意檢查全部排在建立 vars 與 taskService.complete 之前：
+                // 任何 400 都是零副作用（任務不完成、不寫變數、不發稽核／
+                // 通知）。
+                //
+                // 只認小寫 "initiator"：它是 BPMN 條件（purchase-approval
+                // 的 gw2）直接比對的字面值，也是伺服器寫入流程變數的值。
+                // 寬容大小寫會多出一層「正規化」規則，而那個規則除了這裡
+                // 之外沒有任何地方需要 —— 不做。其餘值一律 400 並指名
+                // 支援的值，不靜默忽略。
+                boolean returnToInitiator = req.returnTo() != null;
+                if (returnToInitiator && !"initiator".equals(req.returnTo())) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "returnTo 只支援 initiator（收到: " + req.returnTo() + "）");
+                }
+
                 Map<String, Object> vars = new HashMap<>();
                 if (req.variables() != null) {
                     // 拒絕而非靜默丟棄：靜默丟棄會讓攻擊嘗試無跡可循，
@@ -416,9 +452,40 @@ public class TaskController {
                             });
                     req.variables().forEach(v -> vars.put(v.name(), v.value()));
                 }
-                // Ensure gateway variables are always set to avoid EL PropertyNotFoundException
-                vars.putIfAbsent("rejected", false);
-                vars.putIfAbsent("approved", false);
+
+                if (returnToInitiator) {
+                    // 語意衝突：退回申請人與「拒絕」「核准」不可能同時成立。
+                    // 兩個 400 都必須在 complete 之前，不得靠下面的覆寫把
+                    // 衝突靜默吞掉 —— 呼叫端以為拒絕了，實際卻只是退回。
+                    if (Boolean.TRUE.equals(vars.get("rejected"))) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "returnTo=initiator 與 rejected=true 語意衝突");
+                    }
+                    if (Boolean.TRUE.equals(vars.get("approved"))) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "returnTo=initiator 與 approved=true 語意衝突");
+                    }
+                    // 伺服器決定值：退回申請人＝不核准、不拒絕，並帶路由
+                    // 變數。用 put（覆寫）而不是 putIfAbsent：這三個值是本次
+                    // 操作的語意本身，不是「缺席時的預設值」；上面的衝突
+                    // 檢查已擋掉所有相衝的 client 值，因此覆寫不可能蓋掉
+                    // 呼叫端的真實意圖，只保證伺服器決定不受 variables
+                    // 的內容影響。
+                    vars.put("approved", false);
+                    vars.put("rejected", false);
+                    vars.put("returnTo", "initiator");
+                } else {
+                    // Ensure gateway variables are always set to avoid EL PropertyNotFoundException
+                    vars.putIfAbsent("rejected", false);
+                    vars.putIfAbsent("approved", false);
+                    // ⚠️ returnTo 必須跟著<b>每一次</b> complete 重寫：BPMN
+                    // 閘道條件讀的是流程變數，若只在「這次是退回申請人」時
+                    // 寫入，它會一直留在流程上 —— 下一輪的一般退回
+                    // （approved=false、不帶 returnTo）就會被 gw2 的條件
+                    // 誤判成退回申請人，而稽核卻是 TASK_RETURN。
+                    // 空字串＝這一輪不是退回申請人。
+                    vars.put("returnTo", "");
+                }
                 taskService.complete(id, vars);
 
                 // ── #33／#96：完成後通知申請人（退回／拒絕／結案）────────
@@ -1087,8 +1154,27 @@ public class TaskController {
         return mapComments(taskService.getTaskComments(id));
     }
 
+    /**
+     * complete 的稽核型別（#1 起包含退回申請人）。
+     *
+     * <p>條件順序即語意：{@code rejected} 先判 —— 與 BPMN gw2 的
+     * rejected 分支優先於 returnTo 一致（{@code rejected=true + returnTo}
+     * 在 API 層已是 400，這裡的順序是給非 HTTP 完成路徑的縱深防禦）；
+     * {@code returnTo=initiator} 次之；最後才是 {@code approved} 的一般
+     * 核准／退回。
+     *
+     * <p>⚠️ {@code TASK_RETURN}（退回上一站）與
+     * {@code TASK_RETURN_INITIATOR}（退回申請人）的差別是<b>語意</b>，
+     * 不是狀態：兩者都是 {@code approved=false}。BPMN 的路由由
+     * {@code returnTo} 變數決定，稽核因此也必須看它，否則
+     * 「退到起點」在軌跡上會長得跟「退回上一站」一模一樣。
+     *
+     * <p>呼叫端（complete 分支）的補件任務判定（{@code TASK_RESUBMIT}）
+     * 仍優先於本方法，順序不變。
+     */
     private OperationType resolveCompleteAuditType(Map<String, Object> vars) {
         if (Boolean.TRUE.equals(vars.get("rejected"))) return OperationType.TASK_REJECT;
+        if ("initiator".equals(vars.get("returnTo"))) return OperationType.TASK_RETURN_INITIATOR;
         if (Boolean.FALSE.equals(vars.get("approved"))) return OperationType.TASK_RETURN;
         if (Boolean.TRUE.equals(vars.get("approved"))) return OperationType.TASK_APPROVE;
         return OperationType.TASK_APPROVE;
