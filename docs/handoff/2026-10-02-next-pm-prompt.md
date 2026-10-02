@@ -87,8 +87,8 @@
 
 | 順序 | 工項 | 估時 | 備註 |
 |---|---|---|---|
-| 1 | **#67 前端** `modeling.updateProperties(element, {extensionElements})` 的測試缺口 | 0.3d | 寫法與 bpmn-js 官方 `addExtensionElements` 相同，但這格是空白 |
-| 2 | **#25** webhook payload 缺口 | 0.5d | `task.timeout` 事件、候選人、`operatorName`、`comment`；**需先裁決每個事件送哪些欄位** |
+| 1 | **#67 前端** —— ① 在 Process 的 Properties Panel 加 Webhook 面板（可設 `process.completed`）；② 節點層事件選項補 `all`；③ 補 `WebhookProps.save()`（`modeling.updateProperties`）的自動化測試 | 0.3–0.5d | **使用者已裁決：要加 process 層 UI**（後端已讀 `<process>`，但設計器只在 UserTask 顯示面板 → 產品上看不到）。`FlowablePropertiesProvider` 目前只對 `bpmn:UserTask` 掛 `WebhookProps`；`WebhookProps.js` 的 `EVENTS` 缺 `all`（後端支援、出廠 BPMN 也在用） |
+| 2 | **#25** webhook payload —— **只補非敏感欄位** | 0.5d | **使用者已裁決：沿用 P2-1 紅線（不送流程變數）**。可補 `task.timeout`（`assignee`／`dueDate`／`overdueHours`）與 `task.rejected` 的 `rejectReason` 等。**不送 `variables`／`comment`／`operatorName`／候選人** |
 | 3 | **`dev-token.sh` 註解** | 0.1d | 它教人用 `dir001` 讀稽核，但 `mintDevToken` 不簽 `roles` claim（#82 後已可運作，但註解與實際不一致） |
 | 4 | **#68** R-20 剩餘 docs 收尾 | 0.2d | 純文件 |
 | 5 | **#70** Boot 4 + Flowable 8 | 22d | ⚠️ **升級時 `ExtensionElementPreservationTest` 會是第一個紅的** |
@@ -117,6 +117,11 @@
 - 授權三組政策、回 404 而非 403、`isParticipant` 不擴充候選群組、`#66`／`#71` 身分參數明確 400。
 - **2026-10-01 晚間**：`#91` 漏報① required=true 的空白值採「擋（空白字串＋null）」，數字 `0`／`false` 不擋。
 - **2026-10-01 晚間**：`#67` 流程層 webhook 的設定來源＝`<process>` 的 `flowable:webhooks`。
+- **2026-10-02**：`#67` 前端**要**在設計器加「流程層 webhook」UI（在 `<process>` 的 Properties Panel），並把 `all` 補進事件選項。
+- **2026-10-02**：`#25` payload **沿用 P2-1 紅線** —— 不送 `variables`／`comment`／`operatorName`／候選人；只補 `task.timeout`／`rejectReason` 等非敏感欄位。
+- **2026-10-02**：`#91` 方向 B 殘餘的空白 `participant` link（process-instance、**inert**）**留著、只記錄**，不清。
+- **2026-10-02**：`POST /api/deployments` 的 `name` 缺副檔名導致「回 200 卻無流程定義」**不加防護、只記錄**。
+- **2026-10-02**：`github` remote **暫不處理**（使用者明示）。但 `main` 的 upstream 仍是 `github/main` —— **仍嚴禁裸的 `git push`**，一律 `git push nsl main`。
 - 分支維持 `feature/* → main` 直接合併。
 
 ---

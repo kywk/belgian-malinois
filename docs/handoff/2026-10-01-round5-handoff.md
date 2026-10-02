@@ -180,6 +180,10 @@ PM 本輪用 `git restore --staged` 還原、沒有 commit 那個刪除。**每�
 
 ## 6. 建議的下一輪優先序（先和使用者確認）
 
+> ⚠️ **最新的優先序與「已裁決事項」以 `docs/handoff/2026-10-02-next-pm-prompt.md` 為準**（本表只是本輪快照）。
+> 2026-10-02 已補的裁決：`#67` 前端**要**加 process 層 UI；`#25` payload **只補非敏感欄位**（不送 variables/comment/operatorName）；
+> `#91` 殘餘空白 participant link **留著**；`deployments name` 缺副檔名**不加防護**。
+
 | 順序 | 工項 | 估時 | 備註 |
 |---|---|---|---|
 | ~~1~~ | ✅ **#67 流程層**（2026-10-01 同日補完） | 0.5d | 設定來源＝`<process>` 的 `flowable:webhooks`（與節點層共用同一份解析）。沒有設定就不發訊息；事件對應 `all`／`process.completed`／`complete`／省略。線上實測通過（listener 排入佇列、consumer 收到 `__webhookUrl`、loopback 被拒）。見 backlog #67 列 |
