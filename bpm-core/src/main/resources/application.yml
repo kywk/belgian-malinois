@@ -239,6 +239,12 @@ bpm:
       enabled: ${GATEWAY_AUTH_ENABLED:false}
       shared-secret: ${GATEWAY_SHARED_SECRET:}
       trusted-proxies: ${GATEWAY_TRUSTED_PROXIES:}
+  webhook:
+    # prod 不可沿用 base 文件的開發預設值 `bpm-webhook-secret` —— 它公開在
+    # repo 裡，等於沒有密鑰。未由部署環境提供時是空字串；空值與預設字面值
+    # 都會讓啟動失敗（WebhookHmacSecretValidator）。這條路徑現在真的會把
+    # 事件投遞出去（#67/#26），用公開密鑰簽章不是可以帶著跑的設定。
+    hmac-secret: ${BPM_WEBHOOK_HMAC_SECRET:}
   external:
     # 關掉開發 fixture。組織與權限是授權的事實來源，
     # 正式環境用寫死的 9 人 fixture 做授權判定是不可接受的。
