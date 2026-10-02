@@ -73,13 +73,27 @@ class DlqAlertReplayTest extends IntegrationTestBase {
     @BeforeEach
     void resetSink() {
         WebhookTestSink.reset();
+        // ── 背景噪音隔離（2026-10-03 PM 收尾）─────────────────────────
+        //
+        // 其他測試類別產生的通知會被真實 EmailConsumer 消費，而測試環境
+        // 的 SMTP 不通 → 重試後掉進 dlq.bpm → 本類別的 DeadLetterConsumer
+        // 再 parking 進 dlq.parking.bpm。本類別的斷言全是「精確佇列計數」，
+        // 一筆遲到的背景訊息就會讓 remaining／messageCount 間歇性多 1。
+        //
+        // 因此在整個類別期間停掉 EmailConsumer（paused 會在 @AfterEach
+        // 復原），並清空它與兩層 DLQ 的殘留，讓斷言只看到本測試的訊息。
+        pauseListener("bpm.notify.queue");
+        drain("bpm.notify.queue");
+        drain("dlq.bpm");
+        drain("dlq.parking.bpm");
     }
 
     @AfterEach
     void resumeListeners() {
-        // 先恢復 sink 的正常回應，再啟動 listener —— 否則殘留在佇列裡的
-        // 訊息會被重試後又打回 DLQ，留給下一個測試。
+        // 先恢復 sink 的正常回應、清掉 notify 佇列殘留，再啟動 listener
+        // —— 否則殘留在佇列裡的訊息會被重試後又打回 DLQ，留給下一個測試。
         WebhookTestSink.reset();
+        drain("bpm.notify.queue");
         paused.values().forEach(c -> {
             if (!c.isRunning()) c.start();
         });
