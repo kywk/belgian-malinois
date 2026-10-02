@@ -676,9 +676,9 @@ public class TaskController {
      *
      * <p>授權失敗（403／404）與頻率限制（429）都在<b>取得許可、發送通知
      * 之前</b>就返回；沒有通知、沒有 Redis 以外的任何寫入。
-     * 稽核：本工項<b>沒有</b>寫 TASK_URGE 稽核 ——
-     * {@code OperationType.NOT_YET_IMPLEMENTED} 仍列著它，而
-     * {@code audit/**} 不在本工項的檔案邊界內；詳見交付報告的裁決事項。
+     * 成功催辦則在發送之後寫一筆 {@code TASK_URGE} 稽核
+     * （operator = 呼叫者、案件 id、冷卻分鐘數與任務／收件人數；
+     * 不含簽核意見與表單值）—— 見方法尾端的 publish。
      */
     @PostMapping("/urge")
     public Map<String, Object> urgeTask(@RequestParam String processInstanceId,
@@ -733,6 +733,26 @@ public class TaskController {
         deliverable.forEach((t, to) ->
                 notifyPublisher.taskUrged(t.getId(), t.getName(), processInstanceId,
                         t.getProcessDefinitionId(), t.getAssignee(), to, applicant));
+
+        // ── #6：成功催辦的稽核（operator = 呼叫者）────────────────────
+        //
+        // 位置在發送之後。本端點沒有 @Transactional（與 getComments 同型，
+        // 刻意不為了稽核改變既有交易結構）：publish 會直接同步寫入，
+        // 失敗拋 AuditWriteException（fail-closed）→ 503，
+        // 不會出現「通知已送出、卻沒有軌跡」。
+        //
+        // ⚠️ 授權失敗（403／404）與頻率限制（429）都在上面就拋出，
+        // 走不到這一行 —— 被拒的請求不得寫出 TASK_URGE。
+        //
+        // detail 只放非敏感資訊：冷卻分鐘數、實際送出的任務數與收件人數。
+        // 刻意不放 recipients 名單（誰被催辦屬於個資，且稽核的用途是回答
+        // 「誰在何時催了哪張單、催了幾個對象」，不是複製案件內容），
+        // 也不放任務名稱、表單值或簽核意見。
+        auditPublisher.publish(new AuditEvent(OperationType.TASK_URGE.name(), callerId,
+                processInstanceId, null,
+                Map.of("cooldownMinutes", URGE_COOLDOWN.toMinutes(),
+                        "taskCount", deliverable.size(),
+                        "recipientCount", recipients.size())));
 
         Map<String, Object> result = new HashMap<>();
         result.put("status", "ok");
