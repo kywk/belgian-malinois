@@ -38,6 +38,13 @@ public enum OperationType {
     TASK_APPROVE,
     TASK_REJECT,
     TASK_RETURN,
+    /**
+     * 退回申請人（#1）：complete 帶 {@code returnTo=initiator}，路由回起點
+     * （申請者補件）。與 {@link #TASK_RETURN}（退回上一站）的差別是<b>語意</b>
+     * 而非狀態 —— 兩者都是 {@code approved=false}，稽核型別由
+     * {@code TaskController.resolveCompleteAuditType} 依 {@code returnTo}
+     * 變數判定。原本列在 NOT_YET_IMPLEMENTED，2026-10-03 實作後移出。
+     */
     TASK_RETURN_INITIATOR,
     TASK_DELEGATE,
     TASK_REASSIGN,
@@ -82,8 +89,9 @@ public enum OperationType {
     /**
      * 對應的操作<b>尚未實作</b>，因此不會有程式碼發出這些值。
      *
-     * <p>已逐一確認（全 repo 搜尋 cancel／return-initiator
-     * 的實作，cancel 於 2026-10-03 由 #7 接上後移出，return-initiator 仍無命中）。
+     * <p>已逐一確認（全 repo 搜尋 cancel／return-initiator 的實作：
+     * cancel 於 2026-10-03 由 #7 接上、return-initiator 於同日由 #1 接上，
+     * 兩者皆已移出）。
      * 實作其中任何一個時，請一併加上稽核並把它從這裡移除
      * —— {@code OperationTypeCoverageTest} 會確保這件事不被漏掉。
      *
@@ -102,9 +110,12 @@ public enum OperationType {
      * （CLAIM／DELEGATE／RESOLVE／REASSIGN／APPROVE…），
      * 所以這個籠統的值<b>本來就不該被使用</b>。留著它只會讓查詢時困惑
      * 「TASK_UPDATE 和 TASK_APPROVE 差在哪」。
+     *
+     * <p>{@code TASK_RETURN_INITIATOR} 原本也在此清單（「退回發起人：無端點」），
+     * 已於 2026-10-03 由 {@code TaskController} 的 complete
+     * {@code returnTo=initiator}（工項 #1）實作並發出稽核後移出。
      */
     public static final Set<OperationType> NOT_YET_IMPLEMENTED = Set.of(
-            TASK_RETURN_INITIATOR,   // 退回發起人：無端點（TASK_RETURN 是退回上一站）
             TASK_UPDATE              // 刻意不使用，見上方說明
     );
 }
