@@ -94,9 +94,6 @@ public class TaskController {
     private final com.bpm.core.service.ApplicantResolver applicantResolver;
     // #68b：待辦清單的「代某某發起」標示。
     private final com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup;
-    // #96：申請人判定（onBehalfOf 優先、其次自然人 initiator）抽到共用元件，
-    // 催辦授權與完成通知收件人共用同一份。見 ApplicantIdentityLookup 類別註解。
-    private final com.bpm.core.service.ApplicantIdentityLookup applicantIdentityLookup;
     // #33／#6：通知的唯一發送端（退回／拒絕／結案／認領／催辦）。
     private final NotifyPublisher notifyPublisher;
     // #6：催辦頻率限制。既有 Redis（OrgService／BpmPermissionService 已在使用），
@@ -115,7 +112,6 @@ public class TaskController {
                           com.bpm.core.external.ExternalActorGuard actorGuard,
                           com.bpm.core.service.ApplicantResolver applicantResolver,
                           com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup,
-                          com.bpm.core.service.ApplicantIdentityLookup applicantIdentityLookup,
                           NotifyPublisher notifyPublisher,
                           StringRedisTemplate redis) {
         this.taskService = taskService;
@@ -127,7 +123,6 @@ public class TaskController {
         this.actorGuard = actorGuard;
         this.applicantResolver = applicantResolver;
         this.onBehalfOfLookup = onBehalfOfLookup;
-        this.applicantIdentityLookup = applicantIdentityLookup;
         this.notifyPublisher = notifyPublisher;
         this.redis = redis;
     }
@@ -792,9 +787,9 @@ public class TaskController {
     /**
      * 催辦的申請人／受理人（#3）：三段規則的唯一呼叫點。
      *
-     * <p>{@code onBehalfOf} 與 {@code initiator} 由這裡自己取，<b>不經</b>
-     * {@link #applicantOf} —— 那個方法只有前兩段，是完成通知用的
-     * 「自然人申請人」，沒有第三段（系統受理人）。而系統案件的答案
+     * <p>{@code onBehalfOf} 與 {@code initiator} 由這裡自己取，再交給
+     * {@link com.bpm.core.service.ApplicantResolver#resolveApplicant} ——
+     * 三段順序只有那一份實作；第三段（系統受理人）的答案
      * （{@code bpm:external:revision} 的持有人）只有權限中心知道，
      * 因此這一段可能打一次 self HTTP（有 Redis 快取兜住頻率，
      * 見 {@code BpmPermissionService}）。
@@ -860,22 +855,6 @@ public class TaskController {
                     URGE_KEY_PREFIX + processInstanceId, e.toString());
             return true;
         }
-    }
-
-    /**
-     * 這張單的自然人申請人：{@code onBehalfOf} 優先，其次 {@code initiator}；
-     * 兩者都不是人（{@code system:<id>}）或不存在時回 {@code null}。
-     *
-     * <p>#96：規則已抽到 {@link com.bpm.core.service.ApplicantIdentityLookup}
-     * —— 完成通知的 listener 也需要同一條判定，而它拿不到 controller 的
-     * private 方法。本方法保留為 delegate 是因為 {@code urgeTask} 的授權
-     * 仍要用它（催辦的「誰是申請人」與通知的收件人必須是同一份答案）。
-     *
-     * <p>規則內容（三段順序、為什麼第三段不存在、為什麼查歷史變數）
-     * 見該類別的類別註解。
-     */
-    private String applicantOf(String processInstanceId) {
-        return applicantIdentityLookup.applicantOf(processInstanceId);
     }
 
     /**

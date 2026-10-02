@@ -13,10 +13,11 @@ import org.springframework.core.env.Environment;
  * <h2>這個檢查要防止的部署事故（#26/#27 收尾時發現的不對稱）</h2>
  *
  * <p>{@code bpm.webhook.hmac-secret} 在 {@code application.yml} 有一份開發用
- * 預設字面值，而 {@code WebhookConsumer} 的 {@code @Value} 又有同一個 fallback。
- * 這條路徑原本只送 log、不真的投遞，所以預設值從未被認真對待；現在它真的會把
+ * 預設字面值。這條路徑原本只送 log、不真的投遞，所以預設值從未被認真對待；現在它真的會把
  * 事件（含簽章）送到外部 URL —— 正式環境若忘了換密鑰，就會一直用<b>公開在
  * repo 裡</b>的密鑰簽章，而接收端無從分辨真假。
+ * （{@code WebhookConsumer} 的 {@code @Value} fallback 已於 2026-10-02 裁決
+ * 移除：程式碼內不再有預設值，屬性缺席直接啟動失敗；開發預設只留在 base yml。）
  *
  * <p>同時身分（{@link JwtSecurityValidator}）與閘道密鑰都有 prod 啟動防護，
  * 只有 webhook HMAC 沒有。缺的這一塊就是這裡補上的對稱防護。
@@ -36,10 +37,11 @@ public class WebhookHmacSecretValidator {
     /**
      * 已知的開發預設字面值。
      *
-     * <p>它同時存在於 {@code application.yml} 的 base 文件與
-     * {@code WebhookConsumer} 的 {@code @Value} fallback。三處必須同步；
-     * 若不一樣，這裡的防護就會漏掉真正被使用的預設值
-     * （由 {@code WebhookHmacSecretValidatorTest} 的同步測試守住）。
+     * <p>它存在於 {@code application.yml} 的 base 文件。兩處必須同步：
+     * 這裡的常數與 yml 的預設值若不一樣，防護就會漏掉真正被使用的預設值
+     * （由 {@code WebhookHmacSecretValidatorTest} 的同步測試守住；
+     * {@code WebhookConsumer} 已無 fallback，那條不變量改由
+     * {@code WebhookConsumerHmacSecretRequiredTest} 守住）。
      */
     static final String DEV_DEFAULT_SECRET = "bpm-webhook-secret";
 
