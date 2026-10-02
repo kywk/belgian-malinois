@@ -12,7 +12,7 @@ import java.util.Set;
  *
  * <p>而兩種「未使用」的意義完全不同：
  * <ul>
- *   <li><b>操作還沒實作</b>（例如撤案、催辦）—— 值是預留的，沒有缺口。</li>
+ *   <li><b>操作還沒實作</b>（例如撤案）—— 值是預留的，沒有缺口。</li>
  *   <li><b>操作已經實作但沒發稽核</b> —— 那是真的缺口。
  *       P2-4 修掉的 {@code CONFIG_CHANGE}、{@code DATA_ACCESS}、
  *       {@code PROCESS_COMPLETE} 全都屬於這一類：功能都在跑，只是沒留軌跡。</li>
@@ -40,6 +40,7 @@ public enum OperationType {
     TASK_COUNTERSIGN,
     TASK_COMMENT,
     TASK_CLAIM,
+    /** 催辦（#6）。原本列在 NOT_YET_IMPLEMENTED，2026-10-02 補上稽核後移出。 */
     TASK_URGE,
     // 以下三個先前被 TaskController 以字串送出，卻不存在於本 enum
     // → AuditEventPublisher 的 valueOf 拋 IllegalArgumentException，
@@ -64,12 +65,16 @@ public enum OperationType {
     /**
      * 對應的操作<b>尚未實作</b>，因此不會有程式碼發出這些值。
      *
-     * <p>已逐一確認（全 repo 搜尋 cancel／urge／return-initiator
+     * <p>已逐一確認（全 repo 搜尋 cancel／return-initiator
      * 的實作，皆無命中）。實作其中任何一個時，請一併加上稽核並把它從這裡移除
      * —— {@code OperationTypeCoverageTest} 會確保這件事不被漏掉。
      *
      * <p>{@code EXPORT_DATA} 原本也在此清單（「資料匯出：無端點」），
      * 已於 2026-10-02 由 {@code GET /api/audit-logs/export}（#40）實作後移出。
+     *
+     * <p>{@code TASK_URGE} 原本也在此清單（「催辦：無端點」）。它其實是
+     * 另一類：{@code TaskController.urgeTask}（#6）早就存在，只是<b>沒有稽核</b>
+     * —— 屬於「操作在跑但沒留軌跡」的真缺口。已於 2026-10-02 補上稽核後移出。
      *
      * <p>{@code TASK_UPDATE} 是另一種情況：{@code TaskController.updateTask}
      * 確實存在，但它的每一條分支都對應到更精確的型別
@@ -80,7 +85,6 @@ public enum OperationType {
     public static final Set<OperationType> NOT_YET_IMPLEMENTED = Set.of(
             PROCESS_CANCEL,          // 撤案：無端點
             TASK_RETURN_INITIATOR,   // 退回發起人：無端點（TASK_RETURN 是退回上一站）
-            TASK_URGE,               // 催辦：無端點
             TASK_UPDATE              // 刻意不使用，見上方說明
     );
 }
