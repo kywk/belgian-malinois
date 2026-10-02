@@ -28,7 +28,12 @@ public class WebhookConsumer {
 
     public WebhookConsumer(ObjectMapper objectMapper,
                            WebhookUrlPolicy urlPolicy,
-                           @Value("${bpm.webhook.hmac-secret:bpm-webhook-secret}") String hmacSecret,
+                           // ⚠️ 不得在此加回 @Value fallback（2026-10-02 裁決）：
+                           // 程式碼內的預設值會讓屬性缺席時靜默用公開在 repo 的開發密鑰簽章。
+                           // 缺值就讓 placeholder 解析失敗（fail-fast）。dev 預設值由
+                           // application.yml base 文件提供；prod 另由 WebhookHmacSecretValidator
+                           // 拒絕空白或開發預設值。
+                           @Value("${bpm.webhook.hmac-secret}") String hmacSecret,
                            @Value("${bpm.webhook.connect-timeout-ms:2000}") long connectTimeoutMs,
                            @Value("${bpm.webhook.read-timeout-ms:5000}") long readTimeoutMs) {
         this.objectMapper = objectMapper;
