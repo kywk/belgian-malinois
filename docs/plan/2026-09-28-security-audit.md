@@ -330,6 +330,9 @@ exchange 尚不存在時 publish → broker 回 channel-level 404，RabbitTempla
 `lint/BpmnLintService.java`
 
 - **rule h 是死碼**：`boolean isExternalAllowed = false; // Could be read from process extension` 硬寫 false 且無處修改 → 該規則**從未執行過**。這與已登錄的 R-20（severity 是 warning）是兩件事：即使改成 error 也不會有任何效果。
+
+> **2026-10-02 加註**：rule h 已不再是死碼 —— `BpmnLintService` 改以 `bpm_external_system.allowedProcessKeys` 為事實來源（`isExternallyStartable`，`bpm-core/src/main/java/com/bpm/core/lint/BpmnLintService.java:97,201`），且 severity 已升為 **error**（同檔 `:306-333`，#68d）。R-20 現況見 `docs/plan/2026-09-28-remediation-backlog.md` 的 R-20 段落（2026-10-02 加註）。本段其餘內容保留為 2026-09-28 的審查快照。
+
 - **rule d 誤報擋住合法流程**：對**每一個** ExclusiveGateway 要求 default flow（severity=error），但匯聚型 gateway 只有一條 outgoing flow，本來就不需要 → 合法 BPMN 被判部署失敗。
 - **rule c 把「form-service 不可用」誤判為「表單不存在」**：`catch (Exception e)` 一律回報 severity=error 的「表單定義不存在」→ form-service 掛掉時所有部署失敗並附誤導訊息。且 `formClient` 同樣**無 timeout**。
 - `POST /api/bpmn/lint` 無認證且每個 UserTask 觸發一次同步外呼 → 含 1000 個 UserTask 的 XML 會發出 1000 次無 timeout 的循序請求，是廉價的 DoS 面。
