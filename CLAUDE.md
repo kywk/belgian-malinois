@@ -107,7 +107,7 @@ cd bpm-core && mvn verify
 3. **CI/CD 雙軌並行**：GitHub Actions 與 GitLab CI 同時維護，registry 不一致（GHCR vs `$CI_REGISTRY`），而 `docker-compose.prod.yml` 只認 GHCR 命名。所有 deploy job 仍是 `echo` 佔位。
 4. **`bpmn-definitions/` 目錄不存在**，兩邊的 BPMN deploy job 實質 no-op；env 替換用 shell 假 YAML parser，遇到 `http://` 的冒號會解析錯誤。
 5. **密碼治理（部分已修）**：`infra/mssql/entrypoint.sh` 的密碼不一致已於 2026-09-28 修復（改讀 `MSSQL_SA_PASSWORD`，未設即啟動失敗）。**尚未處理**：開發密碼仍散落於兩個 `application.yml` 與 `docker-compose.yml`；`bpm.webhook.hmac-secret` 預設字面值 `bpm-webhook-secret`。見 backlog R-04。
-6. **外部 API 授權**：字串子串比對已於 2026-09-28 改為精確比對（R-09，commit `f12a8c2`，**未經編譯驗證**），授權判定集中在 `external/ExternalSystemPolicy.java`，擁有權改用 server 寫入的 `_externalSystemId`。仍存在的問題見 R-18 ~ R-25，其中 R-18（`/api/admin/**` 無認證）會讓 R-09 完全可被繞過。`lastUsedAt` 仍每請求寫一次 DB。
+6. **外部 API 授權**：字串子串比對已於 2026-09-28 改為精確比對（R-09，commit `f12a8c2`，**未經編譯驗證**），授權判定集中在 `external/ExternalSystemPolicy.java`，擁有權改用 server 寫入的 `_externalSystemId`。**R-20 已於 2026-09-29 完成**：`initiator` 一律由 server 寫成 `system:<systemId>`、body 帶 `initiator` 回 400，代發改用 `onBehalfOf`（需 `allowOnBehalfOf`）；`firstTaskAssignee`／候選群組驗證與 lint rule h 升 error 見 #68／#88。其餘外部 API 授權項目見 `docs/plan/2026-09-28-remediation-backlog.md`（該檔部分條目尚未隨現況加註）。`lastUsedAt` 仍每請求寫一次 DB。
 7. **Redis 快取失效用 `KEYS` 掃描**（`perm:users:{code}:*`），production 隱憂。
 8. 文件／版控雜項（見 backlog R-11 ~ R-17）：~~根目錄 `backend-development-backlog.md` 與 `docs/` 那份重複~~（2026-09-29 已刪除根目錄那份，`docs/` 三份規劃文件納入版控）；`bpm-frontend/dist/` 被 commit 進版控；無根 README、無 ESLint/Prettier/Checkstyle/Spotless 設定；`docker-compose.prod.yml` 仍有已淘汰的 `version: '3.8'` 且未設 JVM heap 上限（backlog #50）。
 9. ~~**潛在 bug**：`data.sql` 的 snake_case 與 `@UniqueConstraint` 的 camelCase~~ —— **已於 2026-09-28 在乾淨 DB 上驗證為非問題**，Hibernate 正確解析成 `(form_key, version)`。

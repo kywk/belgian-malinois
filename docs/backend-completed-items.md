@@ -208,7 +208,7 @@
 
 - 以上估時基於程式碼規模與複雜度逆向推估，實際開發可能含 AI Coding Tool 輔助加速
 - ~~Phase 5 外部系統接入的業務邏輯（API Key 完整驗證、IP 白名單、allowedActions 檢查等）尚未完善~~
-  —— 已於第八節完成（R-09、R-20）。剩餘缺口見待辦清單 #16、#20、#68
+  —— 已於第八節完成（R-09、R-20）。剩餘缺口見待辦清單 #16、#20（#68 的 R-20 文件收尾已於 2026-10-02 完成）
 - 目前 OrgService / PermService 仍以 MockController 替代外圍系統（mock 已改為 fail-closed），
   正式整合等權限中心（`docs/rbac-enterprise-backlog.md`，未開工）
 - ~~驗收測試案例中，加簽（TC-A01）與外部系統 API（TC-A04）尚未通過~~ —— 已有對應自動化測試且通過（第八節）
