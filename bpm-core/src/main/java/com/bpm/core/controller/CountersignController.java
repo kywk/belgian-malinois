@@ -71,13 +71,19 @@ public class CountersignController {
     // （ExternalActorGuard.requireKnownPerson），與 #88 的 firstTaskAssignee／
     // onBehalfOf、#92 的 reassign assignee 共用。
     private final ExternalActorGuard actorGuard;
+    // #33：加簽子任務的通知（task_assigned）。與 BPMN 節點層共用同一個
+    // 發送端與同一份 payload 規則 —— 加簽子任務是 standalone task，
+    // 沒有 BPMN listener 可以掛，只能在建立端呼叫。
+    private final com.bpm.core.notify.NotifyPublisher notifyPublisher;
 
     public CountersignController(TaskService taskService, AuditEventPublisher auditPublisher,
-                                 TaskHolderGuard holderGuard, ExternalActorGuard actorGuard) {
+                                 TaskHolderGuard holderGuard, ExternalActorGuard actorGuard,
+                                 com.bpm.core.notify.NotifyPublisher notifyPublisher) {
         this.taskService = taskService;
         this.auditPublisher = auditPublisher;
         this.holderGuard = holderGuard;
         this.actorGuard = actorGuard;
+        this.notifyPublisher = notifyPublisher;
     }
 
     /**
@@ -266,6 +272,34 @@ public class CountersignController {
         subtask.setName("加簽審核 - " + parent.getName());
         subtask.setDescription(req.getOrDefault("message", ""));
         taskService.saveTask(subtask);
+
+        // ── #33：通知被加簽人 ──────────────────────────────────────────
+        //
+        // 改動前加簽子任務完全沒有通知。原以為是「assignee 在 create 之後
+        // 才設定」，實查不然：上面第 265 行的 setAssignee 就在 saveTask
+        // <b>之前</b>。真正的原因是 standalone task（newTask）不經過
+        // BPMN 的 taskListener —— 出廠 BPMN 的 ${notifyTaskListener} 只掛在
+        // UserTask 節點上，而加簽根本不走 BPMN 節點。
+        //
+        // 修法：在建立端呼叫與 BPMN 端<b>同一個</b>發送端
+        // （NotifyPublisher.taskAssigned），事件名也用 task_assigned ——
+        // 對被加簽人而言它就是一個指派給他的任務，NotifyConfig 的既有事件
+        // 清單已涵蓋，不需要為加簽發明第六種事件（「規則只能有一份」）。
+        //
+        // ⚠️ 通知排在 saveTask 之後、audit 之前，且發送端吞例外
+        // （NotifyPublisher.publish）：RabbitMQ 不通不得讓加簽失敗，
+        // 否則父任務會被一筆建立失敗的子任務卡住（本端點原本的 DoS 形狀）。
+        //
+        // initiator 只在父任務屬於某個流程時才查：standalone 的父任務
+        // （加簽加簽）沒有流程變數可讀。taskService.getVariable 在變數
+        // 不存在時回 null，不是例外。
+        String initiator = null;
+        if (parent.getProcessInstanceId() != null) {
+            Object v = taskService.getVariable(parent.getId(), "initiator");
+            initiator = v != null ? v.toString() : null;
+        }
+        notifyPublisher.taskAssigned(subtask.getId(), subtask.getName(), assignee,
+                null, parent.getProcessInstanceId(), parent.getProcessDefinitionId(), initiator);
 
         // Map.of 不接受 null 值。assignee 在上面已驗證非空，
         // 但 subtask.getName() 仍可能為 null（parent.getName() 為 null 時），
