@@ -10,8 +10,12 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 測試用的 webhook 接收端（#67）。
@@ -48,6 +52,20 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * 走與 MockOrgController／MockPermController 同一條路徑，
  * 而不是另外開一條測試專用的免認證路徑 —— 後者是有可能誤上 prod 的旁路
  * （application-test.yml 對信任閘道那條路的註解就是講這個）。
+ *
+ * <h2>失敗注入（#26／#27 收尾，2026-10-02）</h2>
+ *
+ * <p>重試與 DLQ 是「接收端失敗時」才存在的行為，而這個 sink 原本永遠回 200
+ * —— 等於整個測試套件沒有任何辦法讓一次 webhook 投遞失敗，
+ * 失敗路徑（throw → listener retry → 重試耗盡 → {@code dlq.bpm}）
+ * 從來沒有被走過一次。{@link #failFirst(String, int)} 讓指定目標的前 N 次
+ * 請求回 500（模擬接收端暫時故障）；{@link #alwaysFail(String)} 用來驗證
+ * 重試耗盡後進 DLQ。
+ *
+ * <p>失敗的嘗試也寫進 {@link #received()}（帶 {@link Received#status()} 與
+ * {@link Received#receivedAt()}），因為「重試了幾次、間隔多久」的證據就是
+ * 這些失敗的請求本身。預設不注入失敗，既有測試收到的每一筆仍是 200，
+ * 行為不變。
  */
 @RestController
 @RequestMapping("/mock/test-webhook-sink")
@@ -63,12 +81,44 @@ public class WebhookTestSink {
      * @param signature  {@code X-BPM-Signature} 標頭
      * @param deliveryId {@code X-BPM-Delivery-Id} 標頭
      * @param timestamp  {@code X-BPM-Timestamp} 標頭
+     * @param status     回應給投遞端的 HTTP 狀態（失敗注入時為 500；
+     *                   失敗的嘗試也必須被記錄，重試次數的證據就是它）
+     * @param receivedAt 這個嘗試抵達 sink 的時刻（量測重試間隔用）
      */
     public record Received(String name, String method, String body,
-                           String signature, String deliveryId, String timestamp) {
+                           String signature, String deliveryId, String timestamp,
+                           int status, Instant receivedAt) {
     }
 
     private static final List<Received> RECEIVED = new CopyOnWriteArrayList<>();
+
+    /** name → 還要失敗幾次。沒有 entries 的 name 一律回 200。 */
+    private static final Map<String, AtomicInteger> FAIL_REMAINING = new ConcurrentHashMap<>();
+
+    /** 讓 {@code name} 的前 {@code n} 次請求回 500；{@code n <= 0} 等於不注入。 */
+    public static void failFirst(String name, int n) {
+        if (n <= 0) {
+            FAIL_REMAINING.remove(name);
+        } else {
+            FAIL_REMAINING.put(name, new AtomicInteger(n));
+        }
+    }
+
+    /** 讓 {@code name} 的每一次請求都回 500（驗證重試耗盡 → DLQ 用）。 */
+    public static void alwaysFail(String name) {
+        failFirst(name, Integer.MAX_VALUE);
+    }
+
+    private static ResponseEntity<Void> respond(String name, String method, String body,
+                                                String signature, String deliveryId, String timestamp) {
+        AtomicInteger remaining = FAIL_REMAINING.get(name);
+        boolean failing = remaining != null
+                && remaining.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0;
+        HttpStatus status = failing ? HttpStatus.INTERNAL_SERVER_ERROR : HttpStatus.OK;
+        RECEIVED.add(new Received(name, method, body, signature, deliveryId, timestamp,
+                status.value(), Instant.now()));
+        return ResponseEntity.status(status).build();
+    }
 
     @PostMapping("/{name}")
     public ResponseEntity<Void> onPost(@PathVariable String name,
@@ -76,8 +126,7 @@ public class WebhookTestSink {
                                        @RequestHeader(value = "X-BPM-Signature", required = false) String signature,
                                        @RequestHeader(value = "X-BPM-Delivery-Id", required = false) String deliveryId,
                                        @RequestHeader(value = "X-BPM-Timestamp", required = false) String timestamp) {
-        RECEIVED.add(new Received(name, "POST", body, signature, deliveryId, timestamp));
-        return ResponseEntity.status(HttpStatus.OK).build();
+        return respond(name, "POST", body, signature, deliveryId, timestamp);
     }
 
     @PutMapping("/{name}")
@@ -86,12 +135,12 @@ public class WebhookTestSink {
                                       @RequestHeader(value = "X-BPM-Signature", required = false) String signature,
                                       @RequestHeader(value = "X-BPM-Delivery-Id", required = false) String deliveryId,
                                       @RequestHeader(value = "X-BPM-Timestamp", required = false) String timestamp) {
-        RECEIVED.add(new Received(name, "PUT", body, signature, deliveryId, timestamp));
-        return ResponseEntity.status(HttpStatus.OK).build();
+        return respond(name, "PUT", body, signature, deliveryId, timestamp);
     }
 
     public static void reset() {
         RECEIVED.clear();
+        FAIL_REMAINING.clear();
     }
 
     public static List<Received> received() {
