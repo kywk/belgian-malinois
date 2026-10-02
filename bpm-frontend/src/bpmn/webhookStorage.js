@@ -1,5 +1,12 @@
 /**
- * 節點層 webhook 設定的<b>存放格式</b> —— 設計器與 bpm-core 之間唯一的介面（#67）。
+ * webhook 設定的<b>存放格式</b> —— 設計器與 bpm-core 之間唯一的介面（#67）。
+ *
+ * 節點層（{@code <userTask>}）與流程層（{@code <process>}）共用同一份格式與解析
+ * 邏輯（spec §11.4：後端 {@code WebhookConfigResolver.resolveForProcess} 與節點層
+ * 完全對稱）；兩者唯一的分歧是「未填 event 時的預設值」—— 節點層是
+ * {@code create}、流程層是 {@code process.completed}。因此讀寫函式都接受一個
+ * 選配的 defaultEvent，由呼叫端（見 WebhookProps.js 的 webhookConfigFor）
+ * 依元素型別決定。不給參數時維持節點層的舊行為。
  *
  * 為什麼抽成獨立模組：與 {@link ./assigneeExpressions} 同一個理由 ——
  * 這裡的每一個字串／tag 名都是與 Flowable 引擎之間的契約。寫錯的後果
@@ -22,7 +29,16 @@ export const LEGACY_DOC_PREFIX = '__webhooks__:'
 export const WEBHOOKS_TYPE = 'flowable:Webhooks'
 export const WEBHOOK_TYPE = 'flowable:Webhook'
 
-const DEFAULT_EVENT = 'create'
+export const DEFAULT_EVENT = 'create'
+
+/**
+ * 流程層省略 event 時的預設值。與後端
+ * {@code WebhookConfig.DEFAULT_PROCESS_EVENT} 是同一份契約（spec §11.4）。
+ * ⚠️ 不可拿 DEFAULT_EVENT 代替：create 在流程層「不命中」，寫錯等於設定
+ * 成功但永不投遞，而且沒有任何錯誤訊息。
+ */
+export const DEFAULT_PROCESS_EVENT = 'process.completed'
+
 const DEFAULT_METHOD = 'POST'
 
 function isContainer(el) {
@@ -35,9 +51,9 @@ function containerOf(bo) {
   return values.find(isContainer) || null
 }
 
-function normalize(wh) {
+function normalize(wh, defaultEvent = DEFAULT_EVENT) {
   return {
-    event: wh?.event || DEFAULT_EVENT,
+    event: wh?.event || defaultEvent,
     url: wh?.url || '',
     method: wh?.method || DEFAULT_METHOD
   }
@@ -58,19 +74,19 @@ function normalize(wh) {
  *
  * @returns {Array<{event: string, url: string, method: string}>}
  */
-export function readWebhooks(bo) {
+export function readWebhooks(bo, defaultEvent = DEFAULT_EVENT) {
   const container = containerOf(bo)
-  if (container) return (container.values || []).map(normalize)
-  return readLegacyWebhooks(bo)
+  if (container) return (container.values || []).map(wh => normalize(wh, defaultEvent))
+  return readLegacyWebhooks(bo, defaultEvent)
 }
 
-function readLegacyWebhooks(bo) {
+function readLegacyWebhooks(bo, defaultEvent = DEFAULT_EVENT) {
   const docs = bo?.get?.('documentation') || []
   const legacy = docs.find(d => String(d.text || '').startsWith(LEGACY_DOC_PREFIX))
   if (!legacy) return []
   try {
     const parsed = JSON.parse(String(legacy.text).slice(LEGACY_DOC_PREFIX.length))
-    return Array.isArray(parsed) ? parsed.map(normalize) : []
+    return Array.isArray(parsed) ? parsed.map(wh => normalize(wh, defaultEvent)) : []
   } catch {
     // 舊資料是手改或格式壞掉時回空陣列，而不是讓整個 properties panel 崩掉 ——
     // 崩掉會讓使用者在這個節點上完全無法編輯其他欄位。
@@ -87,9 +103,10 @@ function readLegacyWebhooks(bo) {
  *
  * @param bo           目標 businessObject（提供 {@code $model} 與現有 extensionElements）
  * @param webhooks     使用者編輯後的陣列
+ * @param defaultEvent 未填 event 時要寫入的值（節點層 create／流程層 process.completed）
  * @returns {object} 一個 {@code bpmn:ExtensionElements}
  */
-export function buildExtensionElements(bo, webhooks) {
+export function buildExtensionElements(bo, webhooks, defaultEvent = DEFAULT_EVENT) {
   const model = bo.$model
   const existing = bo.get('extensionElements')
   const kept = (existing?.get?.('values') || []).filter(el => !isContainer(el))
@@ -97,7 +114,7 @@ export function buildExtensionElements(bo, webhooks) {
   const container = model.create(WEBHOOKS_TYPE)
   container.values = (webhooks || []).map(wh =>
     model.create(WEBHOOK_TYPE, {
-      event: wh.event || DEFAULT_EVENT,
+      event: wh.event || defaultEvent,
       url: wh.url || '',
       method: wh.method || DEFAULT_METHOD
     })
