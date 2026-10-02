@@ -14,6 +14,8 @@ import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.history.HistoricProcessInstance;
 import org.flowable.engine.runtime.ProcessInstance;
+import org.flowable.identitylink.api.IdentityLink;
+import org.flowable.identitylink.api.IdentityLinkType;
 import org.flowable.task.api.Task;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -395,11 +397,58 @@ public class ExternalApiController {
 
     // ── 3. Complete Task ──
 
+    /**
+     * 完成一個任務（R-19）。
+     *
+     * <h2>改動前：擁有權檢查只回答了一半的問題</h2>
+     *
+     * <p>原本這裡只做 {@code verifyRunningOwnership} ——「這個流程實例是不是
+     * 你的」。但「實例是你的」不等於「這個任務該由你做」：外部系統 X 啟動
+     * {@code leave-approval} 之後，該實例的擁有者就是 X，於是 X 可以直接完成
+     * 上面由真人主管持有的 managerReview —— <b>自己送出的案件由自己核准</b>，
+     * 人工審批等於不存在。
+     *
+     * <p>同一處還有變數注入：{@code body.variables} 直接進
+     * {@code taskService.complete}，可以寫入 {@code _} 前綴的保留變數
+     * （含擁有權標記 {@code _externalSystemId} 與表單版本鎖
+     * {@code _formVersions}），也可以覆寫 {@code approved}／{@code rejected}
+     * —— 那是本流程閘道判斷核准／退回／駁回的唯一依據。
+     *
+     * <h2>三層檢查與順序</h2>
+     *
+     * <ol>
+     *   <li><b>擁有權</b>（既有，403）：實例屬於本系統，或沿 Call Activity
+     *       往上追溯到的父實例屬於本系統。</li>
+     *   <li><b>allowedProcessKeys</b>（403）：任務所屬流程 key 必須在該系統的
+     *       授權清單內。與 startProcess 同一條規則、同一個
+     *       {@link ExternalSystemPolicy#isProcessKeyAllowed} —— 否則一個只被
+     *       授權 leave-approval 的系統仍可完成其他流程的任務。</li>
+     *   <li><b>任務層級</b>（403）：只有 assignee 或 candidateUsers
+     *       <b>明確</b>包含 {@code system:<systemId>} 時才能完成。這是 R-19 的
+     *       核心：擋掉「系統完成自己案件上的人工簽核」。候選<b>群組</b>刻意
+     *       不納入，理由見 {@link #isTaskHeldBySystem}。</li>
+     *   <li><b>變數</b>（400）：{@code _} 前綴是伺服器保留命名空間 →
+     *       指名拒絕；其餘走與 startProcess 完全相同的
+     *       {@link #validateVariables}（規則只能有一份）。</li>
+     * </ol>
+     *
+     * <p>為什麼授權檢查（403）排在變數檢查（400）之前：與 startProcess 的
+     * 順序一致（allowedProcessKeys → validateVariables），也與
+     * {@code ExternalRequiredVariableTest.unauthorizedKeyWinsOverBlankRequired}
+     * 記載的原則一致 —— 呼叫端該先知道「這件事你根本不能做」，再知道
+     * 「你的 payload 哪裡不對」。這裡不像 startProcess 存在部署清單的枚舉
+     * 風險（任務在呼叫端自己的實例上，{@code /status} 本來就看得到），
+     * 但順序一致本身就是可讀性。
+     *
+     * <p>所有拒絕都發生在 {@code taskService.complete} 之前：任務仍在、
+     * 變數未寫入、不寫稽核。測試對每一條拒絕都驗這件事。
+     */
     @PutMapping("/tasks/{taskId}")
     @Transactional("primaryTransactionManager")
     public Map<String, Object> completeTask(@PathVariable String taskId,
                                              @RequestBody Map<String, Object> body,
-                                             @RequestAttribute("externalSystemId") String systemId) {
+                                             @RequestAttribute("externalSystemId") String systemId,
+                                             @RequestAttribute("externalSystem") ExternalSystem sys) {
         Task task = taskService.createTaskQuery().taskId(taskId).singleResult();
         if (task == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found");
 
@@ -407,9 +456,40 @@ public class ExternalApiController {
         // 都能以 taskId 完成「任何」任務，包含其他系統的案件與人工簽核任務。
         verifyRunningOwnership(task.getProcessInstanceId(), systemId);
 
+        // ── R-19 (iii)：任務所屬流程必須在該系統的 allowedProcessKeys 內 ──
+        //
+        // 任務是執行中的（上面剛查到），所以實例一定存在於 ACT_RU_EXECUTION；
+        // processDefinitionKey 直接取自實例，不必再用 RepositoryService 把
+        // processDefinitionId 換成 key（少一次查詢，也沒有「定義被刪」的 null
+        // 分支 —— 有執行中實例的定義刪不掉）。這與 TaskController.toMap 的
+        // 取法相同。
+        //
+        // ⚠️ 取的是「任務自己的」流程 key，不是父流程的。Call Activity 子流程
+        // 的任務因此要求子流程 key 也在授權清單內 —— 這是刻意的：子流程可能
+        // 有自己的人工關卡與變數規格，用父流程的授權放行等於繞過它們。
+        ProcessInstance instance = runtimeService.createProcessInstanceQuery()
+                .processInstanceId(task.getProcessInstanceId()).singleResult();
+        String processDefKey = instance.getProcessDefinitionKey();
+        if (!policy.isProcessKeyAllowed(sys, processDefKey)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "此系統未被授權完成流程: " + processDefKey);
+        }
+
+        // ── R-19 (i)：任務必須明確指派給本系統 ──
+        if (!isTaskHeldBySystem(task, systemId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "此任務未指派給本系統（" + ExternalActorIdentity.of(systemId) + "）。"
+                            + "外部系統只能完成 assignee 或 candidateUsers 明確包含該身分的任務；"
+                            + "候選群組不在此列。");
+        }
+
         @SuppressWarnings("unchecked")
         Map<String, Object> vars = body.get("variables") instanceof Map
                 ? new HashMap<>((Map<String, Object>) body.get("variables")) : new HashMap<>();
+
+        // ── R-19 (ii)：保留命名空間與變數規格 ──
+        rejectReservedVariableNames(vars);
+        validateVariables(processDefKey, vars);
 
         taskService.complete(taskId, vars);
 
@@ -422,6 +502,98 @@ public class ExternalApiController {
     }
 
     // ── Helpers ──
+
+    /**
+     * 這個任務是否由該外部系統持有（R-19 (i)）—— assignee 或 candidateUsers
+     * <b>明確</b>包含 {@code system:<systemId>}。
+     *
+     * <h2>為什麼需要這條規則</h2>
+     *
+     * <p>擁有權（{@code _externalSystemId}）描述的是<b>流程實例</b>，不是
+     * <b>任務</b>。外部系統啟動 leave-approval 之後就擁有該實例，而上面掛著
+     * 由真人主管持有的 managerReview —— 少了這一層，系統就能以 taskId 完成
+     * 自己案件上的人工簽核（自我核准）。
+     *
+     * <h2>為什麼候選群組不納入（2026-10-02 裁決）</h2>
+     *
+     * <p>本 repo 的候選群組名稱有三個互質來源（部門代碼／權限碼／JWT
+     * authority，見 {@code CandidateGroupMembership}），沒有任何 API 能回答
+     * 「這個群組屬於哪個外部系統」。要納入就只能假設某種命名慣例（例如群組名
+     * 也是 {@code system:<id>}），那既會擋掉合法用法，也保護不了真正的情況。
+     * 裁決因此只認 assignee 與 candidateUsers。
+     *
+     * <h2>為什麼用 {@link ExternalActorIdentity} 而不是自己寫前綴比對</h2>
+     *
+     * <p>{@code system:} 命名空間的鑄造與判定在本 repo 只有一份規則（見該類別
+     * 註解「這條規則必須只有一份」）。這裡需要的是「是不是<b>這一個</b>系統」，
+     * 所以用 {@code ExternalActorIdentity.of} 產生預期的完整身分再比對 ——
+     * 而不是自己 {@code startsWith("system:")} 之後再切字串。
+     *
+     * <h2>大小寫為什麼不敏感</h2>
+     *
+     * <p>與 {@link ExternalActorIdentity#isSystemActor} 的慣例一致（見該類別
+     * 「為什麼大小寫不敏感」）：伺服器鑄造的一律小寫，但任務的 assignee 可能
+     * 來自 BPMN 字面值等其他寫入端。把 {@code SYSTEM:ERP} 視為
+     * {@code system:erp} 只會讓一個「本來沒有人能完成」的任務多一個正當完成者；
+     * 它不可能誤中一個真人 id（真人 id 不會是 {@code system:} 開頭），
+     * 所以這個方向是安全的。
+     *
+     * <p>⚠️ 不比對 {@code owner}：裁決只認 assignee 與 candidateUsers。
+     * 也比對 candidate <b>user</b> 連結而不是所有 identity link —— Flowable 的
+     * identity link 還有 participant 等型別，那些不是「候選人」。
+     * 不 trim：{@code " system:erp"} 不是系統身分（與
+     * {@code ExternalActorIdentity.isSystemActor} 的判準一致，空白不靜默寬容）。
+     *
+     * @return true = 該系統可完成此任務；false = 必須拒絕
+     */
+    private boolean isTaskHeldBySystem(Task task, String systemId) {
+        String identity = ExternalActorIdentity.of(systemId);
+        if (identity.equalsIgnoreCase(task.getAssignee())) return true;
+        // ⚠️ getIdentityLinksForTask 的回傳順序沒有保證（見
+        // ExternalCandidateGroupShapeTest 的說明）；這裡只做成員比對，不依賴順序。
+        for (IdentityLink link : taskService.getIdentityLinksForTask(task.getId())) {
+            if (!IdentityLinkType.CANDIDATE.equals(link.getType())) continue;
+            if (identity.equalsIgnoreCase(link.getUserId())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 拒絕 {@code _} 前綴的變數名（R-19 (ii)）。
+     *
+     * <h2>為什麼 {@code _} 是保留命名空間</h2>
+     *
+     * <p>伺服器用這個前綴存放不允許呼叫端觸及的狀態：
+     * {@code _externalSystemId}（擁有權標記，見 {@link #OWNER_VAR}）、
+     * {@code _formVersions}（表單版本鎖，見 {@code FormVersionLocker}）、
+     * {@code _callbackUrl}。這些值一旦可被 body 覆寫：
+     * <ul>
+     *   <li>{@code _externalSystemId} → 把實例「過戶」給別的系統
+     *       （R-23 是同一個缺陷的另一個入口）。</li>
+     *   <li>{@code _formVersions} → 解鎖表單版本，讓案件以舊版表單繼續走。</li>
+     * </ul>
+     *
+     * <h2>為什麼是 400 而不是 403，為什麼要指名</h2>
+     *
+     * <p>這是「payload 用了保留的欄位名」——呼叫端該改的是 payload，與
+     * {@link #validateVariables} 的 400 同一類（不是授權問題、也不是資源不
+     * 存在）。只說「變數不合法」會讓呼叫端一個欄位一個欄位試錯；指名變數
+     * （全部列出、排序以求訊息穩定）才能一次定位。
+     *
+     * <p>⚠️ 檢查的是<b>名稱</b>而不是值，也不 trim：變數名是識別字，Flowable
+     * 原樣存放，寬容地 trim 等於同時接受兩個名字。
+     */
+    private static void rejectReservedVariableNames(Map<String, Object> variables) {
+        List<String> reserved = variables.keySet().stream()
+                .filter(name -> name != null && name.startsWith("_"))
+                .sorted()
+                .toList();
+        if (!reserved.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "變數名稱不可使用 '_' 前綴（伺服器保留的命名空間）: "
+                            + String.join(", ", reserved));
+        }
+    }
 
     /**
      * 把 body 的 {@code firstTaskCandidateGroups} 轉成「一串群組名」（#93）。
@@ -693,6 +865,12 @@ public class ExternalApiController {
 
     /**
      * 檢查必填變數（{@code spec.required == true}）。
+     *
+     * <p>⚠️ 本方法現在有兩個呼叫點：{@code startProcess}（#91）與
+     * {@code completeTask}（R-19 (ii)）。「什麼時候驗」由呼叫端決定，
+     * 「怎麼驗」只有這一份 —— 兩個入口的必填語意必須一致，這正是它是
+     * 一份實作而不是各寫一份的理由。未宣告的變數兩邊都放行（本方法只看
+     * spec 裡 {@code required=true} 的項目），這是既有語意，R-19 沿用。
      *
      * <h2>#91 缺陷：{@code containsKey} 把「有值卻等於沒有值」放行了</h2>
      *
