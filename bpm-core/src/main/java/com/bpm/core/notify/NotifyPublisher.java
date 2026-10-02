@@ -54,9 +54,12 @@ import java.util.Map;
  *   <li>{@code task_urged} —— 催辦。</li>
  *   <li>{@code process_returned}／{@code process_rejected}／
  *       {@code process_completed} —— {@code NotifyConfig.eventType} 既有清單。</li>
- *   <li>{@code task_timeout} —— <b>刻意不做</b>：Flowable 7.2.0 不發
- *       timeout task event（已用位元碼證實，見
- *       {@code WebhookTaskListener.matches} 的說明），沒有事件就沒有發送端。</li>
+ *   <li>{@code task_timeout} —— #23 逾期提醒。⚠️ 它<b>不是</b> Flowable 的
+ *       timeout task event：引擎 7.2.0 不發那個事件（已用位元碼證實，見
+ *       {@code WebhookTaskListener.matches}），webhook 的 {@code timeout}
+ *       選項因此沒有觸發點。替代機制是「BPMN 非中斷式 boundary timer ＋
+ *       {@code timeoutNotifyDelegate}」，由 {@link TimeoutNotifyDelegate}
+ *       呼叫 {@link #taskTimedOut}。名字像，機制不同，不要混淆。</li>
  * </ul>
  */
 @Component
@@ -149,6 +152,33 @@ public class NotifyPublisher {
                           List<String> candidateUsers, String applicant) {
         Map<String, Object> msg = base("task_urged", taskId, taskName,
                 processInstanceId, processDefinitionId, applicant);
+        putIfPresent(msg, "assignee", assignee);
+        if (candidateUsers != null && !candidateUsers.isEmpty()) {
+            msg.put("candidateUsers", List.copyOf(candidateUsers));
+        }
+        publish(msg);
+    }
+
+    /**
+     * 任務逾期提醒（{@code task_timeout}，#23）。
+     *
+     * <p>呼叫端是 {@link TimeoutNotifyDelegate}：BPMN 的非中斷式 boundary
+     * timer 到期後，對<b>現任任務受理人</b>發提醒。任務保留、流程不變
+     * —— 這個事件沒有任何「自動動作」語意，payload 與其他通知同一組
+     * 非敏感欄位（P2-1 紅線：不放變數、不放 comment、不放表單內容）。
+     *
+     * <p>收件人欄位與催辦相同：assignee 優先，候選任務放
+     * {@code candidateUsers}，由 {@code EmailConsumer.resolveRecipients}
+     * 這唯一一份規則解析。沒有可送對象時 delegate 端已先 no-op，
+     * 不會送出一則沒有收件人的空訊息。
+     *
+     * @param candidateUsers 候選人。有 assignee 時傳空清單即可。
+     */
+    public void taskTimedOut(String taskId, String taskName, String processInstanceId,
+                             String processDefinitionId, String assignee,
+                             List<String> candidateUsers) {
+        Map<String, Object> msg = base("task_timeout", taskId, taskName,
+                processInstanceId, processDefinitionId, null);
         putIfPresent(msg, "assignee", assignee);
         if (candidateUsers != null && !candidateUsers.isEmpty()) {
             msg.put("candidateUsers", List.copyOf(candidateUsers));

@@ -1,6 +1,7 @@
 package com.bpm.core.config;
 
 import com.bpm.core.notify.NotifyTaskListener;
+import com.bpm.core.notify.TimeoutNotifyDelegate;
 import com.bpm.core.service.BpmPermissionService;
 import com.bpm.core.service.BpmQueryService;
 import com.bpm.core.service.OrgService;
@@ -52,7 +53,8 @@ public class FlowableConfig {
      * <b>不</b>進 {@code BpmnLintService.EL_WHITELIST}。它是
      * {@code delegateExpression} 要解析的對象，不是 BPMN 運算式要呼叫的函式；
      * 放進 EL 白名單等於宣告「運算式可以拿到它」，而它不該被拿到。
-     * {@code notifyTaskListener} 走的是同一條分界。
+     * {@code notifyTaskListener} 與 {@code timeoutNotifyDelegate}（#23）
+     * 走的是同一條分界。
      *
      * <h2>這不是完整的修補</h2>
      *
@@ -74,6 +76,7 @@ public class FlowableConfig {
             BpmPermissionService permService,
             BpmQueryService bpmQueryService,
             NotifyTaskListener notifyTaskListener,
+            TimeoutNotifyDelegate timeoutNotifyDelegate,
             com.bpm.core.webhook.WebhookTaskListener webhookTaskListener,
             com.bpm.core.engine.BlankAssigneeNormalizingInterceptor blankAssigneeNormalizingInterceptor) {
         return config -> {
@@ -100,6 +103,12 @@ public class FlowableConfig {
                     "applicantResolver", applicantResolver,
                     // ⚠️ 不可移除：purchase-approval 的 delegateExpression 依賴它
                     "notifyTaskListener", notifyTaskListener,
+                    // ⚠️ 不可移除（#23）：設計師在流程的 UserTask 上掛
+                    // 非中斷式 boundary timer，再把 delegateExpression 指向它。
+                    // 與 webhookTaskListener／notifyTaskListener 同一條分界：
+                    // 只加在這份 map，不進 BpmnLintService.EL_WHITELIST ——
+                    // 它是 delegateExpression 的解析對象，不是運算式可呼叫的函式。
+                    "timeoutNotifyDelegate", timeoutNotifyDelegate,
                     // ⚠️ 不可移除（#67）：兩支 BPMN 的每個 UserTask 都以
                     // delegateExpression="${webhookTaskListener}" 引用它。
                     // 漏掉它與漏掉 notifyTaskListener 的症狀完全相同 ——
