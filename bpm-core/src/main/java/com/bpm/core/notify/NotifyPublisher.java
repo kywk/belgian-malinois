@@ -160,6 +160,10 @@ public class NotifyPublisher {
      * 任務完成後對<b>申請人</b>的通知（{@code process_returned}／
      * {@code process_rejected}／{@code process_completed}）。
      *
+     * <p>#96 起呼叫端是<b>全域</b>的 {@link CompletionNotifyListener}
+     * （{@code FlowableConfig} 註冊），HTTP 與外部 API 兩條完成路徑共用；
+     * 改動前只有 {@code TaskController} 的 complete 分支會呼叫。
+     *
      * <h2>⚠️ 為什麼 {@code assignee} 放的是申請人</h2>
      *
      * <p>這三個事件的收件人不是「任務的受理人」（那是審核人），而是申請人。
@@ -216,6 +220,21 @@ public class NotifyPublisher {
         if (Boolean.FALSE.equals(vars.get("approved"))) return "process_returned";
         if (Boolean.TRUE.equals(vars.get("approved")) && processEnded) return "process_completed";
         return null;
+    }
+
+    /**
+     * 這個任務是不是「補件」關卡（#33／#96）。
+     *
+     * <p>補件完成時的 vars 由 HTTP 路徑補上 {@code approved=false} 預設值，
+     * 照 {@link #applicantEventFor} 判定會變成「您的申請已被退回」——
+     * 申請人自己重送時收到退回信是荒謬的。排除條件因此是任務名稱。
+     *
+     * <p>⚠️ 判定只有一份：稽核端（{@code TaskController} 的
+     * {@code TASK_RESUBMIT}）與通知端（{@link CompletionNotifyListener}）
+     * 都呼叫這裡，不各自寫「name contains 補件」。
+     */
+    public static boolean isRevisionTask(String taskName) {
+        return taskName != null && taskName.contains("補件");
     }
 
     /**
