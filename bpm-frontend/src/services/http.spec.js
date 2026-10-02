@@ -5,7 +5,7 @@ import { testJwt } from './testJwt.js'
 // vi.mock 會被提升到檔首，因此 mock 物件必須用 vi.hoisted 一起提升，
 // 否則 factory 執行時變數還沒初始化。
 const { elMessage } = vi.hoisted(() => ({
-  elMessage: { error: vi.fn(), success: vi.fn() },
+  elMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }))
 vi.mock('element-plus', () => ({ ElMessage: elMessage }))
 
@@ -29,6 +29,7 @@ describe('http instance', () => {
   beforeEach(() => {
     localStorage.clear()
     elMessage.error.mockClear()
+    elMessage.warning.mockClear()
   })
 
   const runRequest = (config = { headers: {} }) => {
@@ -124,6 +125,18 @@ describe('http instance', () => {
     it('5xx 顯示伺服器錯誤', async () => {
       await runError({ response: { status: 500, data: {} } })
       expect(elMessage.error).toHaveBeenCalledWith(expect.stringContaining('伺服器'))
+    })
+
+    it('429 顯示「過於頻繁」警告而不是錯誤（#6 催辦的冷卻）', async () => {
+      // 頻率限制不是故障，是刻意的冷卻；用 warning 才不會讓使用者以為系統壞了。
+      await runError({ response: { status: 429, data: { message: '已於 30 分鐘內催辦過，請稍後再試' } } })
+      expect(elMessage.warning).toHaveBeenCalledWith('已於 30 分鐘內催辦過，請稍後再試')
+      expect(elMessage.warning).toHaveBeenCalledWith(expect.stringContaining('30 分鐘'))
+      expect(elMessage.error).not.toHaveBeenCalled()
+
+      elMessage.warning.mockClear()
+      await runError({ response: { status: 429, data: {} } })
+      expect(elMessage.warning).toHaveBeenCalledWith(expect.stringContaining('頻繁'))
     })
 
     it('優先顯示後端給的 message', async () => {

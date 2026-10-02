@@ -80,13 +80,34 @@ public class EmailConsumer {
                 subject = "【BPM】您有新的待辦事項：" + taskName;
                 body = "您好，\n\n任務名稱：" + taskName + "\n申請人：" + initiator + "\n\n請登入 BPM 平台處理。";
             }
+            // #33：認領。收件人是其他候選人（NotifyPublisher.taskClaimed 把
+            // claimedBy 認領者排除後放進 candidateUsers），所以 assignee 是空的。
+            case "task_claimed" -> {
+                String claimedBy = str(msg, "claimedBy");
+                subject = "【BPM】任務已被認領：" + taskName;
+                body = "您好，\n\n任務「" + taskName + "」已由 "
+                        + (claimedBy.isBlank() ? "其他候選人" : claimedBy)
+                        + " 認領，您不需要再處理。";
+            }
+            // #33/#6：催辦。收件人是目前受理人（assignee 優先）或候選人，
+            // initiator 是發動催辦的申請人（署名用）。
+            case "task_urged" -> {
+                subject = "【BPM】催辦提醒：" + taskName;
+                body = "您好，\n\n申請人提醒您盡快處理任務：「" + taskName
+                        + "」。\n申請人：" + initiator + "\n\n請登入 BPM 平台處理。";
+            }
             case "process_returned" -> {
                 subject = "【BPM】您的申請已被退回";
                 body = "您好，\n\n您的申請「" + taskName + "」已被退回，請修改後重新提交。";
             }
             case "process_rejected" -> {
+                // ⚠️ 刻意不放退回／拒絕原因（security-audit P2-1 紅線）：
+                // 原因在前端是「簽核意見」而不是 rejectReason 變數
+                // （ActionDialog.vue 把退件／拒絕原因寫成 comment），
+                // 而簽核意見全文屬於不得新增外送的敏感內容。
+                // 硬編模板原本的「原因：」因此移除，不留一個永遠空白的標籤。
                 subject = "【BPM】您的申請已被拒絕";
-                body = "您好，\n\n您的申請「" + taskName + "」已被拒絕。\n原因：" + str(msg, "reason");
+                body = "您好，\n\n您的申請「" + taskName + "」已被拒絕。";
             }
             case "process_completed" -> {
                 subject = "【BPM】您的申請已核准";

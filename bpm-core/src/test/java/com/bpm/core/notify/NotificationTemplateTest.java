@@ -80,14 +80,15 @@ class NotificationTemplateTest {
     @Test
     @DisplayName("流程定義 id 必須被裁成 key，否則模板永遠查不到")
     void processDefinitionIdIsTrimmedToKey() {
-        assertThat(NotifyTaskListener.extractProcessKey("leave-approval:1:2504"))
+        // #33：裁切規則從 NotifyTaskListener 搬到 NotifyPublisher（所有事件共用）。
+        assertThat(NotifyPublisher.extractProcessKey("leave-approval:1:2504"))
                 .isEqualTo("leave-approval");
-        assertThat(NotifyTaskListener.extractProcessKey("purchase-approval:12:99"))
+        assertThat(NotifyPublisher.extractProcessKey("purchase-approval:12:99"))
                 .isEqualTo("purchase-approval");
         // 已經是 key 的情況不得被破壞
-        assertThat(NotifyTaskListener.extractProcessKey("leave-approval"))
+        assertThat(NotifyPublisher.extractProcessKey("leave-approval"))
                 .isEqualTo("leave-approval");
-        assertThat(NotifyTaskListener.extractProcessKey(null)).isEmpty();
+        assertThat(NotifyPublisher.extractProcessKey(null)).isEmpty();
     }
 
     @Test

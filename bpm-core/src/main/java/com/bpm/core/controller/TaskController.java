@@ -6,8 +6,13 @@ import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.dto.CommentRequest;
+import com.bpm.core.external.ExternalActorIdentity;
+import com.bpm.core.notify.NotifyPublisher;
 import org.flowable.common.engine.api.FlowableObjectNotFoundException;
 import org.flowable.common.engine.api.FlowableTaskAlreadyClaimedException;
+import org.flowable.identitylink.api.IdentityLink;
+import org.flowable.identitylink.api.IdentityLinkType;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import org.flowable.common.engine.impl.identity.Authentication;
@@ -20,6 +25,7 @@ import org.flowable.task.api.Task;
 import org.flowable.task.api.TaskQuery;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -56,6 +62,21 @@ public class TaskController {
         return name.startsWith("_") || PROTECTED_VARIABLES.contains(name);
     }
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(TaskController.class);
+
+    /**
+     * 催辦的冷卻時間（#6）。
+     *
+     * <p><b>這是產品參數，不是技術常數</b>：30 分鐘由 PM 指定為預設值，
+     * 待使用者確認。改動它只需改這一行；{@code /urge} 的回應會把
+     * 這個值帶給前端（{@code cooldownMinutes}），所以前端不會有第二份。
+     */
+    static final Duration URGE_COOLDOWN = Duration.ofMinutes(30);
+
+    /** 催辦冷卻的 Redis key 前綴。key 是案件（processInstanceId），見 {@link #urgeTask}。 */
+    static final String URGE_KEY_PREFIX = "bpm:urge:";
+
     private final TaskService taskService;
     private final RuntimeService runtimeService;
     private final RepositoryService repositoryService;
@@ -68,6 +89,11 @@ public class TaskController {
     private final com.bpm.core.external.ExternalActorGuard actorGuard;
     // #68b：待辦清單的「代某某發起」標示。
     private final com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup;
+    // #33／#6：通知的唯一發送端（退回／拒絕／結案／認領／催辦）。
+    private final NotifyPublisher notifyPublisher;
+    // #6：催辦頻率限制。既有 Redis（OrgService／BpmPermissionService 已在使用），
+    // 不新增基礎設施。
+    private final StringRedisTemplate redis;
 
     public TaskController(TaskService taskService, RuntimeService runtimeService,
                           RepositoryService repositoryService,
@@ -79,7 +105,9 @@ public class TaskController {
                           // 型式的差異，而那種差異比沒有檢查更難察覺。
                           com.bpm.core.security.TaskHolderGuard holderGuard,
                           com.bpm.core.external.ExternalActorGuard actorGuard,
-                          com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup) {
+                          com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup,
+                          NotifyPublisher notifyPublisher,
+                          StringRedisTemplate redis) {
         this.taskService = taskService;
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
@@ -88,6 +116,8 @@ public class TaskController {
         this.holderGuard = holderGuard;
         this.actorGuard = actorGuard;
         this.onBehalfOfLookup = onBehalfOfLookup;
+        this.notifyPublisher = notifyPublisher;
+        this.redis = redis;
     }
 
     /**
@@ -320,6 +350,21 @@ public class TaskController {
                 // （callerId），而呼叫端能通過閘道就代表他是個真實登入者。
                 // 這與 reassign 必須打網路是兩種不同的情形，不要合併。
                 String claimant = callerId;
+                // ── #33：認領通知的收件人 ──────────────────────────────
+                //
+                // spec §16.1：認領 → 候選人群組，「通知已被認領（可選）」。
+                // 群組沒有 email，實際能收到信的只有候選「人」；認領者本人
+                // 排除（信是給其他還在候選清單裡的人，告訴他們不用再處理）。
+                //
+                // ⚠️ 必須在 claim 之前收集：claim 之後 assignee 有值，
+                // 候選人 identity link 是否保留取決於引擎版本與後續操作
+                // （reassign 等會改寫），先收集才是穩定的。
+                List<String> otherCandidates = taskService.getIdentityLinksForTask(id).stream()
+                        .filter(l -> IdentityLinkType.CANDIDATE.equals(l.getType()))
+                        .map(IdentityLink::getUserId)
+                        .filter(u -> u != null && !u.isBlank() && !u.equals(claimant))
+                        .distinct()
+                        .toList();
                 try {
                     taskService.claim(id, claimant);
                 } catch (FlowableTaskAlreadyClaimedException e) {
@@ -328,6 +373,10 @@ public class TaskController {
                             "任務已被他人認領", e);
                 }
                 auditType = OperationType.TASK_CLAIM;
+                // 通知失敗不影響流程（NotifyPublisher.publish 吞例外）；
+                // 沒有其他候選人時 taskClaimed 直接略過，不發空訊息。
+                notifyPublisher.taskClaimed(id, task.getName(), processInstanceId,
+                        task.getProcessDefinitionId(), claimant, otherCandidates);
             }
             case "complete" -> {
                 // 語意檢查（#77）：完成是持有者的權力，與其他 action 同一條守衛。
@@ -366,6 +415,36 @@ public class TaskController {
                 taskService.complete(id, vars);
                 auditType = task.getName() != null && task.getName().contains("補件")
                         ? OperationType.TASK_RESUBMIT : resolveCompleteAuditType(vars);
+
+                // ── #33：完成後通知申請人（退回／拒絕／結案）────────────
+                //
+                // 位置：complete() 之後。事件種類由 vars 決定，判定規則只有
+                // 一份（NotifyPublisher.applicantEventFor）。通知失敗不影響
+                // 流程 —— publish() 吞掉所有例外，這裡不 try/catch 是刻意的：
+                // 若未來有人把 publish 改成會拋，這個呼叫點就是回滾簽核的破口，
+                // 因此讓「不拋」是發送端的責任，不是每個呼叫端各自記得包。
+                //
+                // ⚠️ 補件（TASK_RESUBMIT）不通知：申請人自己重送時 vars 會由
+                // complete 補上 approved=false／rejected=false 預設值，
+                // 照 vars 判定會變成「您的申請已被退回」—— 規則與既有稽核
+                // （resolveCompleteAuditType 前的「補件」判斷）共用同一個
+                // 排除條件，不另外發明第二套。
+                //
+                // ⚠️ standalone 加簽子任務沒有 processInstanceId：
+                // 它不屬於任何流程，不該發 process_* 事件。
+                //
+                // ⚠️ 與既有 listener／稽核的順序：本通知在 complete() 返回、
+                // ProcessCompletedListener（webhook 與 PROCESS_COMPLETE 稽核）
+                // 之後立即送出；本方法的稽核則在尾端才 publish（掛在交易的
+                // beforeCommit）。若稽核最後失敗導致交易回滾，通知已經送出
+                // —— 這與既有 webhook listener 是同一個取捨（通知不進交易），
+                // 不是新風險；反過來把通知綁進交易，RabbitMQ 故障時會讓
+                // 簽核整個失敗，代價更大。
+                if (processInstanceId != null && auditType != OperationType.TASK_RESUBMIT) {
+                    notifyPublisher.taskCompleted(processInstanceId, task.getProcessDefinitionId(),
+                            id, task.getName(), vars, processEnded(processInstanceId),
+                            applicantOf(processInstanceId));
+                }
             }
             case "delegate" -> {
                 // 語意檢查（#77）：被 delegate 出去之後 delegatee 必須能簽。
@@ -535,6 +614,199 @@ public class TaskController {
         auditPublisher.publish(new AuditEvent(auditType.name(), operatorId,
                 processInstanceId, id, detail));
         return Map.of("taskId", id, "status", "ok");
+    }
+
+    /**
+     * 催辦（#6 催辦功能／#33 通知觸發事件完整化）。
+     *
+     * <h2>介面為什麼是 {@code ?processInstanceId=} 而不是 PM 建議的
+     * {@code /api/tasks/{taskId}/urge}</h2>
+     *
+     * <p>「以能接上為準」的實查結果：前端「我的申請」的 row 只有
+     * {@code currentTask.taskName}／{@code assignee}，
+     * <b>沒有 taskId</b>（{@code ProcessController.getProcessInstances} 的
+     * currentTask map 沒放它，而 ProcessController 不在本工項的檔案邊界內）。
+     * 申請人的收件匣也查不到審核人的任務（{@code TaskHolderGuard} 正確地
+     * 不讓非持有者列出）。因此以 taskId 為路徑參數的端點<b>現在接不上</b>；
+     * 案件 id 才是前端手上有的東西。
+     *
+     * <p>語意上也更貼近使用者：申請人催的是「這張單」，不是某個 taskId
+     * ——平行關卡時一張單可能同時有多個待處理任務，全部一起催才對。
+     * 若產品偏好 taskId 端點，前置工作是先在
+     * {@code GET /api/process-instances} 的 currentTask 補上 taskId
+     * （一行），再把這裡換成路徑參數；本方法的授權與頻率邏輯可原樣沿用。
+     *
+     * <h2>授權：只有申請人（最小授權）</h2>
+     *
+     * <p>候選方案有兩個：
+     * <ol>
+     *   <li><b>案件參與者</b>（{@code requireParticipant}）—— 包含歷任審核人。
+     *       這會出現「審核人催辦自己」與「已退場的審核人催辦現任審核人」
+     *       兩種沒有業務意義、又會消耗收件人注意力的情境。</li>
+     *   <li><b>申請人本人</b>（{@code initiator} 或 R-20 的
+     *       {@code onBehalfOf}）← <b>採用</b>。催辦的業務意義是「申請人
+     *       請承辦人加快」，而 {@code MyApplications.vue} 的催辦按鈕也只
+     *       出現在申請人自己的清單上。</li>
+     * </ol>
+     *
+     * <p>狀態碼：非參與者 → 404（沿用 {@code denyNonParticipant} 的
+     * 不留枚舉管道政策，並留 DATA_ACCESS 稽核）；參與者但不是申請人 →
+     * 403（他本來就看得到這張單，沒有必要對他說謊，而且 403 讓前端能
+     * 給出「只有申請人可以催辦」而不是「找不到資料」）。
+     *
+     * <h2>收件人：目前所有待處理任務的受理人</h2>
+     *
+     * <p>assignee 優先；候選任務（沒有 assignee）送候選「人」。
+     * 候選<b>群組</b>沒有 email，本系統的寄信端無法把信寄給一個群組
+     * —— 因此群組任務在「沒有候選人」時會被視為無法催辦（409），
+     * 這是既有寄信能力的天花板，不是額外遺漏。
+     *
+     * <h2>頻率限制</h2>
+     *
+     * <p>同一個<b>案件</b> 30 分鐘一次（{@link #URGE_COOLDOWN}，產品參數，
+     * 待使用者確認）。key 用 processInstanceId 而不是 taskId：
+     * 使用者感知的是「我催了這張單」，而且平行關卡時一鍵會催多個任務，
+     * 用 taskId 會變成可以對同一張單連續觸發多次。
+     *
+     * <p>Redis 故障時 fail-open（視為取得許可）：催辦只是提醒，
+     * 不該因為快取層故障而不能用 —— 與 {@code OrgService}／
+     * {@code BpmPermissionService} 既有的 Redis 容錯取向一致。
+     *
+     * <h2>被拒絕時零副作用</h2>
+     *
+     * <p>授權失敗（403／404）與頻率限制（429）都在<b>取得許可、發送通知
+     * 之前</b>就返回；沒有通知、沒有 Redis 以外的任何寫入。
+     * 稽核：本工項<b>沒有</b>寫 TASK_URGE 稽核 ——
+     * {@code OperationType.NOT_YET_IMPLEMENTED} 仍列著它，而
+     * {@code audit/**} 不在本工項的檔案邊界內；詳見交付報告的裁決事項。
+     */
+    @PostMapping("/urge")
+    public Map<String, Object> urgeTask(@RequestParam String processInstanceId,
+                                        @CallerId String callerId) {
+        if (processInstanceId == null || processInstanceId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "缺少 processInstanceId");
+        }
+        if (callerId == null || callerId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "無法確認身分，請先登入");
+        }
+        if (accessGuard.stateOf(processInstanceId)
+                == com.bpm.core.security.ProcessAccessGuard.InstanceState.ABSENT) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "案件不存在: " + processInstanceId);
+        }
+
+        String applicant = applicantOf(processInstanceId);
+        if (applicant == null || !applicant.equals(callerId)) {
+            if (accessGuard.isParticipant(processInstanceId, callerId)) {
+                // 參與者但不是申請人：不是探測（他看得到這張單），
+                // 但仍是一筆被拒的授權嘗試，留痕。
+                auditPublisher.publishDetached(new AuditEvent(OperationType.DATA_ACCESS.name(),
+                        callerId, processInstanceId, null,
+                        Map.of("denied", true, "reason", "not the applicant", "action", "urge")));
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只有申請人可以催辦");
+            }
+            // 非參與者：404 + DATA_ACCESS {denied:true}（不會返回）。
+            accessGuard.denyNonParticipant(processInstanceId, callerId);
+        }
+
+        // 收件人先解析：沒有可催辦的對象時回 409，且不消耗頻率限制。
+        List<Task> currentTasks = taskService.createTaskQuery()
+                .processInstanceId(processInstanceId).list();
+        Map<Task, List<String>> deliverable = new LinkedHashMap<>();
+        LinkedHashSet<String> recipients = new LinkedHashSet<>();
+        for (Task t : currentTasks) {
+            List<String> to = taskRecipients(t);
+            if (!to.isEmpty()) {
+                deliverable.put(t, to);
+                recipients.addAll(to);
+            }
+        }
+        if (deliverable.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "案件目前沒有可催辦的受理人");
+        }
+
+        if (!acquireUrgePermit(processInstanceId)) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    "已於 " + URGE_COOLDOWN.toMinutes() + " 分鐘內催辦過，請稍後再試");
+        }
+
+        deliverable.forEach((t, to) ->
+                notifyPublisher.taskUrged(t.getId(), t.getName(), processInstanceId,
+                        t.getProcessDefinitionId(), t.getAssignee(), to, applicant));
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("status", "ok");
+        result.put("recipients", List.copyOf(recipients));
+        result.put("cooldownMinutes", URGE_COOLDOWN.toMinutes());
+        return result;
+    }
+
+    /**
+     * 一個任務的催辦／通知收件人。
+     *
+     * <p>assignee 優先；沒有 assignee 的候選任務取候選「人」。
+     * 候選群組沒有 email（見 {@link #urgeTask}），刻意不回傳。
+     */
+    private List<String> taskRecipients(Task task) {
+        if (task.getAssignee() != null && !task.getAssignee().isBlank()) {
+            return List.of(task.getAssignee());
+        }
+        return taskService.getIdentityLinksForTask(task.getId()).stream()
+                .filter(l -> IdentityLinkType.CANDIDATE.equals(l.getType()))
+                .map(IdentityLink::getUserId)
+                .filter(u -> u != null && !u.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    /**
+     * 取得催辦許可（同案件 30 分鐘一次）。Redis 故障時 fail-open。
+     *
+     * @return {@code false} 代表冷卻中，呼叫端回 429
+     */
+    private boolean acquireUrgePermit(String processInstanceId) {
+        try {
+            Boolean acquired = redis.opsForValue()
+                    .setIfAbsent(URGE_KEY_PREFIX + processInstanceId, "1", URGE_COOLDOWN);
+            return Boolean.TRUE.equals(acquired);
+        } catch (Exception e) {
+            log.warn("催辦頻率限制無法取得 Redis 許可，本次放行（key={}）: {}",
+                    URGE_KEY_PREFIX + processInstanceId, e.toString());
+            return true;
+        }
+    }
+
+    /**
+     * 這張單現在還在跑嗎（{@code false} 代表剛完成或不存在）。
+     *
+     * <p>只在 complete() 之後呼叫；此時「查不到」等於「這次完成讓它結案」。
+     */
+    private boolean processEnded(String processInstanceId) {
+        return runtimeService.createProcessInstanceQuery()
+                .processInstanceId(processInstanceId).count() == 0;
+    }
+
+    /**
+     * 這張單的自然人申請人：{@code onBehalfOf} 優先，其次 {@code initiator}；
+     * 兩者都不是人（{@code system:<id>}）或不存在時回 {@code null}。
+     *
+     * <p>這是 {@code ApplicantResolver} 前兩段的同一條規則（#83/#68c）：
+     * 代發時 {@code initiator} 仍是 {@code system:<id>}，不先取
+     * {@code onBehalfOf} 會把通知寄給系統身分。第三段（權限碼指定的
+     * 系統受理人）是「補件關卡派給誰」的答案，不是「這張單的申請人是誰」
+     * ——通知申請人時沒有第三段可言，查不到自然人就不寄。
+     *
+     * <p>用 {@link com.bpm.core.service.OnBehalfOfLookup} 查歷史變數
+     * （同時涵蓋執行中與已結案），{@code accessGuard.initiatorOf} 也是
+     * runtime 優先、歷史次之 —— 兩者在 complete() 之後都能運作。
+     */
+    private String applicantOf(String processInstanceId) {
+        String onBehalfOf = onBehalfOfLookup.byProcessInstances(List.of(processInstanceId))
+                .get(processInstanceId);
+        if (onBehalfOf != null) return onBehalfOf;
+        String initiator = accessGuard.initiatorOf(processInstanceId);
+        if (initiator == null || ExternalActorIdentity.isSystemActor(initiator)) return null;
+        return initiator;
     }
 
     /**
