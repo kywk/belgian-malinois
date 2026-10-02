@@ -5,7 +5,9 @@ import org.flowable.task.service.delegate.DelegateTask;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,7 +61,7 @@ public class WebhookTaskListener implements TaskListener {
 
     @Override
     public void notify(DelegateTask task) {
-        String event = task.getEventName(); // create, complete, delete, assignment, timeout, ...
+        String event = task.getEventName(); // create, complete, delete, assignment（timeout 見 matches 的說明）
 
         // ⚠️ 讀不到設定就<b>完全不发訊息</b>。
         //
@@ -118,9 +120,19 @@ public class WebhookTaskListener implements TaskListener {
      *       {@code Complete} 與 {@code complete} 指的是同一件事。</li>
      * </ol>
      *
-     * <p>刻意<b>不</b>做的事：{@code timeout} 不在這裡被推導。
-     * 它必須真的由節點上的邊界計時器產生，engine 才會發出 timeout 事件 ——
-     * 沒有計時器就沒有事件，這是 Flowable 的語意，不是缺陷。</p>
+     * <p>刻意<b>不</b>做的事：{@code timeout} 不在這裡被推導 ——
+     * 它必須由 engine 以 task event 發出，而不是從其他事件揣測。</p>
+     *
+     * <p>⚠️ 但 Flowable 7.2.0 <b>不會發出 timeout task event</b>：engine 只在
+     * create／assignment／complete／delete 四個時機呼叫
+     * {@code ListenerNotificationHelper.executeTaskListeners}
+     * （2026-10-02 以 {@code javap -p -c} 驗證整個 flowable-engine 7.2.0，
+     * 沒有任何呼叫點傳入 {@code timeout}；{@code BaseTaskListener} 的常數
+     * 也只有這四個加 {@code all}）。{@code timeout} 是 Camunda 的事件名。
+     * 所以「設定 {@code timeout} 卻永遠收不到」目前是上游語意，
+     * 不是這個類別能修的缺陷；payload 分支（見 {@link #buildPayload}）
+     * 先依 spec §11.4 墊好，待替代機制（例如從 delete 推導，或換引擎）
+     * 確定後即可生效。</p>
      */
     static boolean matches(String configEvent, String flowableEvent, DelegateTask task) {
         if (configEvent == null || configEvent.isBlank()) return false;
@@ -136,10 +148,24 @@ public class WebhookTaskListener implements TaskListener {
         return false;
     }
 
-    private Map<String, Object> buildPayload(DelegateTask task, String event) {
+    /**
+     * 組出一個事件的 payload。
+     *
+     * <p>package-private（比照 {@link #matches} 的理由）：讓測試能直接釘住
+     * 每個事件送出的欄位，不必繞一整個流程或反射。這裡是與外部系統的
+     * 欄位契約，欄位名或內容錯了<b>不會有任何錯誤訊息</b> —— 只有把欄位
+     * 本身釘住才防得住。</p>
+     *
+     * <p>⚠️ 敏感欄位的紅線（security-audit P2-1）見 {@code complete} 分支的
+     * 說明：流程變數、簽核意見（comment）、簽核人姓名（operatorName）與
+     * 候選人（candidateUsers／candidateGroups）一律不外送。</p>
+     */
+    Map<String, Object> buildPayload(DelegateTask task, String event) {
+        // timestamp 與 overdueHours 共用同一個瞬間，兩者不會互相矛盾。
+        Instant now = Instant.now();
         Map<String, Object> payload = new HashMap<>();
         payload.put("event", "task." + event);
-        payload.put("timestamp", Instant.now().toString());
+        payload.put("timestamp", now.toString());
         payload.put("processInstanceId", task.getProcessInstanceId());
         payload.put("processDefinitionKey", extractProcessKey(task.getProcessDefinitionId()));
         payload.put("businessKey", task.getVariable("businessKey"));
@@ -181,13 +207,49 @@ public class WebhookTaskListener implements TaskListener {
             case "delete" -> {
                 payload.put("assignee", task.getAssignee());
             }
+            case "timeout" -> {
+                // ⚠️ 依 spec §11.4 補齊非敏感欄位（#25 的使用者裁決：
+                // 沿用 P2-1 紅線，只送排程資訊，不送表單內容）。
+                // 這個事件在 Flowable 7.2.0 不會被 engine 發出（見 matches）；
+                // payload 先墊好，替代機制確定後即可直接生效。
+                payload.put("assignee", task.getAssignee());
+                payload.put("dueDate", task.getDueDate());
+                payload.put("overdueHours", overdueHours(task.getDueDate(), now));
+            }
             default -> {
-                // assignment／timeout 等事件不帶額外欄位。
+                // assignment 等事件不帶額外欄位（timeout 已於上面處理）。
                 // 刻意保留 default 而不是漏掉：新增事件時忘了處理，
                 // 應該是「送出基本欄位」而不是「送出一個沒有 event 的 payload」。
             }
         }
         return payload;
+    }
+
+    /**
+     * {@code task.timeout} 的 {@code overdueHours}：任務距離 {@code dueDate}
+     * 已經過幾個整點小時。
+     *
+     * <h2>定義（由 {@code WebhookTaskPayloadTest} 逐條釘住）</h2>
+     *
+     * <ul>
+     *   <li><b>起點</b>：任務自己的 {@code dueDate}（業務截止時間），
+     *       不是邊界計時器的到期時間 —— 兩者在 BPMN 裡可以分開設定。</li>
+     *   <li><b>終點</b>：payload 產生的時刻（{@code eventTime}），
+     *       與 payload 的 {@code timestamp} 是同一個 {@link Instant}。</li>
+     *   <li><b>單位</b>：整點小時，無條件捨去（{@link Duration#toHours()}）。
+     *       逾期 90 分鐘 → {@code 1}；逾期 59 分鐘 → {@code 0}。</li>
+     *   <li><b>下限 0</b>：事件時間早於 {@code dueDate} 時回 {@code 0}。
+     *       計時器的觸發時間與 {@code dueDate} 是兩個獨立設定，計時器可能
+     *       早於 {@code dueDate} 觸發；這時「尚未逾期」是 0，不是負數。</li>
+     *   <li><b>dueDate 為 null</b>：回 {@code null}（沒有基準點就不猜）。
+     *       payload 仍保留 {@code overdueHours} 鍵、值為 null，
+     *       讓接收端的 schema 固定。</li>
+     * </ul>
+     */
+    static Long overdueHours(Date dueDate, Instant eventTime) {
+        if (dueDate == null) return null;
+        long hours = Duration.between(dueDate.toInstant(), eventTime).toHours();
+        return Math.max(0L, hours);
     }
 
     private String extractProcessKey(String processDefinitionId) {
