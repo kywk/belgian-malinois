@@ -246,7 +246,21 @@
 
 修法：(i) task 的 assignee/candidate 必須屬於該系統，或維護 `taskDefinitionKey` 白名單；(ii) `vars` 拒絕所有 `_` 前綴並只接受該流程宣告過的變數名；(iii) 補上 allowedProcessKeys 比對。
 
-### R-20 `initiator` 仍可任意偽造（1 人日）
+### ✅ R-20 `initiator` 仍可任意偽造（已完成 2026-09-29；2026-10-02 文件收尾）
+
+> **✅ 已完成（主修 `4ee75d4`／2026-09-29；`#68` a/b/c/d 於 2026-09-30 全部收尾，其中 c 由 `#83` 完成）。**
+> 現況（2026-10-02 文件收尾時複驗）：
+> - `initiator` 一律由 server 寫成 `system:<systemId>`，body 帶 `initiator` 直接回 **400**（`ExternalApiController.java:89-94`）。
+> - 代發改用 `onBehalfOf`：需該系統 `allowOnBehalfOf=true`（否則 403）且該員工必須存在（`ExternalApiController.java:162-173`；欄位見 `ExternalSystem.java:69-70`）。
+> - 「外部系統發起必須指定第一關受理人」的 400 現在也接受 `onBehalfOf`（`ExternalApiController.java:246-250`）。
+> - `firstTaskAssignee` 必須是組織系統認識的人（`ExternalActorGuard.requireKnownPerson`，#88）；`firstTaskCandidateGroups` 加上 `allowedCandidateGroups` 授權白名單（#88 政策 B）。
+> - lint rule h 由 warning 升為 **error**（`BpmnLintService.java:327-333`，#68d）。
+> - 「我的申請」查詢改為 `initiator` **或** `onBehalfOf`（`ProcessController.java:262-270`、`HistoryController.java:281-287`），回應以 `onBehalf=true` 標示。
+>
+> ⚠️ **未完全覆蓋的部分（勿誤讀為全解）**：
+> - `firstTaskCandidateGroups` 的**群組存在性**仍未驗證（授權白名單只處理越權，刻意留白；理由見 `ExternalApiController.java:199-236`）。
+> - `EmailConsumer` 的 `${initiatorName}` 仍直接渲染 `initiator`（`EmailConsumer.java:135`），外部案件的通知信會顯示 `system:<id>`；代發案件沒有另外的顯示名。
+> - **沒有 backfill**：改動前以自訂 `initiator` 啟動的舊實例，在新的查詢邏輯下仍可能查不到；`queryByBusinessKey` 也仍以 `initiator` 篩選（`ExternalApiController.java:388-393`，見 R-24）。
 
 `ExternalApiController.java` 的 `startProcess` 仍允許呼叫端在 body 指定任意 `initiator`。擁有權判定已不依賴它，但 `initiator` 被下游廣泛信任：
 
@@ -295,6 +309,10 @@ R-09 修掉了白名單的兩個實作 bug（重複值 500、元素未 trim）�
 - **可注入他人列表**：惡意系統以 `initiator: "system:victim"` 啟動流程，該紀錄會出現在 victim 的 businessKey 查詢結果中
 
 刻意未在 R-09 一併修改：改為 `_externalSystemId` 篩選會讓既有實例查不到，需搭配 R-20 的 backfill 一起做。另外此端點目前是靠「篩選剛好也起到授權作用」撐住，沒有經過擁有權檢查函式 —— 若日後有人拿掉篩選條件會直接變成資料洩漏。
+
+> **2026-10-02 加註（R-20 收尾時複驗；本項本身仍待開工）**：R-20 已於 2026-09-29 完成，但**沒有做 backfill**；本端點也仍以 `variableValueEquals("initiator", ExternalActorIdentity.of(systemId))` 篩選（`ExternalApiController.java:388-393`）。因此：
+> - **「以自訂 initiator 啟動的舊實例查不到」仍在**（改動前的舊資料）。
+> - **「可注入他人列表」已不成立**：body 的 `initiator` 直接 400，且 `variables` 裡的同名值會被 server 在啟動前覆寫（R-20），外部系統無法再讓案件掛上 `system:victim`。
 
 ### R-25 API Key 機制強化（1 人日）
 

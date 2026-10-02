@@ -616,6 +616,8 @@ public class ExternalSystem {
     private String callbackUrl;           // 預設回調 URL（可選）
     private String ipWhitelist;           // IP 白名單（可選，逗號分隔）
     private Boolean enabled;
+    private Boolean allowOnBehalfOf;      // 是否允許代員工發起（onBehalfOf），預設 false（R-20）
+    private List<String> allowedCandidateGroups; // firstTaskCandidateGroups 的授權白名單（#88；空 = 不限制）
     private LocalDateTime createdAt;
     private LocalDateTime lastUsedAt;     // 最後呼叫時間
 }
@@ -730,18 +732,22 @@ Body:
 
 處理方式：
 1. **流程設計時**：供外部系統發起的流程，第一個 UserTask 不可使用 `initiator` 相關 EL 表達式
-2. **API 層**：外部系統發起時，必須透過 `firstTaskAssignee` 或 `firstTaskCandidateGroups` 明確指定第一個節點的審核人
-3. **後續節點**：**`initiator` 不會被替換** —— 它全程維持 `system:{systemId}`。伺服器另外寫入一個**獨立的**變數 `effectiveInitiator`（值為 `firstTaskAssignee`），後續節點要引用經辦人請用 `${effectiveInitiator}` 而**不是** `${initiator}`。
+2. **API 層**：外部系統發起時，第一個節點的審核人由下列三者之一決定（三者都沒有回 **400**，`ExternalApiController.java:246-250`）：`firstTaskAssignee`（指名的人）、`firstTaskCandidateGroups`（候選群組，成員自行認領），或（該系統已開啟 `allowOnBehalfOf` 時）`onBehalfOf` 代員工發起 —— 此時第一關路由到該員工的直屬主管（`InitialAssigneeResolver.resolve`）
+3. **後續節點**：**`initiator` 不會被替換** —— 它全程維持 `system:{systemId}`。伺服器另外寫入一個**獨立的**變數 `effectiveInitiator`（值為 `firstTaskAssignee`），後續節點要引用經辦人可用 `${effectiveInitiator}` 而**不是** `${initiator}`；但**只有指定 `firstTaskAssignee` 時才會寫入**（`ExternalApiController.java:267-269`）—— 只給候選群組或走 `onBehalfOf` 時這個變數不存在，直接引用會在任務建立時求值失敗。
    ⚠️ **這一點寫錯過，而它正是工項 #83 的成因**：舊版本文寫「後續節點的 `initiator` 可替換為實際經辦人」，設計師照著在**補件關卡**寫了 `flowable:assignee="${initiator}"` → 執行期求值得到 `system:erp` → 四個持有者條件全不命中、候選人也看不到（`taskCandidateUser` 帶 `ASSIGNEE_ IS NULL`，與 assignee **互斥**）→ **案件永久卡死且無任何告警**。現在補件關卡改用 `${applicantResolver.resolve(execution)}`，規則是 `onBehalfOf` → `initiator`（是人的話）→ 權限碼 `bpm:external:revision` 指定的受理人。
-4. **BPMN Lint 規則**：若流程定義允許外部系統發起（在 ProcessVariableSpec 中標記），驗證第一個 UserTask 不使用 `initiator` EL 函數
+4. **BPMN Lint 規則**：若**有啟用中的外部系統被授權發起此流程**（事實來源是 `bpm_external_system` 的 `allowedProcessKeys`，**不是** ProcessVariableSpec；`BpmnLintService.isExternallyStartable`），驗證第一個 UserTask 不使用 `initiator` EL 函數。rule h 已是 **error**（#68d），部署會被擋下。
 
 ```java
-// BPM Core 處理外部發起流程
-if (initiator.startsWith("system:")) {
-    // 將第一個節點的 assignee 設為 firstTaskAssignee
-    // 將 firstTaskAssignee 存入流程變數 "effectiveInitiator" 供後續節點使用
+// BPM Core 處理外部發起流程（ExternalApiController.startProcess）
+String initiator = "system:" + systemId;   // body 帶 initiator 一律回 400
+if (onBehalfOf != null) {                  // 需該系統 allowOnBehalfOf=true 且員工存在
+    variables.put("onBehalfOf", onBehalfOf);
+}
+if (firstTaskAssignee != null) {           // 只給候選群組／onBehalfOf 時不寫入
     variables.put("effectiveInitiator", firstTaskAssignee);
 }
+// 第一個 UserTask 的 assignee：firstTaskAssignee → 候選群組（留空等人認領）
+// → onBehalfOf 的直屬主管；由 ${assigneeResolver.resolve(execution)} 決定
 ```
 
 ### 9.3 節點 API 觸發（自動化審批）
@@ -1128,6 +1134,7 @@ MyApplications.vue 頁面功能：
 - 每筆顯示：流程名稱、發起時間、當前節點、當前審核人、狀態
 - 點擊可查看流程詳情與進度圖
 - 支援催辦操作（對進行中的流程）
+- **代發案件**：外部系統以 `onBehalfOf` 代員工發起時，`initiator` 仍是 `system:<id>`，但後端查詢會同時比對 `initiator` **或** `onBehalfOf`（`ProcessController.java:262-270`、`HistoryController.java:281-287`），所以該單會出現在被代員工的清單裡，並以「外部系統代為提出」標示（回應欄位 `onBehalf=true`）
 
 ---
 
