@@ -26,7 +26,8 @@ import { fetchMyPermissions } from '../services/permissionsApi'
  * 一律是空的（mintDevToken 刻意不簽），於是：
  *   mgr001（有 bpm:form:design）後端放行 POST /api/forms、前端擋掉
  *   dir001（有 audit:log:read）後端放行 /api/audit-logs、前端擋掉
- *   admin001（* → ROLE_ADMIN）看得見所有管理頁、點下去全部 403
+ *   admin001（* → ROLE_ADMIN）後端放行管理頁與表單設計、前端擋掉
+ *   （稽核是另一回事：後端刻意不給 admin，見下面 isAuditor 的說明）
  *
  * 現在權限碼來自 GET /api/me/permissions，那是後端實際用來授權的
  * authorities —— 前端看到的就是後端會做的判斷。
@@ -199,9 +200,10 @@ export const useAuthStore = defineStore('auth', {
           this.permissionsUserId = data?.userId ?? null
           this.permissionsUnverified = false
         } catch {
-          // 降級：形狀像權限碼的 claim 項目。admin 不降級 ——
-          // 「*」或「admin」在 roles claim 裡的處理是後端的政策，
+          // 降級：形狀像權限碼的 claim 項目。`*` 不展開 ——
+          // 它在 roles claim 裡的處理是後端的政策（`*` → ROLE_ADMIN），
           // 前端展開它就是在猜（見 permissionsApi.js 的 ⚠️）。
+          // admin 沿用改動前的 roles.includes('admin')，不因降級改變。
           this.permissions = permissionCodesFromRoles(roles)
           this.admin = roles.includes('admin')
           this.permissionsUserId = null

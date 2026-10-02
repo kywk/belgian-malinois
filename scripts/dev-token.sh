@@ -19,10 +19,16 @@
 #
 # ── dev 帳號與權限碼（MockPermController 是事實來源）───────────────
 #
-#   user001～user005  什麼權限都沒有      → 一般員工（預設身分）
-#   mgr001            bpm:form:design    → 部門主管，可設計表單（非管理員）
-#   mgr002            （無額外權限）
-#   dir001            audit:log:read     → 稽核職能
+#   user001～user005  什麼權限都沒有      → 一般員工（user001 是預設身分）
+#   mgr001            hr:leave:approve、finance:payment:approve、
+#                     purchase:order:approve、bpm:form:design
+#                                       → 部門主管，可設計表單（非管理員）
+#   mgr002            hr:leave:approve、purchase:order:approve → 部門主管
+#   dir001            hr:leave:approve、finance:payment:approve、
+#                     purchase:order:approve、legal:contract:review、
+#                     purchase:self:approve、audit:log:read、
+#                     bpm:external:revision
+#                                       → 總監，同時是稽核職能
 #   admin001          *（通配）→ ROLE_ADMIN
 #
 # ⚠️ **不要用 `admin001 admin` 讀稽核。**
