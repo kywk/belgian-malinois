@@ -60,7 +60,20 @@ public enum OperationType {
     DATA_ACCESS,
     CONFIG_CHANGE,
     /** 稽核紀錄 CSV 匯出（#40）。原本列在 NOT_YET_IMPLEMENTED，2026-10-02 實作後移出。 */
-    EXPORT_DATA;
+    EXPORT_DATA,
+    /**
+     * 訊息進入死信佇列（#51）。由 {@code DeadLetterConsumer} 在
+     * {@code dlq.audit}／{@code dlq.bpm} 收到訊息時發出（operator {@code system}／
+     * 來源 {@code engine}）。它讓「什麼時候有死信」進入可查詢的軌跡，
+     * 而不只依賴 ERROR log。detail 只放非敏感的 broker 中介資料，不放 payload。
+     */
+    DLQ_MESSAGE,
+    /**
+     * 人工重放死信（#51）。由 {@code DlqReplayService} 在
+     * {@code POST /api/admin/dlq/replay} 處理完畢後發出（operator＝呼叫者）。
+     * 重放會造成外部副作用（webhook 再送、通知再寄），必須留下誰放了多少筆。
+     */
+    DLQ_REPLAY;
 
     /**
      * 對應的操作<b>尚未實作</b>，因此不會有程式碼發出這些值。

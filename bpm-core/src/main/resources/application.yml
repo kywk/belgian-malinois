@@ -161,6 +161,11 @@ bpm:
     # 而 @RequestBody String 會把整份內容讀進記憶體（security-audit P2-5）。
     # 真實的流程定義是幾十 KB 量級，2 MB 已遠高於實際需求。
     max-xml-bytes: 2097152
+  dlq:
+    # DLQ 告警信收件人（逗號分隔）。預設空＝不寄信，只留 ERROR log 與
+    # DLQ_MESSAGE 稽核（#51）。留空是安全的預設：沒有明確指定時，
+    # 系統不會把任何死信資訊寄到任何地方。prod 由 BPM_DLQ_ALERT_RECIPIENTS 注入。
+    alert-recipients: ${BPM_DLQ_ALERT_RECIPIENTS:}
   webhook:
     hmac-secret: bpm-webhook-secret
   external:
