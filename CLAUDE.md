@@ -95,7 +95,7 @@ cd bpm-core && mvn verify
 ## 進度與 backlog
 
 - 已完成：`docs/backend-completed-items.md`（Phase 1–5 共 87 項 / ~107.5 人日，另第八節為 2026-09-28～29 的技術債修復與安全強化 18 項）。
-- 待辦：`docs/backend-development-backlog.md`（2026-10-02 統計：95 項中 ✅59／🟡15／⬜21，剩餘估時上限 ~85 人天）。
+- 待辦：`docs/backend-development-backlog.md`（2026-10-02 統計：96 項中 ✅59／🟡15／⬜22，剩餘估時上限 ~86.5 人天）。
   - P0：退回／駁回機制、Org/Perm 去 mock（真實 RestClient + Redis 快取 + 失效 webhook）、表單版控、端到端啟流程、~~認證授權整合~~（已完成，R-01）。
 - 獨立專案 backlog：`docs/rbac-enterprise-backlog.md`（企業權限中心，104 項 / ~149 人日，未開工；第十三節為 BPM 端已定案的介面約定）。
 - ~~驗收案例 11 項中 4 項未通過：**TC-A01 附屬簽、TC-A02 多方意見、TC-A04 外部系統 API**~~ —— 已於第八節補上對應自動化測試（`bpm-core/src/test/java/com/bpm/core/acceptance/`），`acceptance-test.sh` 為 PASS 7 / FAIL 0（2026-10-02）。`docs/history/2026-04-19-test-and-verify/tasks.md` 屬歷史紀錄。

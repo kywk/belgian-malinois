@@ -1,5 +1,8 @@
 # 開工 prompt — Greyhound BPM 平台，2026-10-02
 
+> ⚠️ **本檔已被 `docs/handoff/2026-10-02-next-pm-prompt-v2.md` 取代** ——
+> 本檔對應的這一輪已於 2026-10-02 完成，成果見 `docs/handoff/2026-10-02-round6-handoff.md`。
+
 > 給下一位 PM Agent。撰寫：2026-10-02。
 > **你現在讀的這份檔案就是給你的 prompt**（`docs/handoff/2026-10-02-next-pm-prompt.md`），已納入版控。
 > 上一輪的交接見 `docs/handoff/2026-10-01-round5-handoff.md`（**最新**）、

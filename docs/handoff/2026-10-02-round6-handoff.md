@@ -58,7 +58,7 @@ cd bpm-core && mvn clean verify                          # 829（容器停掉再
 | **#52** | `a80d323` → `f04f584` | 多版本並行＋表單版本鎖的測試（真實 DB，含對照組） |
 | **#33＋#6** | `6d37d43`／`a6703ee`／`fdab9ce`／`dfd8977` → `26417bb` | 唯一發送端 `NotifyPublisher`（退回／拒絕／結案／認領／加簽／催辦）；催辦端點 `POST /api/tasks/urge?processInstanceId=`＋前端接線 |
 | #36 追認 | （無程式改動） | rule h 已是 error（#68d），backlog 列更新 |
-| 收尾 | （見 §8 更新） | R-23 `startProcess` `_` 過濾＋TASK_URGE 稽核 |
+| 收尾 | `c05afae`／`0958d3e` → `0974b8f` | R-23 `startProcess` `_` 過濾＋TASK_URGE 稽核（見 §8） |
 
 **PM 補完的驗證**
 - 前端 webhook 面板以**真實瀏覽器**（computer-use skill＋獨立 Chrome profile＋CDP）驗證：Process 面板「流程 Webhook」、事件選項 `process.completed／complete／all`；UserTask 面板事件 `create／complete／reject／all`（**無 timeout**）。截圖與 DOM 選項清單雙重佐證。
@@ -140,41 +140,43 @@ cd bpm-core && mvn clean verify                          # 829（容器停掉再
 
 ---
 
-## 5. 待使用者裁決（累積，未定案）
+## 5. 已裁決（2026-10-02 使用者）與未定案
 
-**A. timeout（已決定設計器移除；留下的是）**
-1. 替代機制：(a) 維持現狀（payload 休眠）／(b) 由 `delete` 推導（需設計：如何辨識邊界計時器中斷）／(c) 留到 #70。
+### 5.1 已裁決（照此執行，不要再問）
 
-**B. #6 催辦**
-2. 30 分鐘／案件 key／fail-open 是否接受。
-3. 無自然人申請人的案件是否開放給 `bpm:external:revision` 受理人催辦。
-4. 退件／拒絕原因是否入信（目前保守不放，前端把它寫成 comment）。
-5. `process_completed` 只在核准時發（拒絕只發 rejected）的解讀是否正確。
-6. 端點形狀維持 `?processInstanceId=` 或改 `/tasks/{taskId}/urge`（後者需先在 `ProcessController` currentTask 補 taskId）。
+1. **timeout 替代機制**：併入 **#23 Timer Event 超時處理**於下一輪設計（boundary timer＋
+   明確政策：通知誰、是否自動動作）。`timeout` 選項保持移除、payload 休眠；**不要**由
+   `delete` 事件猜。
+2. **催辦參數**：照現行 —— 冷卻 30 分鐘、以案件（`processInstanceId`）為 key、
+   Redis 故障 fail-open；端點維持 `POST /api/tasks/urge?processInstanceId=`。
+3. **system 案件的催辦權**：開放給 `bpm:external:revision` 受理人（**待實作**；目前僅申請人）。
+4. **退件／拒絕原因不入信**：維持 P2-1 紅線（原因留在系統內 comment）。
+5. **匯出**：維持無筆數上限（串流）；CSV 維持逐字一致（不中和公式）；
+   中斷語意記命中筆數、檔名含日期 —— 全部照現行。
+6. **HMAC secret**：移除 `WebhookConsumer` 的 `@Value` fallback（保留 base `application.yml`
+   的 dev 預設；prod 已由 `WebhookHmacSecretValidator` 擋）（**待實作**）。
+7. **DLQ**：以既有 **#51** 為工項（加人工重放），下一輪做。
+8. **R-19 變數**：維持現狀（只擋 `_` 前綴＋必填規格），不收緊到 spec 名單。
+9. **下一輪主軸**：**完成路徑收斂**（外部 API 完成也發通知；全域 listener）＋
+   **DLQ 告警／重放**。
 
-**C. #40 匯出**
-7. 筆數上限（目前無）；CSV 公式注入是否防（會改寫資料，與逐字一致衝突）；中斷語意；檔名是否含時間。
+### 5.2 未定案
 
-**D. HMAC／DLQ**
-8. 是否移除 `WebhookConsumer` 的 `@Value` fallback 與 base `application.yml` 的預設字面值。
-9. DLQ 告警與人工重放（`DeadLetterConsumer` 目前只記 log）—— 建議新工項（原 #51）。
-
-**E. R-19／R-23**
-10. 未宣告的非 `_` 變數（如 `initiator`）是否也要在外部 API 收緊（目前沿用 `validateVariables` 既有語意放行）。
-11. R-23 的 startProcess `_` 過濾（收尾中）。
+（無。本輪累積事項已全部裁決。）
 
 ---
 
-## 6. 建議的下一輪優先序（先和使用者確認）
+## 6. 建議的下一輪優先序（已依 2026-10-02 裁決排序）
 
 | 順序 | 工項 | 估時 | 備註 |
 |---|---|---|---|
-| 1 | 清 §5 的待裁決 | — | 多數是產品參數，一次問完 |
-| 2 | **外部 API 完成任務的通知**（全域 listener） | 1–2d | 收斂完成路徑；`FlowableConfig` 註冊 |
-| 3 | **#51 DLQ 告警／重放** | 1–2d | 使用者若同意 |
-| 4 | **#23 Timer Event 超時處理** | 2d | 需先有 §5-A 的方向；可取代死掉的 timeout |
-| 5 | **#4 Call Activity** 或 **#21 Callback 接收端** | 3d | #21 的 token 簽發方式需先設計 |
-| 6 | **#70 Stage 5**（Boot 4＋Flowable 8） | 22d | 照升級計畫；`ExtensionElementPreservationTest` 先紅 |
+| 1 | **完成路徑通知收斂**（backlog #96） | 1–2d | 外部 API 完成任務也發通知；改全域 `TASK_COMPLETED`／`PROCESS_COMPLETED` listener（`FlowableConfig` 註冊） |
+| 2 | **#51 DLQ 告警與人工重放** | 1–2d | `DeadLetterConsumer` 只記 log；補告警＋重放（使用者已裁決下一輪做） |
+| 3 | **#23 Timer Event 超時處理** | 2d | timeout 事件的替代設計（boundary timer＋政策） |
+| 4 | 小收尾：**#3 催辦開放受理人**／**#6 移除 HMAC fallback** | 0.5d | 兩者都已有明確裁決 |
+| 5 | 「我的申請」currentTask 補 `taskId`＋評估 `/tasks/{taskId}/urge` | 0.2d | 產品若偏好 taskId 端點；現行 `?processInstanceId=` 已可用 |
+| 6 | **#4 Call Activity** 或 **#21 Callback 接收端** | 3d | #21 的 token 簽發方式需先設計 |
+| 7 | **#70 Stage 5**（Boot 4＋Flowable 8） | 22d | 照升級計畫；`ExtensionElementPreservationTest` 先紅 |
 
 其他 ⬜／🟡 見 `docs/backend-development-backlog.md`。**部署前檢查清單**：
 權限碼 `bpm:external:revision`／`bpm:form:design`／`audit:log:read` 必須在真實權限中心指派；
@@ -185,7 +187,7 @@ prod secrets（`OIDC_ISSUER_URI`、`GATEWAY_SHARED_SECRET`、`BPM_WEBHOOK_HMAC_S
 
 ## 7. 統計
 
-- 工項 **95**：✅ **59**、🟡 **15**、⬜ **21**，剩餘估時上限 **~85 人天**。
+- 工項 **96**：✅ **59**、🟡 **15**、⬜ **22**，剩餘估時上限 **~86.5 人天**。
 - 後端 **840**（`mvn clean verify`）；前端 **165**；`acceptance-test` PASS 7 / FAIL 0。
 
 ---
