@@ -34,46 +34,67 @@ import java.util.Map;
  * 把那些訊息重新送一次 —— 否則只能靠人工比對與手動補償，那正是
  * DLQ 告警要讓人知道、而重放要讓人能收拾的閉環。
  *
- * <h2>目的地的取法：x-death 最舊一筆</h2>
+ * <h2>重放來源是 parking queue</h2>
  *
- * <p>重放必須回到<b>原始目的地</b>，不是回到 DLX。訊息帶著 RabbitMQ
- * 在死信時加上的 {@code x-death} 標頭，每一筆記錄「在哪個 queue、
- * 用哪個 exchange／routing key 被死信」。慣例上<b>最新的一筆在最前面</b>，
- * 起源在<b>最後</b>，所以取 {@code x-death} 的<b>最後一筆</b>的
- * {@code exchange} ＋ {@code routing-keys[0]} 重新發布。
+ * <p>死信在告警後由 {@code DeadLetterConsumer} 重發布到
+ * {@code dlq.parking.bpm}／{@code dlq.parking.audit}（無 consumer、
+ * 無 TTL），重放只讀這兩個 parking queue：訊息既然留著，任何時候
+ * 都可以再放一次。
+ *
+ * <p>舊的 {@code dlq.bpm}／{@code dlq.audit} 不在重放範圍內 —— 它們有
+ * consumer，重放去搶會與告警競爭，而且訊息被消費後就沒了。服務中斷／
+ * consumer 停用期間累積在舊 DLQ 的訊息，在服務恢復後會由 consumer
+ * 自動 parking，所以「只讀 parking」仍是完整解；若 consumer 被永久
+ * 停用，那些訊息連告警都不會發生，也就沒有本端點要收的閉環。
+ *
+ * <h2>目的地的取法：origin 標頭 → x-death → queue 對照表</h2>
+ *
+ * <p>重放必須回到<b>原始目的地</b>，不是回到 DLX。解析順序：
+ * <ol>
+ *   <li><b>{@code x-bpm-origin-*} 自訂標頭</b>（主要路徑）：
+ *       parking 時由 consumer 把 {@code x-death} 最舊一筆的起源抄下來。
+ *       RabbitMQ 3.13 起不再把客戶端重發布的 x-death 當死信紀錄維護
+ *       （4.x 將不再解讀），所以 parking 訊息不依賴它；自訂標頭是本
+ *       系統自己的契約，會原樣跟著訊息走。</li>
+ *   <li><b>{@code x-death} 最舊一筆</b>：舊版 broker、或繞過 consumer
+ *       直接放進 parking 的訊息可能帶著它。實測 3.13.7：重發布後它仍
+ *       留在訊息上（只是不再被 broker 更新），所以這條不是死路；但它的
+ *       存在與內容因版本而異，只當備援。慣例上最新的一筆在最前面、
+ *       起源在最後，所以取最後一筆的 {@code exchange} ＋
+ *       {@code routing-keys[0]}。</li>
+ *   <li><b>queue 名稱對照表</b>：都沒有時直接經 default exchange 重投到
+ *       原始 queue（見 {@link #FALLBACK_QUEUE} 與 {@link #fallbackQueue}）。</li>
+ * </ol>
  *
  * <p>⚠️ <b>絕對不可以重投到 {@code dlx.exchange}</b>：那會讓訊息被
  * binding 再撿回 DLQ，重放變成原地打轉，而且每一次都消耗一次 max。
- * x-death 的 {@code exchange} 記的是<b>原始發布的 exchange</b>
- * （本例是 {@code bpm.exchange}），不是 DLX —— 但仍加一道
- * {@code dlx.exchange} 防呆，因為這個欄位的語意一旦被誤解，
+ * origin 標頭與 x-death 的 {@code exchange} 記的都是<b>原始發布的
+ * exchange</b>（本例是 {@code bpm.exchange}），不是 DLX —— 但兩條路徑
+ * 都加同一道 {@code dlx.exchange} 防呆，因為這個欄位的語意一旦被誤解，
  * 後果就是上面那個迴圈。
  *
- * <p>x-death 缺失時（例如有人把訊息直接丟進 DLQ、或舊訊息來自
- * 不支援 x-death 的路徑）退回<b>佇列名稱對照表</b>，直接經 default
- * exchange 重投到原始 queue：
- * <ul>
- *   <li>{@code dlq.audit} → {@code audit.log.queue}（audit.exchange 只有這個來源）</li>
- *   <li>{@code dlq.bpm} → 依 payload 是否帶 {@code __webhookUrl} 分辨
- *       {@code bpm.webhook.queue} 或 {@code bpm.notify.queue}。
- *       DLQ 只有一個名字，卻有兩個可能的來源，而兩者「補送」的語意
- *       完全不同（webhook 是外送 HTTP、通知是寄信）—— 送錯等於沒補。</li>
- * </ul>
- * 走 fallback 時記 WARN，讓維運分得出「正常重放」與「猜的」。
+ * <p>queue 對照表：{@code dlq.parking.audit} → {@code audit.log.queue}
+ * （audit.exchange 只有這個來源）；{@code dlq.parking.bpm} → 依 payload
+ * 是否帶 {@code __webhookUrl} 分辨 {@code bpm.webhook.queue} 或
+ * {@code bpm.notify.queue}。parking queue 只有一個名字，卻有兩個可能的
+ * 來源，而兩者「補送」的語意完全不同（webhook 是外送 HTTP、通知是寄信）
+ * —— 送錯等於沒補。
+ *
+ * <p>走 fallback 時記 WARN，讓維運分得出「正常重放」與「猜的」。
  *
  * <h2>⚠️ 冪等性：這是 at-least-once，不是 exactly-once</h2>
  *
  * <p>流程是「重投成功 → basicAck」。若在兩者之間斷線，訊息會重新
- * 出現在 DLQ（ack 未送達），下次重放就<b>再送一次</b>。原訊息也可能
- * 其實早已成功、只是 ack 前失敗，而 DLQ 裡的那筆是重複的。
+ * 出現在 parking queue（ack 未送達），下次重放就<b>再送一次</b>。原訊息
+ * 也可能其實早已成功、只是 ack 前失敗，而 parking 裡的那筆是重複的。
  * 因此重放<b>可能造成重複投遞</b>，這是刻意的取捨：漏送比重送更難發現
  * 也更難補救。下游（{@code WebhookConsumer} 的 {@code deliveryId}、
  * {@code EmailConsumer} 的收件人去重語意）必須容忍重複。
  *
  * <h2>失敗就停，不熱迴圈</h2>
  *
- * <p>重投失敗時 {@code basicNack(requeue=true)} 把訊息放回 DLQ 並
- * <b>停止本輪</b>。若失敗原因是 broker／網路問題，繼續抓下一筆只會
+ * <p>重投失敗時 {@code basicNack(requeue=true)} 把訊息放回 parking queue
+ * 並<b>停止本輪</b>。若失敗原因是 broker／網路問題，繼續抓下一筆只會
  * 製造更多失敗與更混亂的狀態；讓呼叫端看到失敗、修好再重放。
  * nack 本身也失敗時，訊息會停留在 unacked，連線關閉時由 broker 自動
  * requeue —— 不會遺失。
@@ -97,17 +118,32 @@ public class DlqReplayService {
 
     private static final Logger log = LoggerFactory.getLogger(DlqReplayService.class);
 
-    /** API 的 queue 參數 → 實際 RabbitMQ 佇列。只有這兩個值，其餘 400。 */
+    /**
+     * API 的 queue 參數 → 實際 RabbitMQ 佇列（parking queue）。
+     * 只有這兩個值，其餘 400。
+     */
     static final Map<String, String> QUEUES = Map.of(
-            "bpm", "dlq.bpm",
-            "audit", "dlq.audit");
+            "bpm", "dlq.parking.bpm",
+            "audit", "dlq.parking.audit");
+
+    /**
+     * parking 時由 {@code DeadLetterConsumer} 寫入的起源標頭。
+     *
+     * <p>標頭名稱是 producer／consumer 之間的契約，常數只定義在這裡
+     * （讀取端），consumer 直接引用 —— 兩份字串各自漂移就會讓重放
+     * 靜默退回 fallback。{@link #ORIGIN_QUEUE_HEADER} 只供維運判讀，
+     * 不用於路由。
+     */
+    public static final String ORIGIN_EXCHANGE_HEADER = "x-bpm-origin-exchange";
+    public static final String ORIGIN_ROUTING_KEY_HEADER = "x-bpm-origin-routing-key";
+    public static final String ORIGIN_QUEUE_HEADER = "x-bpm-origin-queue";
 
     /** 單次重放的訊息數上限。防的是「誤觸把整個 DLQ 一次打回下游」。 */
     static final int MAX_MESSAGES_PER_REQUEST = 1000;
 
-    /** 沒有 x-death 時，dlq 佇列 → 原始佇列。 */
+    /** 沒有 origin 標頭也沒有 x-death 時，parking 佇列 → 原始佇列。 */
     private static final Map<String, String> FALLBACK_QUEUE = Map.of(
-            "dlq.audit", "audit.log.queue");
+            "dlq.parking.audit", "audit.log.queue");
 
     /** 死信訊息的 {@code x-death} 標頭轉成 Spring {@link MessageProperties}。 */
     private static final DefaultMessagePropertiesConverter PROPS_CONVERTER =
@@ -143,7 +179,7 @@ public class DlqReplayService {
         String dlqQueue = QUEUES.get(queueParam);
         if (dlqQueue == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "queue 只接受 bpm／audit（對應 dlq.bpm／dlq.audit）：" + queueParam);
+                    "queue 只接受 bpm／audit（對應 dlq.parking.bpm／dlq.parking.audit）：" + queueParam);
         }
         if (max < 1 || max > MAX_MESSAGES_PER_REQUEST) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -179,10 +215,11 @@ public class DlqReplayService {
                 Destination destination = resolveDestination(dlqQueue, message);
 
                 try {
-                    // ⚠️ 重投後 x-death 不會跟著到新佇列：RabbitMQ 3.13+ 把
-                    // x-death 視為 broker 自己的標頭，客戶端發布的會被剝掉。
-                    // 重放的訊息在下游看起來與「第一次發布」相同（這正是
-                    // 「重放」要的語意），但它不會再累加 death count。
+                    // ⚠️ x-death 不隨重放保證：RabbitMQ 3.13 起不再把客戶端
+                    // 重發布的 x-death 當死信紀錄維護（實測 3.13.7 它會留在
+                    // 訊息上、但不再被更新；4.x 不再解讀）。重放的訊息在下游
+                    // 看起來與「第一次發布」相同（這正是「重放」要的語意）；
+                    // origin 標頭是 parking 的契約、對下游無意義，留著無害。
                     rabbitTemplate.send(destination.exchange(), destination.routingKey(), message);
                 } catch (Exception e) {
                     log.error("DLQ 重放失敗，訊息放回佇列並停止本輪。queue={} 目的地={}/{} 原因={}",
@@ -199,10 +236,10 @@ public class DlqReplayService {
                 try {
                     channel.basicAck(deliveryTag, false);
                     replayed++;
-                    if (!destination.fromXDeath()) fallbackUsed++;
+                    if (destination.source() == DestinationSource.FALLBACK) fallbackUsed++;
                     log.info("DLQ 重放成功：queue={} → exchange={} routingKey={} 來源={} messageId={}",
                             dlqQueue, destination.exchange(), destination.routingKey(),
-                            destination.fromXDeath() ? "x-death" : "fallback",
+                            destination.source(),
                             message.getMessageProperties().getMessageId());
                 } catch (Exception e) {
                     // 重投已成功、ack 失敗：訊息稍後會被 broker 重投（重複），
@@ -242,40 +279,65 @@ public class DlqReplayService {
     /**
      * 解析原始目的地。
      *
-     * <p>優先用 {@code x-death} 最舊一筆（見類別註解）；缺欄位、空值、
-     * 或指到 {@code dlx.exchange} 時退回佇列名稱對照表並記 WARN。
+     * <p>順序：origin 標頭 → {@code x-death} 最舊一筆 → queue 名稱對照表
+     * （見類別註解）。缺欄位、空值、或指到 {@code dlx.exchange} 時往下退，
+     * 退到 fallback 時記 WARN。
      *
-     * <p>package-private：解析規則是本工項最容易錯的一段（x-death 的順序、
-     * dlx 防呆、fallback 分辨），由 {@code DlqReplayServiceDestinationTest}
-     * 直接以組出來的訊息釘住它 —— 真實 broker 不允許客戶端發布 x-death
-     * （RabbitMQ 3.13+ 會剝掉），所以這個規則無法只靠整合測試覆蓋。
+     * <p>package-private：解析規則是本工項最容易錯的一段（origin 標頭的
+     * 優先序、x-death 的順序、dlx 防呆、fallback 分辨），由
+     * {@code DlqReplayServiceDestinationTest} 直接以組出來的訊息釘住它
+     * —— 客戶端無法偽造 broker 產生的 x-death（且 3.13 起重發布的
+     * x-death 不再被更新），所以這個規則無法只靠整合測試覆蓋。
      */
     Destination resolveDestination(String dlqQueue, Message message) {
-        List<Map<String, ?>> xDeath = message.getMessageProperties().getXDeathHeader();
+        MessageProperties props = message.getMessageProperties();
+
+        // 1) parking 時寫入的 origin 標頭：本系統自己的契約，跨 broker
+        //    版本都在，是 parking 訊息的主要路徑。
+        String originExchange = string(props.getHeader(ORIGIN_EXCHANGE_HEADER));
+        String originRoutingKey = string(props.getHeader(ORIGIN_ROUTING_KEY_HEADER));
+        if (usableDestination(originExchange, originRoutingKey)) {
+            return new Destination(originExchange, originRoutingKey, DestinationSource.ORIGIN_HEADER);
+        }
+        if (!originExchange.isBlank() || !originRoutingKey.isBlank()) {
+            log.warn("DLQ 訊息的 origin 標頭不完整或指向 dlx.exchange，往下改用 x-death／fallback。"
+                            + "queue={} origin={}/{}",
+                    dlqQueue, originExchange, originRoutingKey);
+        }
+
+        // 2) x-death 最舊一筆：舊版 broker、或繞過 consumer 直接放進
+        //    parking 的訊息可能還帶著它。
+        List<Map<String, ?>> xDeath = props.getXDeathHeader();
         if (xDeath != null && !xDeath.isEmpty()) {
             // 慣例：最新在前、起源在後。取起源。
             Map<String, ?> origin = xDeath.get(xDeath.size() - 1);
             String exchange = string(origin.get("exchange"));
             String routingKey = firstRoutingKey(origin.get("routing-keys"));
-            if (!exchange.isBlank() && !routingKey.isBlank() && !"dlx.exchange".equals(exchange)) {
-                return new Destination(exchange, routingKey, true);
+            if (usableDestination(exchange, routingKey)) {
+                return new Destination(exchange, routingKey, DestinationSource.X_DEATH);
             }
             log.warn("DLQ 訊息的 x-death 缺少可用的 exchange／routing-keys（或指向 dlx.exchange），"
                             + "改用 queue 名稱對照表 fallback。queue={} x-death={}",
                     dlqQueue, origin);
         } else {
-            log.warn("DLQ 訊息沒有 x-death，改用 queue 名稱對照表 fallback。queue={}", dlqQueue);
+            log.warn("DLQ 訊息沒有 origin 標頭也沒有 x-death，改用 queue 名稱對照表 fallback。queue={}",
+                    dlqQueue);
         }
 
         // fallback 直接投回原始 queue（default exchange 以 queue 名為 routing key），
-        // 不需要知道原本的 routing key —— x-death 缺失時它也不在。
-        return new Destination("", fallbackQueue(dlqQueue, message), false);
+        // 不需要知道原本的 routing key —— origin 資訊缺失時它也不在。
+        return new Destination("", fallbackQueue(dlqQueue, message), DestinationSource.FALLBACK);
+    }
+
+    /** 目的地可用＝exchange 與 routing key 都在，且不是會原地打轉的 DLX。 */
+    private static boolean usableDestination(String exchange, String routingKey) {
+        return !exchange.isBlank() && !routingKey.isBlank() && !"dlx.exchange".equals(exchange);
     }
 
     private String fallbackQueue(String dlqQueue, Message message) {
         String fixed = FALLBACK_QUEUE.get(dlqQueue);
         if (fixed != null) return fixed;
-        if ("dlq.bpm".equals(dlqQueue)) {
+        if ("dlq.parking.bpm".equals(dlqQueue)) {
             return isWebhookMessage(message) ? "bpm.webhook.queue" : "bpm.notify.queue";
         }
         // 白名單已擋掉其他值，正常到不了這裡。
@@ -283,9 +345,10 @@ public class DlqReplayService {
     }
 
     /**
-     * dlq.bpm 的兩個來源只能靠 payload 分辨：webhook 訊息一定帶
-     * {@code __webhookUrl}（{@code WebhookConfigResolver} 在發布前放入），
-     * 通知訊息沒有。用 JSON 欄位而不是字串包含，避免內文剛好提到這個字。
+     * {@code dlq.parking.bpm} 的兩個來源只能靠 payload 分辨：webhook 訊息
+     * 一定帶 {@code __webhookUrl}（{@code WebhookConfigResolver} 在發布前
+     * 放入），通知訊息沒有。用 JSON 欄位而不是字串包含，避免內文剛好提到
+     * 這個字。
      */
     private boolean isWebhookMessage(Message message) {
         byte[] body = message.getBody();
@@ -348,13 +411,16 @@ public class DlqReplayService {
     }
 
     /** 重放的原始目的地。{@code exchange} 空字串代表 default exchange。 */
-    record Destination(String exchange, String routingKey, boolean fromXDeath) {
+    record Destination(String exchange, String routingKey, DestinationSource source) {
     }
+
+    /** 目的地是從哪裡解析出來的；{@code fallbackUsed} 只算 {@link #FALLBACK}。 */
+    enum DestinationSource { ORIGIN_HEADER, X_DEATH, FALLBACK }
 
     /**
      * 重放結果。
      *
-     * @param queue     實際處理的 DLQ 佇列（{@code dlq.bpm}／{@code dlq.audit}）
+     * @param queue     實際處理的 parking 佇列（{@code dlq.parking.bpm}／{@code dlq.parking.audit}）
      * @param replayed  成功重投並 ack 的筆數
      * @param failed    重投或 ack 失敗的筆數（最多 1，失敗即停）
      * @param remaining 佇列剩餘量的快照；null 代表無法取得
