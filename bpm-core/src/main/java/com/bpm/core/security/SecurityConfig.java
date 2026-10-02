@@ -173,6 +173,12 @@ public class SecurityConfig {
                     // 「哪個系統、可做什麼」（allowedActions/allowedProcessKeys）。
                     auth.requestMatchers("/api/external/**").permitAll();
 
+                    // ── 外部系統回呼：由 CallbackAuthFilter 驗 HMAC 簽章 ──
+                    // 與上一條同一個模式：外部系統沒有 JWT，認證發生在專屬
+                    // 過濾器裡（X-System-Id + X-Callback-Signature + 時間戳窗），
+                    // 授權（allowedActions 的 callback）也在那裡判定。
+                    auth.requestMatchers("/api/callback/**").permitAll();
+
                     // ── Server 之間：只接受閘道認證過的呼叫 ─────────
                     // 快取失效是由組織／權限系統推送異動時觸發的，
                     // 呼叫方是機器不是人，所以要求 ROLE_GATEWAY 而非使用者身分。

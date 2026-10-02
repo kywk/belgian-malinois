@@ -53,6 +53,11 @@ import java.util.Objects;
  * <p>API key 只在建立與輪換時回傳一次明文，之後只存雜湊。若把明文寫進
  * 稽核紀錄，雜湊就白做了 —— 稽核庫是可查詢的，而且保留期通常比金鑰生命週期長。
  * 所以稽核只記「金鑰被輪換了」這個事實與雜湊的前 8 碼（足以對帳，不足以使用）。
+ *
+ * <p>回呼密鑰（#21）不同：它必須以可還原形式儲存（HMAC 驗簽需要原始密鑰，
+ * 見 {@code ExternalSystem.callbackSecret}），所以稽核前綴要<b>先雜湊再截</b>
+ * （{@link #secretHashPrefix}）—— 直接截字串會把密鑰的一部分寫進稽核庫。
+ * 對外的輪換回應同樣只給一次明文。
  */
 @RestController
 @RequestMapping("/api/admin/external-systems")
@@ -96,6 +101,13 @@ public class ExternalSystemAdminController {
 
         String plainKey = ApiKeyUtil.generateKey();
         sys.setApiKey(ApiKeyUtil.hash(plainKey));
+        // 回呼密鑰與 API key 同時產生（工項 #21）：明文只在這個回應出現一次。
+        // ⚠️ 存的是密鑰本身而非雜湊 —— HMAC 驗簽需要原始密鑰，見
+        // ExternalSystem.callbackSecret 與 V5 migration 的說明。
+        // 既有系統（V5 migration 前建立）的 callbackSecret 是 null，必須由
+        // rotate-callback-secret 補發 —— 這裡不影響它們。
+        String plainCallbackSecret = ApiKeyUtil.generateCallbackSecret();
+        sys.setCallbackSecret(plainCallbackSecret);
         sys.setEnabled(true);
         // null（沒帶）視為不允許：代發是需要明確授予的能力（R-20）。
         sys.setAllowOnBehalfOf(Boolean.TRUE.equals(sys.getAllowOnBehalfOf()));
@@ -113,6 +125,7 @@ public class ExternalSystemAdminController {
         result.put("systemId", saved.getSystemId());
         result.put("systemName", saved.getSystemName());
         result.put("apiKey", plainKey); // 明文，僅此一次
+        result.put("callbackSecret", plainCallbackSecret); // 明文，僅此一次
         return result;
     }
 
@@ -207,6 +220,37 @@ public class ExternalSystemAdminController {
         return Map.of("systemId", systemId, "apiKey", plainKey);
     }
 
+    /**
+     * 輪換回呼密鑰（工項 #21）。與 {@link #rotateKey} 同一套模式：
+     * 回傳新明文一次、回應與列表一律遮蔽、稽核只記雜湊前綴。
+     *
+     * <p>與 rotate-key 的唯一差別是儲存形式：回呼密鑰必須可還原（HMAC 驗簽
+     * 需要原始密鑰），所以稽核前綴不能直接截密鑰字串，要先雜湊 ——
+     * 見 {@link #secretHashPrefix}。
+     *
+     * <p>這是既有系統取得 callback secret 的<b>唯一</b>途徑 —— V5 migration
+     * 之後它們的 callbackSecret 是 null（不能回呼），刻意不回填。
+     */
+    @PostMapping("/{systemId}/rotate-callback-secret")
+    @Transactional("primaryTransactionManager")
+    public Map<String, String> rotateCallbackSecret(@PathVariable String systemId,
+                                                    @CallerId
+                                                    String operatorId) {
+        ExternalSystem sys = find(systemId);
+        String oldHashPrefix = secretHashPrefix(sys.getCallbackSecret());
+        String plainSecret = ApiKeyUtil.generateCallbackSecret();
+        sys.setCallbackSecret(plainSecret);
+        repo.save(sys);
+
+        // ⚠️ 只記雜湊前綴，不記明文（與 rotate-key 相同理由，見類別註解）。
+        // 輪換會讓原持有者的回呼立刻 401，所以這筆紀錄同時是「回呼中斷」的線索。
+        audit(operatorId, "rotate-callback-secret", systemId, Map.of(
+                "oldSecretHashPrefix", oldHashPrefix,
+                "newSecretHashPrefix", secretHashPrefix(plainSecret)));
+
+        return Map.of("systemId", systemId, "callbackSecret", plainSecret);
+    }
+
     @GetMapping("/{systemId}/usage-logs")
     public Map<String, String> usageLogs(@PathVariable String systemId) {
         // Placeholder: 稽核查詢已併入 bpm-core（2026-04-24），改指向本服務的 /api/audit-logs。
@@ -246,6 +290,9 @@ public class ExternalSystemAdminController {
         m.setSystemId(s.getSystemId());
         m.setSystemName(s.getSystemName());
         m.setApiKey("***");
+        // callbackSecret 是「有／沒有」的狀態，不是值：null 保持 null（管理頁顯示
+        // 尚未設定），有值才遮蔽成 ***。⚠️ 同 apiKey，絕不可在 entity 上遮蔽。
+        m.setCallbackSecret(s.getCallbackSecret() == null ? null : "***");
         m.setContactEmail(s.getContactEmail());
         m.setAllowedProcessKeys(s.getAllowedProcessKeys());
         m.setAllowedActions(s.getAllowedActions());
@@ -292,6 +339,16 @@ public class ExternalSystemAdminController {
     private static String hashPrefix(String hash) {
         if (hash == null || hash.length() < 8) return "(none)";
         return hash.substring(0, 8) + "…";
+    }
+
+    /**
+     * 回呼密鑰的稽核前綴。
+     *
+     * <p>⚠️ 回呼密鑰以可還原形式儲存（HMAC 需要），所以<b>不能</b>像 apiKey
+     * 那樣直接截前 8 碼 —— 那會把密鑰的一部分寫進可查詢的稽核庫。先雜湊再截。
+     */
+    private static String secretHashPrefix(String secret) {
+        return secret == null ? "(none)" : hashPrefix(ApiKeyUtil.hash(secret));
     }
 
     private static String nullSafe(String v) {
