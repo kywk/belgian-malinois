@@ -75,7 +75,7 @@
 
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
-| 25 | Webhook Payload 完整化 | 依規格補齊所有事件欄位（task.created、completed、rejected、timeout、process.completed） | 3d | ✅ **2026-10-02 完成**（`fcfb951`／`792e2db`，merge `4af4e53`）。依使用者裁決沿用 P2-1 紅線：**不送** `variables`／`comment`／`operatorName`／候選人；補 `task.timeout` 的 `assignee`／`dueDate`／`overdueHours`（整點小時無條件捨去、下限 0、`dueDate=null` → `null`）。spec §11.4 欄位表改以實作為準。⚠️ **重大上游事實**：Flowable 7.2.0 **不發 timeout task event**（`BaseTaskListener` 只有 create／assignment／complete／delete／all；整個 flowable-engine 無 `timeout` 字面值，2026-10-02 以 `javap -p -c` 驗證）→ `event="timeout"` 目前永遠不投遞；payload 已依合約墊好，替代機制待裁決 |
+| 25 | Webhook Payload 完整化 | 依規格補齊所有事件欄位（task.created、completed、rejected、timeout、process.completed） | 3d | ✅ **2026-10-02 完成**（`fcfb951`／`792e2db`，merge `4af4e53`）。依使用者裁決沿用 P2-1 紅線：**不送** `variables`／`comment`／`operatorName`／候選人；補 `task.timeout` 的 `assignee`／`dueDate`／`overdueHours`（整點小時無條件捨去、下限 0、`dueDate=null` → `null`）。spec §11.4 欄位表改以實作為準。⚠️ **重大上游事實**：Flowable 7.2.0 **不發 timeout task event**（`BaseTaskListener` 只有 create／assignment／complete／delete／all；整個 flowable-engine 無 `timeout` 字面值，2026-10-02 以 `javap -p -c` 驗證）→ `event="timeout"` 目前永遠不投遞；payload 已依合約墊好，替代機制已裁決：設計器 2026-10-02 移除 `timeout` 選項（`d53d668`，merge `34c6756`），後端保留相容 |
 | 26 | HMAC 簽章實作 | webhook payload HMAC-SHA256 簽章 | 1d | 🟡 HMAC-SHA256 簽章已實作，但投遞未接上，實際不會觸發（見 #67） |
 | 27 | Webhook 重試機制 | 失敗指數退避重試（1s→2s→4s，max 3次）、DLQ | 2d | 🟡 retry 1s×2 最多 3 次＋`dlq.bpm`、SSRF 防護已有；同樣未接上（見 #67） |
 | 28 | payloadTemplate 自訂 Payload | 允許外部系統客製 webhook payload 結構 | 2d | ⬜ |
@@ -165,7 +165,7 @@
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
 | 66 | 內部發起流程的 initiator 改由 JWT 決定 | ✅ **2026-09-29 完成**（`0b3e7d8`／`4d6dd98`）。`@CallerId` 決定 initiator 與稽核 operatorId；body 帶 initiator 明確 400（對齊 R-20）；`variables` 套用 `TaskController` 的 deny-list，擋掉夾帶 `onBehalfOf`（繞過 R-20 授權）與 `_externalSystemId`（繞過 R-09）；`DocumentController.createdBy` 同步修 | ~~1d~~ | ✅ |
-| 67 | Webhook 投遞接線 | 🟡 **2026-09-30 節點層完成、2026-10-01 流程層完成**（`2ed262e`／本輪）。**開工前實測 Flowable 保留未知 extension element**（部署→`getResourceAsStream`→`getBpmnModel()`→`convertToXML()` 四層都驗過），所以讀取走 `RepositoryService.getBpmnModel()`，不用自己解析 `ACT_GE_BYTEARRAY`。<br>**三段斷線全接**：**(A)** 新增 `WebhookConfigResolver`，listener 逐筆設定 `__webhookUrl`，**讀不到設定就完全不發訊息**（改動前是發一則沒有 URL 的訊息交給 consumer 丟掉，會讓 DLQ 混著從來不該投遞的訊息）；**(B)** 兩支出廠 BPMN 的每個 UserTask 加 `event="all"` 的 `webhookTaskListener`、`setBeans()` 加入它（`notifyTaskListener` 未動、`EL_WHITELIST` 未動）；**(C)** 前端改寫 `extensionElements`（spec §11.3 的格式），舊 `documentation` 格式保留相容性。⚠️ **投遞位址改來自業務人員可編輯的 BPMN，`WebhookUrlPolicy` 從「可有可無」變成「安全相依」** —— 設定 URL 的人與決定送什麼資料出去的人可能是不同人。⚠️ **向後相容的關鍵決定**：「有 `<flowable:webhooks>` 元素就是權威（即使內容是空）」而非「非空才是權威」，否則使用者在設計器刪掉最後一筆後回頭讀舊 documentation，**剛刪掉的設定會立刻復活**。⚠️ **連帶修掉一個原描述未提到的既有缺陷**：`flowableModdle.js` 的 `TaskListener` 型別缺 `superClass: ['Element']`，實測**用 bpmn-js 匯出一次出廠 BPMN，兩個 taskListener 全部消失** —— 出廠流程的通知機制本來就會在設計器存檔一次後消失。**PM 線上實測已完成**（主樹 **585** 全綠、前端 **87** 全綠、acceptance-test PASS 7/FAIL 0；且加了 `webhookTaskListener` 之後 `seed-data.sh` 仍能部署 —— 那是本工項最大的迴歸風險）。**端到端**：注入帶 `flowable:webhooks` 的 BPMN → 啟動流程 → listener 排入佇列 → `Webhook delivered`，payload 含 11 個欄位，**HMAC 簽章由接收端重算驗證通過**、重放偵測標頭齊全。**⚠️ 同時線上證實 SSRF 閘門真的生效**：URL 設 `127.0.0.1` 時被拒（`拒絕 loopback 位址`）。✅ **2026-10-01 流程層已接**（斷線 (A) 第四個實例）：`ProcessCompletedListener` 讀 `<process>` 的 `flowable:webhooks`，與節點層**共用同一份解析**；沒有設定就完全不發訊息。線上實測：帶設定的流程結案 → listener 排入佇列、consumer 收到 `__webhookUrl`（SSRF 閘門照樣拒絕 loopback）；沒設定 → 不發。❌ **仍未完成**：#25 的 payload 缺口（`task.timeout` 事件、候選人、`operatorName`、`comment`）未補；**前端 `modeling.updateProperties(element, { extensionElements })` 那一步沒有自動化測試覆蓋**（寫法與 bpmn-js 官方的 `addExtensionElements` 相同，但這格是空白）<br>✅ **2026-10-02 前端完成**（`57d40b6`／`71d61bd`，merge `b5de2a1`）：`bpmn:Process` 掛流程層面板（`process.completed`／`complete`／`all`）、節點層事件補 `all`、`saveWebhooks` 存檔契約測試（單次 `updateProperties`、taskListener 保留、Process round-trip）。線上實測：設計器存檔路徑產生的 BPMN 真的部署成功，節點與流程層 listener 都讀到設定並排入佇列（SSRF 閘門照常拒絕 loopback） | 2d→4d | ✅ |
+| 67 | Webhook 投遞接線 | 🟡 **2026-09-30 節點層完成、2026-10-01 流程層完成**（`2ed262e`／本輪）。**開工前實測 Flowable 保留未知 extension element**（部署→`getResourceAsStream`→`getBpmnModel()`→`convertToXML()` 四層都驗過），所以讀取走 `RepositoryService.getBpmnModel()`，不用自己解析 `ACT_GE_BYTEARRAY`。<br>**三段斷線全接**：**(A)** 新增 `WebhookConfigResolver`，listener 逐筆設定 `__webhookUrl`，**讀不到設定就完全不發訊息**（改動前是發一則沒有 URL 的訊息交給 consumer 丟掉，會讓 DLQ 混著從來不該投遞的訊息）；**(B)** 兩支出廠 BPMN 的每個 UserTask 加 `event="all"` 的 `webhookTaskListener`、`setBeans()` 加入它（`notifyTaskListener` 未動、`EL_WHITELIST` 未動）；**(C)** 前端改寫 `extensionElements`（spec §11.3 的格式），舊 `documentation` 格式保留相容性。⚠️ **投遞位址改來自業務人員可編輯的 BPMN，`WebhookUrlPolicy` 從「可有可無」變成「安全相依」** —— 設定 URL 的人與決定送什麼資料出去的人可能是不同人。⚠️ **向後相容的關鍵決定**：「有 `<flowable:webhooks>` 元素就是權威（即使內容是空）」而非「非空才是權威」，否則使用者在設計器刪掉最後一筆後回頭讀舊 documentation，**剛刪掉的設定會立刻復活**。⚠️ **連帶修掉一個原描述未提到的既有缺陷**：`flowableModdle.js` 的 `TaskListener` 型別缺 `superClass: ['Element']`，實測**用 bpmn-js 匯出一次出廠 BPMN，兩個 taskListener 全部消失** —— 出廠流程的通知機制本來就會在設計器存檔一次後消失。**PM 線上實測已完成**（主樹 **585** 全綠、前端 **87** 全綠、acceptance-test PASS 7/FAIL 0；且加了 `webhookTaskListener` 之後 `seed-data.sh` 仍能部署 —— 那是本工項最大的迴歸風險）。**端到端**：注入帶 `flowable:webhooks` 的 BPMN → 啟動流程 → listener 排入佇列 → `Webhook delivered`，payload 含 11 個欄位，**HMAC 簽章由接收端重算驗證通過**、重放偵測標頭齊全。**⚠️ 同時線上證實 SSRF 閘門真的生效**：URL 設 `127.0.0.1` 時被拒（`拒絕 loopback 位址`）。✅ **2026-10-01 流程層已接**（斷線 (A) 第四個實例）：`ProcessCompletedListener` 讀 `<process>` 的 `flowable:webhooks`，與節點層**共用同一份解析**；沒有設定就完全不發訊息。線上實測：帶設定的流程結案 → listener 排入佇列、consumer 收到 `__webhookUrl`（SSRF 閘門照樣拒絕 loopback）；沒設定 → 不發。❌ **仍未完成**：#25 的 payload 缺口（`task.timeout` 事件、候選人、`operatorName`、`comment`）未補；**前端 `modeling.updateProperties(element, { extensionElements })` 那一步沒有自動化測試覆蓋**（寫法與 bpmn-js 官方的 `addExtensionElements` 相同，但這格是空白）<br>✅ **2026-10-02 前端完成**（`57d40b6`／`71d61bd`，merge `b5de2a1`）：`bpmn:Process` 掛流程層面板（`process.completed`／`complete`／`all`）、節點層事件補 `all`、`saveWebhooks` 存檔契約測試（單次 `updateProperties`、taskListener 保留、Process round-trip）。線上實測：設計器存檔路徑產生的 BPMN 真的部署成功，節點與流程層 listener 都讀到設定並排入佇列（SSRF 閘門照常拒絕 loopback）。後續（2026-10-02 裁決）：非法 event 顯示「（無效，後端不投遞）」選項、只標示不改值；pool／collaboration 暫不支援已記為已知限制（`FlowablePropertiesProvider` 註解） | 2d→4d | ✅ |
 
 **#67 實作結果（2026-09-30，`feature-67`）—— A/B/C 三段全部接上，但有兩件事沒做**
 
@@ -218,6 +218,14 @@
 | 85 | `ProcessVariableSpecController.update` 稽核說謊 | ✅ **2026-09-29 完成**（`97eafd7`）。`findById` 後比對 `existing.getProcessDefinitionKey()`，不符回 **404**（非 403，沿用 `ProcessAccessGuard` 政策：403 會確認物件存在，對可枚舉的 id 等於留枚舉管道）。稽核改寫 `existing` 的 key；被擋時不寫稽核。連帶修掉 `orElseThrow()` 讓不存在的 id 從 **500 → 404**（修前 500 會讓呼叫端一直重試）。**端到端已驗**：`required` 決定 `ExternalApiController.validateVariables` 擋不擋，所以 required=true 時外部請求缺該變數回 400 → 被擋的冒用後**仍然**400（輸入驗證沒被放寬）→ 用正確 key 改成 false 後同一請求變 **200**，證明 400 確實來自那一筆規格。⚠️ 不選「靜默忽略 key 不一致、以 id 為準照樣更新」：那樣稽核仍會寫錯的 key，且回 200 讓呼叫端以為改對了 | ~~0.3d~~ | ✅ |
 | 86 | `ProcessVariableSpecController.batchSave` 重複儲存必定 500 | ✅ **2026-09-30 完成**。`POST /api/admin/process-definitions/{key}/variable-spec` 是「整批取代」，原本先 `deleteByProcessDefinitionKey(key)`（衍生刪除 → `em.remove()`）再 `saveAll`（→ `em.persist()`）。**Hibernate 在同一次 flush 中把 INSERT 排在 DELETE 之前**，撞上 `@UniqueConstraint(processDefinitionKey, variableName)` → **500**。⚠️ **原描述「只要該 key 已有任何一筆規格就必定失敗」不精確，實測後修正**：觸發條件是**新批次與既有規格有同名變數**。新舊完全不重疊（整批換新名字）或送空陣列，缺陷期間都是 200 —— 沒有任何 INSERT 會撞到同名舊列。這讓它更難被手動試出來（剛建好規格時第一次存是好的），而管理頁的正常使用流程必然重疊。⚠️ 前端 `ProcessVariableSpecAdmin.vue` 的「儲存」按鈕正是走這條路徑 → **管理頁第二次按儲存必定壞**。**414 個測試沒有任何一個覆蓋重複寫入**。修法：刪除改成 `@Modifying @Query` 原生 JPQL（不選「衍生刪除 + `flush()`」——那樣也能修好，但規則會散在「刪除」與「記得 flush」兩處，而這正是本缺陷的成因）。**不**做「比對後只刪真正消失的列」：那會保留舊 id，而 `setId(null)` 是 P0-4 的防護。線上實測八種呼叫全 200 且稽核逐筆相符，見 commit `f6df3fb` | ~~0.5d~~ | ✅ |
 | 87 | `batchSave` 同一批內重複變數名 → 500 | ✅ **2026-09-30 完成**。送 `[{"variableName":"x",…},{"variableName":"x",…}]` 原本仍 500，**根因與 #86 不同**：呼叫端送了互相衝突的資料，與刪除／寫入的順序無關，#86 的修法碰不到它。修法是**輸入驗證**：`requireDistinctVariableNames` 擋在 `deleteAllByProcessDefinitionKey` **之前**（順序決定「被拒的請求有沒有副作用」），回 **400 並指名重複的名字**（500 的語意是「稍後重試」，但重試永遠不會成功 —— payload 沒變結果就不會變）。⚠️ **「重複」不能用 `Set<String>` 判斷**：欄位定序是 `SQL_Latin1_General_CP1_CI_AS`，對 MSSQL 實查（`sqlcmd` + `sys.columns`）確認 **`Amount`／`amount`、`amount`／`amount `（ANSI padding）、`Ａ`／`A`（全形半形）在資料庫層面就是衝突** —— 使用者在表格裡打兩個大小寫不同的名字是最常見的失敗形狀，而 `Set<String>` 恰恰擋不住，修完等於沒修。`dbComparisonKey` 逐條對齊此定序（NFC、全形半形折疊、只 strip 尾端 U+0020、大小寫），**刻意不做**整串 NFKC（會把 `①` 折成 `1`，實測兩者在 DB **不**衝突）與重音折疊（定序是 AS）。26 組對照實測：24 組一致，2 組分歧（`ı`、`ǅ`）**方向都是「誤擋合法資料」而非漏擋**。**連帶修掉 `update` 改名撞到同一流程其他變數 → 500**（同一個唯一約束、共用同一個比較鍵；留下來的話「這個端點的 500 修掉了嗎」仍是無法回答的問題）。前端 `ProcessVariableSpecAdmin.vue` 加**儲存前檢查**（刻意是後端規則的**子集**，方向固定為「前端不得擋掉後端會接受的資料」）；`addRow()` 產生的空名稱是既有行為，**刻意不改**（自動命名等於替使用者決定外部系統要塞進流程的 key，猜錯了不會有人發現）。✅ **使用者已裁決：擋空白名稱**（null 亦改 400）。✅ **2026-09-30 第二輪已實作（#87-2／#87-3）**：裁決前的兩個狀態碼（`""`／`"  "` → **200**、`null` → **500**）都改成 **400**。`requireDistinctVariableNames` 合併成 `requireUsableVariableNames`（一次掃描、一次回報空白＋重複，呼叫端仍只處理一個狀態碼），判定規則是 **`dbComparisonKey(name).isEmpty()`** —— 沿用 #87 那份唯一的比較鍵，**刻意不寫新的 `isBlank()`**：`isBlank()` 走 `Character.isWhitespace`，會把 TAB／換行算成空白，但實測那些在資料庫裡**不是**空白（ANSI padding 只忽略尾端 U+0020），擋下等於禁止使用合法名稱、且違反「前端不得擋掉後端會接受的資料」；而 `"  "` 與全形空白在資料庫裡就是空字串，本來就是要擋的形狀。**位置**：`batchSave` 擋在 `deleteAllByProcessDefinitionKey` 之前（與 #87 同一個位置），`update` 擋在 **#85 的 404 守衛之後**、撞名檢查之前（**不選 Bean Validation `@NotBlank`**：它發生在 controller 方法之前，必定排在 404 守衛前面 → 狀態碼錯位，且它用的就是 `isBlank()` 那套定義、還需要新的例外處理與全域 advice）。前端 `addRow()` **維持產生空名稱**（選 (b)，理由見該處註解與 commit 訊息），改為把「空白名不被接受」**顯示在畫面上**（欄位標題＋placeholder）並在送出前指名第幾列。前端 **90** 全綠、後端 **593** 全綠（`VariableSpecDuplicateNameTest` 11 → 19 條；前端該檔 7 → 10 條）；負向控制組（整份還原 controller）紅 7／綠 12，詳見測試 javadoc。線上實測 42 項全過（每個狀態碼都同時驗資料未變）、後端 450 測試全綠（新增 11 條，`VariableSpecDuplicateNameTest`）、前端 66 全綠（新增 7 條）、`acceptance-test.sh` PASS 7/FAIL 0 | ~~0.3d~~ | ✅ |
+---
+
+## 五、2026-10-02 新增的工項
+
+| # | 工項 | 說明 | 估時 | 狀態 |
+|---|------|------|------|------|
+| 95 | 文件與現況同步（#68 範圍外清單） | 修正現行文件與程式碼落差：`CLAUDE.md` 的 R-18 阻斷／無應用層認證敘述、`docs/plan/README.md` 狀態表（49.5 → 19.5 人日）、spec §4.3 `returnTo`（未實作）、§9.4 status（駁回是 `completed + result=rejected`）、§11.3 `getManagerAtLevel`、Phase 4/5 逐項對程式碼勾選；歷史快照（security-audit／handover）只加註 | 0.2d | ✅ **2026-10-02 完成**（`8da65e9`，merge `b471e69`）。每一處附 file:line；未勾：Phase 4 CI/CD（R-07／R-08）、Phase 5 Call Activity（#4）。⚠️ 另發現 R-19／R-23 的外部 `_` 變數過濾殘留（程式缺陷，未修） |
+
 ---
 
 ## #88 裁決 A／B 的實作結果（2026-09-30）
@@ -302,13 +310,15 @@
 | Form Service | 6 | 2 | 2 | 2 | 6d |
 | 跨服務整合 | 6 | 1 | 4 | 1 | 17d |
 | 2026-09-29 新增 | 29 | 28 | 0 | 1 | 12.5d |
-| **合計** | **94** | **51** | **20** | **23** | **~96 人天** |
+| 2026-10-02 新增 | 1 | 1 | 0 | 0 | 0d |
+| **合計** | **95** | **52** | **20** | **23** | **~96 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
 > 2026-10-02：以列狀態重新盤點（先前「2026-09-29 新增」把 #67／#68（實為 🟡）
 > 與 #70（實為 ⬜）都算成 ✅、項數也多記 1）。#25／#67／#68 完成後：
 > ✅ 51、🟡 20、⬜ 23；「2026-09-29 新增」實際 29 項（28✅／1⬜＝#70）。
+> 同日再新增 #95（文件同步，✅）→ 總計 95 項、✅ 52。
 
 > 2026-09-29 晚間更新：#66、#69 完成（+3 項新發現 #71～#73）。
 > #67 的估時由 2d 上修為 4d（三段斷線、8～12 檔案、三種格式互不相通）。
@@ -391,6 +401,9 @@
 > 線上實測：`acceptance-test.sh` PASS 7 / FAIL 0；以設計器 `saveWebhooks` 產生的 BPMN
 > 真的部署成功，節點與流程層 webhook 都排入投遞佇列（SSRF 閘門照常拒絕 loopback）。
 > ⚠️ **dev 庫新增探測殘留 `probe-67fe`**（流程定義，含節點與流程層 webhook 設定）。
+> 同日後續（使用者裁決）：前端移除 `timeout` 選項（`34c6756`；後端保留相容）、
+> 非法 event 加「（無效，後端不投遞）」提示、pool 限制記為已知限制；
+> #95 文件同步（`b471e69`）。前端 **159** 全綠。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是

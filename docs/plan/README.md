@@ -18,7 +18,7 @@
 | [`2026-09-28-security-audit.md`](2026-09-28-security-audit.md) | 全系統安全與正確性審查（4 個 reviewer，40+ 項） | P0～P2 已修（第八節 #93～#95、#100）；文末「其他功能缺失」殘餘待估 | 待估 |
 | [`2026-09-28-springboot4-upgrade.md`](2026-09-28-springboot4-upgrade.md) | Spring Boot 3.5 → 4.1.1 + Flowable 6.8.1 → 8.0.x 分階段升級 | Stage 0–4 ✅／Stage 5 起待開工 | 8 |
 | [`2026-09-28-adr-001-form-service-consolidation.md`](2026-09-28-adr-001-form-service-consolidation.md) | form-service 併入 bpm-core 的決策紀錄 | ✅ 已完成（＝升級 Stage 3，2026-09-28） | 0 |
-| [`2026-09-28-remediation-backlog.md`](2026-09-28-remediation-backlog.md) | 工程品質與安全性改進項（R-01 ~ R-25） | R-01／02／03／05／06／09／10／11／12／13／18／20 ✅；R-04 步驟 1 ✅（剩 0.5）；R-07／08／14～17／19／21／22／24／25 待開工 | 11.5 |
+| [`2026-09-28-remediation-backlog.md`](2026-09-28-remediation-backlog.md) | 工程品質與安全性改進項（R-01 ~ R-25） | R-01／02／03／05／06／09／10／11／12／13／18／20 ✅；R-04 步驟 1 ✅（剩 0.5）；R-07／08／14～17／19／21／22／24／25 待開工（R-23 內部路徑已封，外部 `_` 變數過濾殘留併入 R-19） | 11.5 |
 
 剩餘約 **19.5 人日**（升級 Stage 5–6 共 8 ＋ remediation 未完成項約 11.5；不含 security-audit 文末殘餘待估與 `docs/backend-development-backlog.md` 的功能待辦 —— 後者 2026-10-02 統計為 94 項／剩餘估時上限 ~96 人天）。ADR-001 的 3 人日已含在升級計畫的 22 人日內，且已完成，勿重複計算。
 
