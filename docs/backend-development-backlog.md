@@ -1,7 +1,7 @@
 # Greyhound BPM 平台 — 後端開發工項清單
 
 > 產出日期：2026-06-08
-> 最後更新：2026-10-03（#96 完成路徑通知收斂、#51 DLQ 告警與人工重放、#3 催辦開放系統受理人、#6 HMAC fallback 移除、currentTask 補 taskId）
+> 最後更新：2026-10-03（Wave A：#23 逾期提醒、#1 `returnTo=initiator`、#7 流程撤回、#51 parking 留存；同日稍早：#96 完成路徑通知收斂、#51 DLQ 告警與重放、#3 催辦開放受理人、#6 HMAC fallback 移除、currentTask 補 taskId）
 > 基於規格文件 vs 實際程式碼差異分析
 >
 > 狀態：✅ 完成　🟡 部分完成（說明欄寫缺什麼）　⬜ 未開始
@@ -31,13 +31,13 @@
 
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
-| 1 | 退件機制完善 | `returnTo=initiator` 邏輯、BPMN Gateway 退回路由 | 3d | 🟡 退回走 BPMN 預設路徑到「申請者補件」；缺 `returnTo=initiator`／退到任意節點 |
-| 2 | 拒絕（終止）機制 | `rejected=true` 流程終止分支、通知申請人 | 2d | 🟡 `rejected=true` 導向終止、結案結果回報已修；缺通知申請人（無程式發出 `process_rejected`） |
+| 1 | 退件機制完善 | `returnTo=initiator` 邏輯、BPMN Gateway 退回路由 | 3d | ✅ **2026-10-03 完成 `returnTo=initiator`**（`f124fb5`，merge `bb1e286`）：complete 接受 `returnTo`（只認小寫 `initiator`；與 approved／rejected 衝突、非 complete action 皆 400 零副作用）；purchase-approval gw2 新增 `flowReturnToInitiator` → `revisionFromManager`（財務退回直達起點）；leave 預設路徑本來就是起點、不加同目標分支；稽核接上 `TASK_RETURN_INITIATOR`；通知沿用 #96（恰一則）。線上實測：財務 `returnTo=initiator` → 任務落「申請者補件（主管退回）」、稽核型別正確、衝突 400 零副作用。⚠️ **「退到任意節點」仍未做**：`ChangeActivityStateBuilder` 會繞過閘道且不觸發 TASK_COMPLETED（通知語意破口），需另立設計工項 |
+| 2 | 拒絕（終止）機制 | `rejected=true` 流程終止分支、通知申請人 | 2d | ✅ **2026-10-03 追認完成**：`rejected=true` 導向終止與結案結果回報早已可用；通知申請人的 `process_rejected` 已由 #33（`6d37d43`，merge `26417bb`）補上並線上實測（拒絕信件在 MailHog）。本列先前 🟡 的兩個缺口皆已關閉 |
 | 3 | 加簽 - 動態子任務 | 建立 Sub Task、原任務暫停、加簽完成恢復、多人加簽 | 5d | ✅ `CountersignController`；有未完成子任務時不得 complete（409） |
 | 4 | 加簽 - Call Activity | 預定義加簽子流程模板整合、前端 Call Activity 節點配置 | 3d | ⬜ |
 | 5 | 代理人機制 | `orgService.resolveEffective()` 考慮代理人、自動轉派 | 2d | 🟡 `resolveEffective` 已有；持有人全不在時改派代理人（68d8518）；缺一般指派與既有任務的自動轉派 |
 | 6 | 催辦功能 | 催辦 API、觸發通知、防頻繁催辦限制 | 1d | ✅ **2026-10-02 完成**（`6d37d43`＋前端 `a6703ee`，merge `26417bb`）。`POST /api/tasks/urge?processInstanceId=`：授權僅申請人（非參與者 404／參與者非申請人 403）、Redis `SetIfAbsent` 30 分鐘冷卻（案件為 key、fail-open；產品參數待確認）、收件人＝目前待處理任務的 assignee（候選任務送候選人、群組無 email → 409）。線上實測：200 `{cooldownMinutes:30, recipients:[mgr001]}`／第二次 429／主管 403／未知案件 404，MailHog 收到「催辦提醒」信。⚠️ 成功催辦寫 `TASK_URGE` 稽核（收尾 `0958d3e`）。2026-10-02 裁決：system 案件開放 `bpm:external:revision` 受理人催辦。✅ **2026-10-03 已實作**（`643d37c`，merge `fd54160`）：`ApplicantResolver.resolveApplicant` 抽出三段共用規則（`resolve(execution)` 保留短路讀取），`urgeTask` 以同一規則判定——系統案件受理人 200、自然人案件受理人仍 403（不得放寬）；查無受理人＝沿用 403／404 分流、權限中心故障＝503，被拒零副作用。線上實測：dir001 200（recipients `[mgr001]`、TASK_URGE、MailHog 催辦信）／mgr001 403／user002 404／重複 429；自然人案件＋dir001 → 404 且零稽核 |
-| 7 | 流程撤回（申請人撤案） | 撤回 API、判斷是否可撤回（第一節點尚未處理） | 2d | ⬜ |
+| 7 | 流程撤回（申請人撤案） | 撤回 API、判斷是否可撤回（第一節點尚未處理） | 2d | ✅ **2026-10-03 完成**（`f9cf773`，merge `24a7f87`）：`POST /api/process-instances/{id}/cancel`；申請人限定（`ApplicantIdentityLookup`，onBehalfOf 可；系統案件不開放）、參與者非申請人 403／非參與者 404、已有完成任務 409、已結束／重複 404；`deleteProcessInstance`＋`PROCESS_CANCEL` 稽核（fail-closed）。線上實測：撤回 200＋runtime 消失、403／404／409 全對。⚠️ 殘餘：撤回不通知現任受理人（受理人只會發現待辦消失）、`reason` 無長度上限（超長會 500 且零副作用） |
 
 ### 1.2 OrgService / PermService 整合（目前為 Mock）
 
@@ -68,7 +68,7 @@
 |---|------|------|------|------|
 | 21 | Callback 接收端 | HMAC Token 驗證、冪等檢查（Redis SetIfAbsent）、Message Correlation | 3d | ⬜ |
 | 22 | External Worker Task 支援 | 輪詢認領機制 | 3d | ⬜ |
-| 23 | Timer Event 超時處理 | 超時自動觸發、超時預警通知 | 2d | ⬜ **2026-10-02 裁決：由本工項設計 timeout 事件的替代**（boundary timer＋政策：通知誰、是否自動動作）；現行 webhook `timeout` 選項維持移除、payload 休眠 |
+| 23 | Timer Event 超時處理 | 超時自動觸發、超時預警通知 | 2d | ✅ **2026-10-03 完成**（`2f8756e`，merge `4d6a6fd`）。政策（使用者裁決）：**只提醒現任受理人、不自動動作**。機制：BPMN **非中斷式** boundary timer（`cancelActivity="false"`）＋ `timeoutNotifyDelegate`（`JavaDelegate`）→ `NotifyPublisher.taskTimedOut` 事件 `task_timeout` → EmailConsumer。⚠️ 實測推翻「current activity 是 boundary」的假設：delegate 掛在 boundary 後 serviceTask 時 current activity 是 serviceTask，改由 incoming flow 反推；中斷式接法明確擋下（同 command 任務列未 flush，靠查不到任務擋不住）。線上實測：5 秒 timer → 恰 1 封「任務已逾時」；任務保留、流程仍在跑。webhook `timeout` 選項維持移除、payload 休眠（不同機制） |
 | 24 | Signal Event 廣播 | 一對多喚醒流程 | 1d | ⬜ |
 
 ### 1.5 Webhook 觸發（Listener 已建，Payload 需完善）
@@ -126,7 +126,7 @@
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
 | 50 | JVM 記憶體配置 | Dockerfile 加入 JAVA_TOOL_OPTIONS、docker-compose resource limits | 0.5d | ⬜ Dockerfile 無 `JAVA_TOOL_OPTIONS`；prod compose 只有 mssql 有記憶體上限 |
-| 51 | RabbitMQ DLQ 告警 | Dead Letter Queue 消費者 + 告警通知 | 1d | ✅ **2026-10-03 完成**（`7a1dcef`，merge `1d9841c`）。`DeadLetterConsumer` 除 ERROR log 外新增 `DLQ_MESSAGE` 稽核（operator=system；detail 只放非敏感中介資料：queue／event／messageId／payload 長度／x-death 摘要，不放 payload）＋選配 email（`bpm.dlq.alert-recipients`，預設空＝不寄）。告警三段各自 try/catch：**DLQ 無 DLX，consumer 拋例外＝無限 requeue**。新增 `POST /api/admin/dlq/replay?queue=bpm\|audit&max=`（ROLE_ADMIN）：`basicGet`＋成功才 ack，目的地取 `x-death` 最舊一筆的 exchange／routing key（含 `dlx.exchange` 防呆；缺 x-death 走 queue 對照 fallback），失敗 nack 放回並停止；`DLQ_REPLAY` 稽核 operator=呼叫者。⚠️ **待裁決的取捨**：consumer 正常返回即 ack，訊息離開佇列——「進 DLQ 即告警」與「留存待人工重放」互斥；重放目前涵蓋「consumer 停用／服務中斷期間累積」的訊息（詳見 round7 handoff） |
+| 51 | RabbitMQ DLQ 告警 | Dead Letter Queue 消費者 + 告警通知 | 1d | ✅ **2026-10-03 完成**（`7a1dcef`，merge `1d9841c`）。`DeadLetterConsumer` 除 ERROR log 外新增 `DLQ_MESSAGE` 稽核（operator=system；detail 只放非敏感中介資料：queue／event／messageId／payload 長度／x-death 摘要，不放 payload）＋選配 email（`bpm.dlq.alert-recipients`，預設空＝不寄）。告警三段各自 try/catch：**DLQ 無 DLX，consumer 拋例外＝無限 requeue**。新增 `POST /api/admin/dlq/replay?queue=bpm\|audit&max=`（ROLE_ADMIN）：`basicGet`＋成功才 ack，目的地取 `x-death` 最舊一筆的 exchange／routing key（含 `dlx.exchange` 防呆；缺 x-death 走 queue 對照 fallback），失敗 nack 放回並停止；`DLQ_REPLAY` 稽核 operator=呼叫者。⚠️ **待裁決的取捨**：consumer 正常返回即 ack，訊息離開佇列——「進 DLQ 即告警」與「留存待人工重放」互斥；重放目前涵蓋「consumer 停用／服務中斷期間累積」的訊息。✅ **同日 parking 收尾**（`5c7531e`，merge `dcf29d3`）：告警後把死信重發布到 `dlq.parking.bpm`／`dlq.parking.audit`（無 consumer、無 TTL）再 ack，origin 以自訂標頭 `x-bpm-origin-*` 保留（RabbitMQ 3.13 起不再維護客戶端重發布的 x-death，降為備援）；重放改讀 parking（queue 值為 `dlq.parking.*`）。線上實測：真實死信 → parking=1、dlq=0、`DLQ_MESSAGE`；replay `replayed:2`（primary＋fallback）→ 通知成功送達、webhook 再失敗自動 re-park；`DLQ_REPLAY` 稽核 `fallbackUsed:1` |
 | 52 | 多版本流程並行處理 | 確保新案用新版、舊案繼續舊版的邏輯正確 | 1d | ✅ **2026-10-02 完成**（`a80d323`，merge `f04f584`）。`MultiVersionProcessTest` 3 條（真實 DB）：v2 部署後新實例走 v2、v1 舊實例連完成後的路由都走 v1；表單版本鎖（發布 v2 後舊實例鎖 v1、同定義下新實例鎖 v2 的內建對照）；新舊並存的版本查詢與 `resourcedata`。只加測試、未發現缺陷 |
 | 53 | BPMN 環境變數替換 | 部署時依環境替換 `${ENV_*}` 變數 | 1d | ⬜ |
 
@@ -298,10 +298,10 @@
 
 | 類別 | 工項數 | ✅ | 🟡 | ⬜ | 剩餘估時（上限） |
 |------|--------|----|----|----|---------|
-| 流程引擎核心 | 7 | 2 | 3 | 2 | 12d |
+| 流程引擎核心 | 7 | 5 | 1 | 1 | 5d |
 | Org/Perm 正式整合 | 5 | 3 | 2 | 0 | 5d |
 | 外部系統接入 | 8 | 7 | 1 | 0 | 1d |
-| 非同步/Callback | 4 | 0 | 0 | 4 | 9d |
+| 非同步/Callback | 4 | 1 | 0 | 3 | 7d |
 | Webhook | 4 | 3 | 0 | 1 | 2d |
 | 通知服務 | 5 | 4 | 0 | 1 | 2d |
 | BPMN Lint | 5 | 4 | 1 | 0 | 1d |
@@ -312,7 +312,7 @@
 | 跨服務整合 | 6 | 1 | 4 | 1 | 17d |
 | 2026-09-29 新增 | 29 | 28 | 0 | 1 | 12.5d |
 | 2026-10-02 新增 | 2 | 2 | 0 | 0 | 0d |
-| **合計** | **96** | **61** | **14** | **21** | **~84 人天** |
+| **合計** | **96** | **65** | **12** | **19** | **~75 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -438,6 +438,24 @@
 > 統計：✅ 61、🟡 14、⬜ 21；剩餘上限 ~84 人天。
 > ⚠️ dev 庫新增探測殘留：`probe-96ext`（2 版；v1 卡在 `system:erp`，無害）、
 > 已停用外部系統 `e2e-urge3`／`e2e-96`。
+>
+> **2026-10-03（Wave A）—— #23＋#1＋#7＋#51 parking 完成；後端 927、前端 165 全綠。**
+> 四個獨立 worktree 並行（同時 4 個），全部 merge 進 main：
+> #23 逾期提醒（`2f8756e`→`4d6a6fd`）：非中斷式 boundary timer＋`timeoutNotifyDelegate`＋
+> `task_timeout` 事件；只通知受理人、不自動動作。⚠️ 實測推翻「current activity 是
+> boundary」的假設（delegate 掛 serviceTask 時不是），改由 incoming flow 反推。
+> #1 `returnTo=initiator`（`f124fb5`→`bb1e286`）：purchase gw2 新分支回起點、
+> `TASK_RETURN_INITIATOR` 稽核接上、變數每輪重寫防殘留；「任意節點」未做（另立設計）。
+> #7 流程撤回（`f9cf773`→`24a7f87`）：`POST /{id}/cancel`、申請人限定、409 條件、
+> `PROCESS_CANCEL` 稽核接上。
+> #51 parking 留存（`5c7531e`→`dcf29d3`）：告警後 parking、origin 自訂標頭、
+> 重放只讀 parking；⚠️ 修正前一輪「x-death 被剝掉」的前提（3.13 不再維護但不剝除）。
+> PM 收尾：`DlqAlertReplayTest` 隔離背景通知重試噪音（修全套件 flake）。
+> 線上實測：撤回 200／403／404／409；財務 `returnTo=initiator` → 申請者補件（主管退回）
+> ＋稽核；5 秒 timer → 恰 1 封逾時信且任務保留；真實死信 parking=1→replay `replayed:2`
+> （primary＋fallback）→ 通知送達、webhook re-park。`acceptance-test` PASS 7 / FAIL 0。
+> 統計：✅ 65、🟡 12、⬜ 19；剩餘上限 ~75 人天。
+> ⚠️ dev 庫新增探測殘留：`probe-23timer`；`probe-96ext` 與停用外部系統同前。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是

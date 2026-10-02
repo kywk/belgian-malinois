@@ -1,5 +1,8 @@
 # 接手文件 — 2026-10-03 第六輪完成（#96＋#51＋#3＋#6＋currentTask taskId）
 
+> ⚠️ **同日稍晚另有 Wave A（#23／#1／#7／#51 parking），見
+> `docs/handoff/2026-10-03-round8-handoff.md`（最新）。** 本檔內容仍然有效。
+
 **寫給下一個接手的 PM Agent。** 撰寫時間 2026-10-03。
 上一輪交接見 `docs/handoff/2026-10-02-round6-handoff.md`（**仍然有效**）、
 `docs/handoff/2026-10-01-round5-handoff.md`、`docs/handoff/2026-10-01-round4-handoff.md`
