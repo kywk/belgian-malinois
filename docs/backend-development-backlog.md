@@ -1,7 +1,7 @@
 # Greyhound BPM 平台 — 後端開發工項清單
 
 > 產出日期：2026-06-08
-> 最後更新：2026-10-01（#91 完整完成：方向 A 復原 + 方向 B + 漏報①② + 測試缺口）
+> 最後更新：2026-10-03（#96 完成路徑通知收斂、#51 DLQ 告警與人工重放、#3 催辦開放系統受理人、#6 HMAC fallback 移除、currentTask 補 taskId）
 > 基於規格文件 vs 實際程式碼差異分析
 >
 > 狀態：✅ 完成　🟡 部分完成（說明欄寫缺什麼）　⬜ 未開始
@@ -36,7 +36,7 @@
 | 3 | 加簽 - 動態子任務 | 建立 Sub Task、原任務暫停、加簽完成恢復、多人加簽 | 5d | ✅ `CountersignController`；有未完成子任務時不得 complete（409） |
 | 4 | 加簽 - Call Activity | 預定義加簽子流程模板整合、前端 Call Activity 節點配置 | 3d | ⬜ |
 | 5 | 代理人機制 | `orgService.resolveEffective()` 考慮代理人、自動轉派 | 2d | 🟡 `resolveEffective` 已有；持有人全不在時改派代理人（68d8518）；缺一般指派與既有任務的自動轉派 |
-| 6 | 催辦功能 | 催辦 API、觸發通知、防頻繁催辦限制 | 1d | ✅ **2026-10-02 完成**（`6d37d43`＋前端 `a6703ee`，merge `26417bb`）。`POST /api/tasks/urge?processInstanceId=`：授權僅申請人（非參與者 404／參與者非申請人 403）、Redis `SetIfAbsent` 30 分鐘冷卻（案件為 key、fail-open；產品參數待確認）、收件人＝目前待處理任務的 assignee（候選任務送候選人、群組無 email → 409）。線上實測：200 `{cooldownMinutes:30, recipients:[mgr001]}`／第二次 429／主管 403／未知案件 404，MailHog 收到「催辦提醒」信。⚠️ 成功催辦寫 `TASK_URGE` 稽核（收尾 `0958d3e`）。2026-10-02 裁決：system 案件開放 `bpm:external:revision` 受理人催辦（**待實作**） |
+| 6 | 催辦功能 | 催辦 API、觸發通知、防頻繁催辦限制 | 1d | ✅ **2026-10-02 完成**（`6d37d43`＋前端 `a6703ee`，merge `26417bb`）。`POST /api/tasks/urge?processInstanceId=`：授權僅申請人（非參與者 404／參與者非申請人 403）、Redis `SetIfAbsent` 30 分鐘冷卻（案件為 key、fail-open；產品參數待確認）、收件人＝目前待處理任務的 assignee（候選任務送候選人、群組無 email → 409）。線上實測：200 `{cooldownMinutes:30, recipients:[mgr001]}`／第二次 429／主管 403／未知案件 404，MailHog 收到「催辦提醒」信。⚠️ 成功催辦寫 `TASK_URGE` 稽核（收尾 `0958d3e`）。2026-10-02 裁決：system 案件開放 `bpm:external:revision` 受理人催辦。✅ **2026-10-03 已實作**（`643d37c`，merge `fd54160`）：`ApplicantResolver.resolveApplicant` 抽出三段共用規則（`resolve(execution)` 保留短路讀取），`urgeTask` 以同一規則判定——系統案件受理人 200、自然人案件受理人仍 403（不得放寬）；查無受理人＝沿用 403／404 分流、權限中心故障＝503，被拒零副作用。線上實測：dir001 200（recipients `[mgr001]`、TASK_URGE、MailHog 催辦信）／mgr001 403／user002 404／重複 429；自然人案件＋dir001 → 404 且零稽核 |
 | 7 | 流程撤回（申請人撤案） | 撤回 API、判斷是否可撤回（第一節點尚未處理） | 2d | ⬜ |
 
 ### 1.2 OrgService / PermService 整合（目前為 Mock）
@@ -76,7 +76,7 @@
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
 | 25 | Webhook Payload 完整化 | 依規格補齊所有事件欄位（task.created、completed、rejected、timeout、process.completed） | 3d | ✅ **2026-10-02 完成**（`fcfb951`／`792e2db`，merge `4af4e53`）。依使用者裁決沿用 P2-1 紅線：**不送** `variables`／`comment`／`operatorName`／候選人；補 `task.timeout` 的 `assignee`／`dueDate`／`overdueHours`（整點小時無條件捨去、下限 0、`dueDate=null` → `null`）。spec §11.4 欄位表改以實作為準。⚠️ **重大上游事實**：Flowable 7.2.0 **不發 timeout task event**（`BaseTaskListener` 只有 create／assignment／complete／delete／all；整個 flowable-engine 無 `timeout` 字面值，2026-10-02 以 `javap -p -c` 驗證）→ `event="timeout"` 目前永遠不投遞；payload 已依合約墊好，替代機制已裁決：設計器 2026-10-02 移除 `timeout` 選項（`d53d668`，merge `34c6756`），後端保留相容 |
-| 26 | HMAC 簽章實作 | webhook payload HMAC-SHA256 簽章 | 1d | ✅ **2026-10-02 收尾**（測試 `e3eb4cc`，merge `6c19e2a`）。簽章走 `X-BPM-Signature` 標頭、對實際 body 計算；`WebhookSignatureHeadersTest` 釘住重放標頭（`X-BPM-Timestamp`＝body `deliveryTimestamp`、`X-BPM-Delivery-Id` 為 UUID 且兩筆不重複、body 不得含 `hmacSignature`）。另補 prod 啟動防護（`d34c3c6`，merge `0aa4d50`）：prod 未設或沿用預設 `bpm-webhook-secret` → 拒絕啟動。2026-10-02 裁決：移除 `WebhookConsumer` 的 `@Value` fallback（保留 base dev 預設）（**待實作**） |
+| 26 | HMAC 簽章實作 | webhook payload HMAC-SHA256 簽章 | 1d | ✅ **2026-10-02 收尾**（測試 `e3eb4cc`，merge `6c19e2a`）。簽章走 `X-BPM-Signature` 標頭、對實際 body 計算；`WebhookSignatureHeadersTest` 釘住重放標頭（`X-BPM-Timestamp`＝body `deliveryTimestamp`、`X-BPM-Delivery-Id` 為 UUID 且兩筆不重複、body 不得含 `hmacSignature`）。另補 prod 啟動防護（`d34c3c6`，merge `0aa4d50`）：prod 未設或沿用預設 `bpm-webhook-secret` → 拒絕啟動。2026-10-02 裁決：移除 `WebhookConsumer` 的 `@Value` fallback（保留 base dev 預設）。✅ **2026-10-03 已實作**（`d2836d9`，merge `283ca3d`）：`@Value("${bpm.webhook.hmac-secret}")` 無預設，屬性缺席即啟動失敗（fail-fast）；dev 預設只在 base yml；`WebhookHmacSecretValidatorTest` 的「三處同步」斷言改為「兩處」（yml／validator 常數），新增 `WebhookConsumerHmacSecretRequiredTest` 3 條（缺席啟動失敗／提供即啟動／annotation 無 `:` 預設） |
 | 27 | Webhook 重試機制 | 失敗指數退避重試（1s→2s→4s，max 3次）、DLQ | 2d | ✅ **2026-10-02 收尾**（測試 `e3eb4cc`，merge `6c19e2a`）。`WebhookRetryDlqTest` 以 `WebhookTestSink` 失敗注入證明：暫態失敗 2 次後成功（間隔對得上執行期 `RabbitProperties`）、持續失敗恰 3 次後進 `dlq.bpm`（帶 `x-death: bpm.webhook.queue/rejected`）、SSRF 拒絕 log ERROR 且**不重試不進 DLQ**。⚠️ 實際語意是 `max-attempts=3`＝共 3 次嘗試（2 個 backoff：1s、2s）；原描述「1s→2s→4s」不精確，已按實測記錄 |
 | 28 | payloadTemplate 自訂 Payload | 允許外部系統客製 webhook payload 結構 | 2d | ⬜ |
 
@@ -88,7 +88,7 @@
 | 30 | NotifyTemplate CRUD API | 通知模板管理、變數替換引擎 | 2d | ✅ `/api/admin/notify-templates`，`${var}` 替換 |
 | 31 | Email 通知完整實作 | 模板渲染 + 發送（spring-boot-starter-mail 已引入） | 2d | ✅ 收件人仍寫死為 `userId@company.com` |
 | 32 | Teams 通知整合 | Microsoft Teams webhook 推送 | 2d | ⬜ |
-| 33 | 通知觸發事件完整化 | 任務指派、認領、加簽、催辦、退回、拒絕、完成、超時預警 | 3d | ✅ **2026-10-02 完成**（`6d37d43`／`fdab9ce`，merge `26417bb`）。新增唯一發送端 `NotifyPublisher`：退回（`approved=false` 且非拒絕）／拒絕（`rejected=true`）／結案（核准且流程結束，避免與拒絕信矛盾）／認領（收件人＝其他候選人）／加簽（standalone task 不經 BPMN listener，由建立端呼叫、事件沿用 `task_assigned`）／催辦。通知吞例外不影響簽核；P2-1 紅線守住。線上實測：退回／拒絕／核准／催辦信件都在 MailHog；認領信亦在 acceptance 流程中出現。⚠️ 超時預警不做（Flowable 7.2.0 不發 timeout 事件）；external API 的完成路徑仍不通知（見殘餘） |
+| 33 | 通知觸發事件完整化 | 任務指派、認領、加簽、催辦、退回、拒絕、完成、超時預警 | 3d | ✅ **2026-10-02 完成**（`6d37d43`／`fdab9ce`，merge `26417bb`）。新增唯一發送端 `NotifyPublisher`：退回（`approved=false` 且非拒絕）／拒絕（`rejected=true`）／結案（核准且流程結束，避免與拒絕信矛盾）／認領（收件人＝其他候選人）／加簽（standalone task 不經 BPMN listener，由建立端呼叫、事件沿用 `task_assigned`）／催辦。通知吞例外不影響簽核；P2-1 紅線守住。線上實測：退回／拒絕／核准／催辦信件都在 MailHog；認領信亦在 acceptance 流程中出現。⚠️ 超時預警不做（Flowable 7.2.0 不發 timeout 事件）；external API 的完成路徑仍不通知（見殘餘）→ ✅ **2026-10-03 #96 已收斂**（外部完成也發通知） |
 
 ### 1.7 BPMN Lint 驗證（Service 已建，規則需補齊）
 
@@ -126,7 +126,7 @@
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
 | 50 | JVM 記憶體配置 | Dockerfile 加入 JAVA_TOOL_OPTIONS、docker-compose resource limits | 0.5d | ⬜ Dockerfile 無 `JAVA_TOOL_OPTIONS`；prod compose 只有 mssql 有記憶體上限 |
-| 51 | RabbitMQ DLQ 告警 | Dead Letter Queue 消費者 + 告警通知 | 1d | 🟡 `DeadLetterConsumer` 只記 ERROR log；缺主動告警。**2026-10-02 裁決：下一輪做，並補人工重放入口** |
+| 51 | RabbitMQ DLQ 告警 | Dead Letter Queue 消費者 + 告警通知 | 1d | ✅ **2026-10-03 完成**（`7a1dcef`，merge `1d9841c`）。`DeadLetterConsumer` 除 ERROR log 外新增 `DLQ_MESSAGE` 稽核（operator=system；detail 只放非敏感中介資料：queue／event／messageId／payload 長度／x-death 摘要，不放 payload）＋選配 email（`bpm.dlq.alert-recipients`，預設空＝不寄）。告警三段各自 try/catch：**DLQ 無 DLX，consumer 拋例外＝無限 requeue**。新增 `POST /api/admin/dlq/replay?queue=bpm\|audit&max=`（ROLE_ADMIN）：`basicGet`＋成功才 ack，目的地取 `x-death` 最舊一筆的 exchange／routing key（含 `dlx.exchange` 防呆；缺 x-death 走 queue 對照 fallback），失敗 nack 放回並停止；`DLQ_REPLAY` 稽核 operator=呼叫者。⚠️ **待裁決的取捨**：consumer 正常返回即 ack，訊息離開佇列——「進 DLQ 即告警」與「留存待人工重放」互斥；重放目前涵蓋「consumer 停用／服務中斷期間累積」的訊息（詳見 round7 handoff） |
 | 52 | 多版本流程並行處理 | 確保新案用新版、舊案繼續舊版的邏輯正確 | 1d | ✅ **2026-10-02 完成**（`a80d323`，merge `f04f584`）。`MultiVersionProcessTest` 3 條（真實 DB）：v2 部署後新實例走 v2、v1 舊實例連完成後的路由都走 v1；表單版本鎖（發布 v2 後舊實例鎖 v1、同定義下新實例鎖 v2 的內建對照）；新舊並存的版本查詢與 `resourcedata`。只加測試、未發現缺陷 |
 | 53 | BPMN 環境變數替換 | 部署時依環境替換 `${ENV_*}` 變數 | 1d | ⬜ |
 
@@ -225,7 +225,7 @@
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
 | 95 | 文件與現況同步（#68 範圍外清單） | 修正現行文件與程式碼落差：`CLAUDE.md` 的 R-18 阻斷／無應用層認證敘述、`docs/plan/README.md` 狀態表（49.5 → 19.5 人日）、spec §4.3 `returnTo`（未實作）、§9.4 status（駁回是 `completed + result=rejected`）、§11.3 `getManagerAtLevel`、Phase 4/5 逐項對程式碼勾選；歷史快照（security-audit／handover）只加註 | 0.2d | ✅ **2026-10-02 完成**（`8da65e9`，merge `b471e69`）。每一處附 file:line；未勾：Phase 4 CI/CD（R-07／R-08）、Phase 5 Call Activity（#4）。⚠️ 另發現 R-19／R-23 的外部 `_` 變數過濾殘留（程式缺陷）—— 已於同日修復：R-19 修 `completeTask`、收尾 `c05afae` 修 `startProcess`（同一份 helper） |
-| 96 | 完成路徑通知收斂 | 外部 API（`ExternalApiController.completeTask`）完成任務時也發退回／拒絕／結案通知；收斂成全域 `TASK_COMPLETED`／`PROCESS_COMPLETED` listener（`FlowableConfig` 註冊），避免 HTTP 路徑與外部路徑兩套規則 | 1.5d | ⬜ **2026-10-02 使用者裁決：下一輪主軸之一**（與 #51 同批） |
+| 96 | 完成路徑通知收斂 | 外部 API（`ExternalApiController.completeTask`）完成任務時也發退回／拒絕／結案通知；收斂成全域 `TASK_COMPLETED`／`PROCESS_COMPLETED` listener（`FlowableConfig` 註冊），避免 HTTP 路徑與外部路徑兩套規則 | 1.5d | ✅ **2026-10-03 完成**（`2cf789d`，merge `7f88ac2`）。新增 `CompletionNotifyListener`（全域 listener）：`TASK_COMPLETED` 發 returned／rejected，`PROCESS_COMPLETED` 只在 `applicantEventFor(vars,true)==process_completed` 時發（恰好一則、不重複）；補件與 standalone 加簽略過；`TaskController` 移除直接呼叫（防雙發）。⚠️ **實測發現原設計不足**：同 command 剛寫入的 `approved`／`rejected` 不在歷史變數查詢結果（未 flush）——改用 `CommandContext` attribute 暫存同 command 的完成關卡與 vars，歷史＋execution 只作 fallback。申請人判定抽成 `ApplicantIdentityLookup` 與催辦共用。線上實測：外部 API 完成最後一關 → 申請人（onBehalfOf）恰好 1 封「已核准」；HTTP 路徑亦恰好 1 封 |
 
 ---
 
@@ -307,12 +307,12 @@
 | BPMN Lint | 5 | 4 | 1 | 0 | 1d |
 | 稽核 Log | 4 | 3 | 0 | 1 | 3d |
 | 通用 Delegate | 7 | 0 | 1 | 6 | 12d |
-| 基礎設施 | 4 | 1 | 1 | 2 | 2.5d |
+| 基礎設施 | 4 | 2 | 0 | 2 | 1.5d |
 | Form Service | 6 | 2 | 2 | 2 | 6d |
 | 跨服務整合 | 6 | 1 | 4 | 1 | 17d |
 | 2026-09-29 新增 | 29 | 28 | 0 | 1 | 12.5d |
-| 2026-10-02 新增 | 2 | 1 | 0 | 1 | 1.5d |
-| **合計** | **96** | **59** | **15** | **22** | **~86.5 人天** |
+| 2026-10-02 新增 | 2 | 2 | 0 | 0 | 0d |
+| **合計** | **96** | **61** | **14** | **21** | **~84 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -418,6 +418,26 @@
 > 200／403／403／401＋`EXPORT_DATA` 留痕；R-19 自我核准 403 且零副作用、未授權 key 403、
 > `_` 變數 400、系統持有任務可完成（200）。⚠️ dev 庫新增探測殘留 `probe-r19e2e`
 > 與已停用外部系統 `probe19e2e`。
+>
+> **2026-10-03（第六輪）—— #96＋#51＋#3＋#6＋currentTask taskId 完成；後端 881、前端 165 全綠。**
+> 五個獨立 worktree 並行（上限 5），全部 merge 進 main（無殘留分支）：
+> #96 完成路徑通知收斂（`2cf789d`→`7f88ac2`）：全域 `CompletionNotifyListener`，
+> 外部 API 完成也發通知；TASK／PROCESS_COMPLETED 恰好一則；⚠️ 實測發現同一 command
+> 剛寫入的歷史變數未 flush，改用 `CommandContext` 暫存完成關卡與 vars。
+> #51 DLQ 告警＋人工重放（`7a1dcef`→`1d9841c`）：`DLQ_MESSAGE`／`DLQ_REPLAY` 稽核、
+> 選配 email（預設不寄）、`POST /api/admin/dlq/replay`（ROLE_ADMIN）；
+> ⚠️「進 DLQ 即 ack 告警」與「留存待重放」互斥，部署政策待裁決。
+> #3 催辦開放系統受理人（`643d37c`→`fd54160`）：三段規則抽出共用；
+> #6 HMAC fallback 移除（`d2836d9`→`283ca3d`）；currentTask 補 taskId
+> （`134ab0f`→`0169505`；PM 收尾 `7c7094d` 更新 urge javadoc）。
+> 線上實測：催辦 200／403／404／429＋MailHog；外部完成→申請人恰 1 封；
+> HTTP 完成恰 1 封；DLQ 告警稽核（真實 x-death 來源、無 payload）；
+> 探測容器（rabbit listener 停用）累積 2 筆→replay `replayed:2`→恢復後下游消費
+> ＋2 封、`DLQ_REPLAY` 稽核（fallbackUsed:2）；replay 401／403／400；
+> taskId 與 `ACT_RU_TASK` 逐字一致。`acceptance-test` PASS 7 / FAIL 0。
+> 統計：✅ 61、🟡 14、⬜ 21；剩餘上限 ~84 人天。
+> ⚠️ dev 庫新增探測殘留：`probe-96ext`（2 版；v1 卡在 `system:erp`，無害）、
+> 已停用外部系統 `e2e-urge3`／`e2e-96`。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是
