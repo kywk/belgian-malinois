@@ -54,6 +54,11 @@ http.interceptors.response.use(
       }
     } else if (status === 403) {
       ElMessage.error(detail || '權限不足，無法執行此操作')
+    } else if (status === 429) {
+      // #6 催辦的頻率限制（也適用未來任何限流端點）：
+      // 用 warning 而不是 error —— 這不是故障，是刻意設計的冷卻，
+      // 且訊息要告訴使用者「等多久」（後端會把 30 分鐘寫進 message）。
+      ElMessage.warning(detail || '操作過於頻繁，請稍後再試')
     } else if (status === 404) {
       ElMessage.error(detail || '找不到指定的資料')
     } else if (status >= 500) {

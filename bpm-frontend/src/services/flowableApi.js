@@ -13,6 +13,12 @@ export const getTaskComments = (taskId) =>
 export const addTaskComment = (taskId, data) =>
   http.post(`/api/tasks/${taskId}/comments`, data).then(r => r.data)
 
+// 催辦（#6）。用案件 id 而不是 taskId：MyApplications 的 row 只有
+// currentTask.taskName／assignee，沒有 taskId；申請人的收件匣也查不到
+// 審核人的任務（TaskHolderGuard 正確地不讓非持有者列出）。
+export const urgeProcess = (processInstanceId) =>
+  http.post('/api/tasks/urge', null, { params: { processInstanceId } }).then(r => r.data)
+
 // Subtasks (countersign)
 export const createSubtask = (taskId, data) =>
   http.post(`/api/countersign/${taskId}`, data).then(r => r.data)

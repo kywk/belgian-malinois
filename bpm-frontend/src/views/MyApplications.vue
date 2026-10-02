@@ -72,7 +72,11 @@
       </el-table-column>
       <el-table-column label="操作" width="100" v-if="activeTab === 'running'">
         <template #default="{ row }">
-          <el-button size="small" @click="urge(row)">催辦</el-button>
+          <el-button
+            size="small"
+            :loading="urgingId === row.processInstanceId"
+            @click="urge(row)"
+          >催辦</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -84,13 +88,16 @@ import { ref, computed, onMounted } from 'vue'
 import { formatDateTime } from '../utils/datetime.js'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
-import { getProcessInstances, getHistoricProcessInstances } from '../services/flowableApi.js'
+import { getProcessInstances, getHistoricProcessInstances, urgeProcess } from '../services/flowableApi.js'
 
 const auth = useAuthStore()
 const userId = computed(() => auth.userId)
 const activeTab = ref('running')
 const list = ref([])
 const fmt = (t) => formatDateTime(t)
+// 催辦中的案件 id：按鈕轉圈用，同時防止連點造成第二次請求
+// （第二次會被後端的頻率限制擋成 429，但連點本身就不該發生）。
+const urgingId = ref(null)
 
 // ⚠️ #90 連帶修掉一個既有缺陷：'running' 原本回傳 ''，而 element-plus 2.7.3
 // 的 ElTag 對 type 宣告的允許值是
@@ -135,8 +142,26 @@ async function loadData() {
   }
 }
 
-function urge(row) {
-  ElMessage.success(`已發送催辦通知：${row.currentTask?.assignee || '審核人'}`)
+async function urge(row) {
+  // #6：接上真端點（原本只是一個假提示）。
+  //
+  // 為什麼用案件 id：row 上沒有 currentTask.taskId（見 flowableApi.urgeProcess）。
+  // 為什麼不需要在這裡處理 403／429：本專案把所有 HTTP 錯誤提示集中在
+  // http.js 的 response 攔截器（403 → 權限不足、429 → 操作過於頻繁，
+  // 見 http.spec.js），view 若再顯示一次會變成兩個 toast。
+  // 這裡只負責「成功才顯示成功」，並把 rejection 吞掉（否則會是
+  // unhandled rejection）—— 失敗時絕不顯示「已發送」。
+  if (urgingId.value) return
+  urgingId.value = row.processInstanceId
+  try {
+    const res = await urgeProcess(row.processInstanceId)
+    const targets = (res?.recipients || []).join('、')
+    ElMessage.success(`已發送催辦通知：${targets || row.currentTask?.assignee || '審核人'}`)
+  } catch {
+    /* 錯誤提示由 http 攔截器負責 */
+  } finally {
+    urgingId.value = null
+  }
 }
 
 onMounted(loadData)
