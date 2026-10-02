@@ -48,6 +48,13 @@ public enum OperationType {
     TASK_RETURN_INITIATOR,
     TASK_DELEGATE,
     TASK_REASSIGN,
+    /**
+     * 既有任務批次轉派給代理人（#5，{@code POST /api/admin/tasks/forward-substitutes}）。
+     * 與 {@link #TASK_REASSIGN} 的差別是「誰決定的」：後者是任務持有者對
+     * 單一任務的明確改派，這裡是管理員對一批「受理人已設代理人」的任務
+     * 做補償性轉派。用同一個型別會讓稽核查詢分不出這兩件事。
+     */
+    TASK_SUBSTITUTE_FORWARD,
     TASK_COUNTERSIGN,
     TASK_COMMENT,
     TASK_CLAIM,
