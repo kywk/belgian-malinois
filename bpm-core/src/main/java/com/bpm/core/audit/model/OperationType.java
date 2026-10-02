@@ -12,7 +12,7 @@ import java.util.Set;
  *
  * <p>而兩種「未使用」的意義完全不同：
  * <ul>
- *   <li><b>操作還沒實作</b>（例如撤案）—— 值是預留的，沒有缺口。</li>
+ *   <li><b>操作還沒實作</b>（例如退回發起人）—— 值是預留的，沒有缺口。</li>
  *   <li><b>操作已經實作但沒發稽核</b> —— 那是真的缺口。
  *       P2-4 修掉的 {@code CONFIG_CHANGE}、{@code DATA_ACCESS}、
  *       {@code PROCESS_COMPLETE} 全都屬於這一類：功能都在跑，只是沒留軌跡。</li>
@@ -29,6 +29,10 @@ import java.util.Set;
  */
 public enum OperationType {
     PROCESS_START,
+    /**
+     * 撤回（#7）。原本列在 {@code NOT_YET_IMPLEMENTED}（「撤案：無端點」），
+     * 2026-10-03 由 {@code ProcessController.cancelProcess} 接上後移出。
+     */
     PROCESS_CANCEL,
     PROCESS_COMPLETE,
     TASK_APPROVE,
@@ -79,8 +83,12 @@ public enum OperationType {
      * 對應的操作<b>尚未實作</b>，因此不會有程式碼發出這些值。
      *
      * <p>已逐一確認（全 repo 搜尋 cancel／return-initiator
-     * 的實作，皆無命中）。實作其中任何一個時，請一併加上稽核並把它從這裡移除
+     * 的實作，cancel 於 2026-10-03 由 #7 接上後移出，return-initiator 仍無命中）。
+     * 實作其中任何一個時，請一併加上稽核並把它從這裡移除
      * —— {@code OperationTypeCoverageTest} 會確保這件事不被漏掉。
+     *
+     * <p>{@code PROCESS_CANCEL} 原本也在此清單（「撤案：無端點」），
+     * 已於 2026-10-03 由 {@code ProcessController.cancelProcess}（#7）實作後移出。
      *
      * <p>{@code EXPORT_DATA} 原本也在此清單（「資料匯出：無端點」），
      * 已於 2026-10-02 由 {@code GET /api/audit-logs/export}（#40）實作後移出。
@@ -96,7 +104,6 @@ public enum OperationType {
      * 「TASK_UPDATE 和 TASK_APPROVE 差在哪」。
      */
     public static final Set<OperationType> NOT_YET_IMPLEMENTED = Set.of(
-            PROCESS_CANCEL,          // 撤案：無端點
             TASK_RETURN_INITIATOR,   // 退回發起人：無端點（TASK_RETURN 是退回上一站）
             TASK_UPDATE              // 刻意不使用，見上方說明
     );
