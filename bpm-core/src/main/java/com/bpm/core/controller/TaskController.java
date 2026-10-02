@@ -14,6 +14,7 @@ import org.flowable.identitylink.api.IdentityLink;
 import org.flowable.identitylink.api.IdentityLinkType;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
 import org.flowable.common.engine.impl.identity.Authentication;
 import com.bpm.core.dto.TaskActionRequest;
@@ -87,6 +88,11 @@ public class TaskController {
     // onBehalfOf 共用同一份規則（ExternalActorGuard）—— 「規則只能有一份」
     // 是本專案的硬規則，同一條規則有兩套形狀正是 #84／#86 的成因。
     private final com.bpm.core.external.ExternalActorGuard actorGuard;
+    // #3：催辦權與補件關卡（#83）共用同一條申請人規則。系統案件
+    // （initiator=system:* 且無 onBehalfOf）的答案來自權限碼
+    // bpm:external:revision 的持有人 —— 兩處各自實作就會出現
+    // 「催得到的人簽不掉」這種組合型式的差異。
+    private final com.bpm.core.service.ApplicantResolver applicantResolver;
     // #68b：待辦清單的「代某某發起」標示。
     private final com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup;
     // #33／#6：通知的唯一發送端（退回／拒絕／結案／認領／催辦）。
@@ -105,6 +111,7 @@ public class TaskController {
                           // 型式的差異，而那種差異比沒有檢查更難察覺。
                           com.bpm.core.security.TaskHolderGuard holderGuard,
                           com.bpm.core.external.ExternalActorGuard actorGuard,
+                          com.bpm.core.service.ApplicantResolver applicantResolver,
                           com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup,
                           NotifyPublisher notifyPublisher,
                           StringRedisTemplate redis) {
@@ -115,6 +122,7 @@ public class TaskController {
         this.accessGuard = accessGuard;
         this.holderGuard = holderGuard;
         this.actorGuard = actorGuard;
+        this.applicantResolver = applicantResolver;
         this.onBehalfOfLookup = onBehalfOfLookup;
         this.notifyPublisher = notifyPublisher;
         this.redis = redis;
@@ -636,7 +644,7 @@ public class TaskController {
      * {@code GET /api/process-instances} 的 currentTask 補上 taskId
      * （一行），再把這裡換成路徑參數；本方法的授權與頻率邏輯可原樣沿用。
      *
-     * <h2>授權：只有申請人（最小授權）</h2>
+     * <h2>授權：申請人本人，系統案件則是受理人（最小授權）</h2>
      *
      * <p>候選方案有兩個：
      * <ol>
@@ -649,10 +657,41 @@ public class TaskController {
      *       出現在申請人自己的清單上。</li>
      * </ol>
      *
-     * <p>狀態碼：非參與者 → 404（沿用 {@code denyNonParticipant} 的
-     * 不留枚舉管道政策，並留 DATA_ACCESS 稽核）；參與者但不是申請人 →
-     * 403（他本來就看得到這張單，沒有必要對他說謊，而且 403 讓前端能
-     * 給出「只有申請人可以催辦」而不是「找不到資料」）。
+     * <h2>#3（2026-10-02 裁決）：系統案件開放給受理人</h2>
+     *
+     * <p>外部系統發起且沒有 {@code onBehalfOf} 的案件（{@code initiator}
+     * 是 {@code system:<id>}）沒有自然人申請人，改動前<b>沒有任何人</b>
+     * 能催辦。裁決是這一類案件的催辦權開放給補件關卡的同一批受理人
+     * （{@code bpm:external:revision} 的持有人）。
+     *
+     * <p>判定<b>不是</b>在這裡再寫一次：呼叫
+     * {@link com.bpm.core.service.ApplicantResolver#resolveApplicant}
+     * —— 三段順序（{@code onBehalfOf} → {@code initiator} → 系統受理人）
+     * 只有那一份實作。催辦與補件如果分岔，會出現「催得到的人簽不掉」
+     * 這種組合型式的差異。
+     *
+     * <p>⚠️ <b>自然人案件不受影響</b>：{@code initiator} 是人時答案就是
+     * 那個人，即使身兼受理人的 {@code dir001} 也不會因此取得催辦權。
+     * 這是負向對照，不是遺漏。
+     *
+     * <h2>狀態碼與邊界情形</h2>
+     *
+     * <p>非參與者 → 404（沿用 {@code denyNonParticipant} 的
+     * 不留枚舉管道政策，並留 DATA_ACCESS 稽核）；參與者但不是申請人／
+     * 受理人 → 403（他本來就看得到這張單，沒有必要對他說謊，而且 403
+     * 讓前端能給出「只有申請人可以催辦」而不是「找不到資料」）。
+     * 系統案件呼叫者不是受理人時沿用同一分流（參與者 403、否則 404）。
+     *
+     * <p>權限中心邊界（見 {@code ApplicantResolver} —— 它不對外回 null）：
+     * <ul>
+     *   <li><b>查無受理人</b>（持有人清單空／回系統身分 →
+     *       {@link IllegalStateException}）：等於沒有任何人能催辦，
+     *       沿用上面的拒絕分流，<b>不放行</b>。</li>
+     *   <li><b>權限中心呼叫失敗</b>（{@link RestClientException}）：
+     *       無法判定 → 503。fail-closed 是重點：不確定時不得變成 200。</li>
+     * </ul>
+     * 兩者都發生在取得頻率許可與發送通知<b>之前</b>，因此被拒零副作用
+     * —— 沒有通知、沒有 TASK_URGE、不消耗 30 分鐘冷卻。
      *
      * <h2>收件人：目前所有待處理任務的受理人</h2>
      *
@@ -694,7 +733,9 @@ public class TaskController {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "案件不存在: " + processInstanceId);
         }
 
-        String applicant = applicantOf(processInstanceId);
+        // #3：申請人／受理人的判定與補件關卡共用同一條規則（見 urgeApplicantOf）。
+        String applicant = urgeApplicantOf(processInstanceId);
+
         if (applicant == null || !applicant.equals(callerId)) {
             if (accessGuard.isParticipant(processInstanceId, callerId)) {
                 // 參與者但不是申請人：不是探測（他看得到這張單），
@@ -759,6 +800,44 @@ public class TaskController {
         result.put("recipients", List.copyOf(recipients));
         result.put("cooldownMinutes", URGE_COOLDOWN.toMinutes());
         return result;
+    }
+
+    /**
+     * 催辦的申請人／受理人（#3）：三段規則的唯一呼叫點。
+     *
+     * <p>{@code onBehalfOf} 與 {@code initiator} 由這裡自己取，<b>不經</b>
+     * {@link #applicantOf} —— 那個方法只有前兩段，是完成通知用的
+     * 「自然人申請人」，沒有第三段（系統受理人）。而系統案件的答案
+     * （{@code bpm:external:revision} 的持有人）只有權限中心知道，
+     * 因此這一段可能打一次 self HTTP（有 Redis 快取兜住頻率，
+     * 見 {@code BpmPermissionService}）。
+     *
+     * <p>⚠️ 兩種失敗都不得 fail-open，而且都在取得頻率許可與發送通知
+     * <b>之前</b>返回，因此被拒零副作用：
+     * <ul>
+     *   <li>{@link IllegalStateException}（查無受理人／回傳系統身分）＝
+     *       沒有任何人能催辦 → 回 {@code null}，呼叫端走既有的
+     *       參與者 403／非參與者 404 分流。</li>
+     *   <li>{@link RestClientException}（權限中心故障）＝無法判定 → 503。
+     *       不確定時不得變成 200。</li>
+     * </ul>
+     *
+     * @return 保證不是 {@code system:*} 的 userId；查無受理人時 {@code null}
+     */
+    private String urgeApplicantOf(String processInstanceId) {
+        try {
+            return applicantResolver.resolveApplicant(
+                    onBehalfOfLookup.byProcessInstances(List.of(processInstanceId))
+                            .get(processInstanceId),
+                    accessGuard.initiatorOf(processInstanceId));
+        } catch (IllegalStateException e) {
+            log.warn("催辦無法判定受理人（{}）: {}", processInstanceId, e.getMessage());
+            return null;
+        } catch (RestClientException e) {
+            log.warn("權限中心查詢催辦受理人失敗（{}）: {}", processInstanceId, e.toString());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "無法確認催辦權限，請稍後再試");
+        }
     }
 
     /**
