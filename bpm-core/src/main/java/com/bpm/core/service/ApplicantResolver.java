@@ -125,12 +125,31 @@ import org.springframework.stereotype.Service;
  * {@code initiator} 仍然是 {@code system:<id>}，不先取 {@code onBehalfOf}
  * 就等於在未經裁決的情況下替 #68c 選了另一個答案。
  * 三段全部都是 #68c 那句規則的延伸，沒有新增任何政策。
+ *
+ * <h2>#3（2026-10-02 裁決）：催辦權也走同一條規則</h2>
+ *
+ * <p>{@code TaskController.urgeTask} 原本只認自然人申請人
+ * （{@code onBehalfOf} 優先、其次 {@code initiator}），於是
+ * <b>系統發起且沒有 {@code onBehalfOf} 的案件沒有任何人能催辦</b> ——
+ * 那是本類別第三段要修的同一種「沒有自然人」缺陷的另一面。
+ *
+ * <p>裁決是「催辦權開放給同一批系統受理人」：{@link #resolveApplicant}
+ * 因此是本規則<b>唯一</b>的實作，補件關卡與催辦共用它。
+ * 兩者分岔的下場是組合型式的：催得到的人簽不掉、
+ * 或簽得到的人催不動，而兩邊單獨看都正常。
+ *
+ * <p>⚠️ 只有「沒有自然人申請人」的案件才走到第三段。自然人案件的受理人
+ * 即使持有 {@link #PERM_EXTERNAL_REVISION} <b>也沒有</b>催辦權 ——
+ * 那張單的申請人是 initiator，不會因為權限碼而換人。
  */
 @Service
 public class ApplicantResolver {
 
     /**
-     * 「可以承辦外部系統案件補件關卡」的權限碼。
+     * 「可以承辦外部系統案件補件關卡<b>與催辦</b>」的權限碼。
+     *
+     * <p>#3（2026-10-02 裁決）起，它同時回答「系統案件誰可以催辦」
+     * —— 刻意與補件關卡共用一個碼、一個持有人清單（見類別註解）。
      *
      * <p>沿用 {@code domain:resource:action} 三段式（見
      * {@code AuthorityResolver.PERM_FORM_DESIGN} 的命名說明），
@@ -161,24 +180,58 @@ public class ApplicantResolver {
      *         {@link IllegalStateException}（找不到受理人時）
      */
     public String resolve(DelegateExecution execution) {
-        // 第一段：代員工發起 → 那位員工本人。見類別註解「決定順序」。
+        // ⚠️ onBehalfOf 先讀：命中時連 initiator 都不讀（既有行為，
+        // ApplicantResolverTest 釘住這個順序）。因此 initiator 以延遲
+        // 求值傳入共用規則，而不是先讀成兩個字串。
         String onBehalfOf = str(execution.getVariable(InitialAssigneeResolver.ON_BEHALF_OF_VAR));
+        return applyRule(onBehalfOf, () -> str(execution.getVariable("initiator")));
+    }
+
+    /**
+     * 三段規則的共用入口：給「已經有 {@code onBehalfOf} 與 {@code initiator}
+     * 兩個值」的呼叫端（{@code TaskController.urgeTask}，見類別註解 #3）。
+     *
+     * <p>{@code onBehalfOf} 必須放第一個參數 —— 順序就是政策，
+     * 代發案件的 {@code initiator} 仍是 {@code system:<id>}。
+     *
+     * @return 一個<b>保證不是</b> {@code system:*} 的 userId，或拋出
+     *         {@link IllegalStateException}（沒有自然人申請人且權限中心
+     *         也給不出受理人時）
+     */
+    public String resolveApplicant(String onBehalfOf, String initiator) {
+        return applyRule(onBehalfOf, () -> initiator);
+    }
+
+    /**
+     * 三段規則的<b>唯一實作</b>，由 {@link #resolve(DelegateExecution)}
+     * 與 {@link #resolveApplicant(String, String)} 共用。
+     *
+     * <p>{@code initiator} 用 {@link java.util.function.Supplier} 是為了讓
+     * {@code resolve(execution)} 保留既有的短路讀取（見該方法）。
+     * 直接有字串的呼叫端不必知道這件事。
+     *
+     * <p>回傳值一定是自然人（非 {@code system:*}）；找不到時拋
+     * {@link IllegalStateException}，<b>不回 null</b> —— 理由見類別註解
+     * 「找不到受理人時為什麼拋例外」。
+     */
+    private String applyRule(String onBehalfOf, java.util.function.Supplier<String> initiator) {
+        // 第一段：代員工發起 → 那位員工本人。見類別註解「決定順序」。
         if (isSet(onBehalfOf) && !ExternalActorIdentity.isSystemActor(onBehalfOf)) {
             return onBehalfOf;
         }
 
         // 第二段：人工發起 → 申請人本人。既有行為，完全不變。
-        String initiator = str(execution.getVariable("initiator"));
-        if (isSet(initiator) && !ExternalActorIdentity.isSystemActor(initiator)) {
-            return initiator;
+        String initiatorId = initiator.get();
+        if (isSet(initiatorId) && !ExternalActorIdentity.isSystemActor(initiatorId)) {
+            return initiatorId;
         }
 
         // 第三段：沒有自然人申請人 → 系統受理人（政策，見類別註解）。
         String handler = permService.getFirstAvailableUser(PERM_EXTERNAL_REVISION);
         if (!isSet(handler)) {
             throw new IllegalStateException(
-                    "這張案件的發起人是 " + (isSet(initiator) ? initiator : "(未設定)")
-                            + "（系統身分，不是人），因此沒有任何人可以補件。"
+                    "這張案件的發起人是 " + (isSet(initiatorId) ? initiatorId : "(未設定)")
+                            + "（系統身分，不是人），因此沒有任何人可以補件或催辦。"
                             + "請在權限中心指派 " + PERM_EXTERNAL_REVISION + " 的持有人，"
                             + "或讓外部系統改用 onBehalfOf 代員工發起。");
         }
