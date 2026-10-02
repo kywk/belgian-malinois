@@ -6,7 +6,6 @@ import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.dto.CommentRequest;
-import com.bpm.core.external.ExternalActorIdentity;
 import com.bpm.core.notify.NotifyPublisher;
 import org.flowable.common.engine.api.FlowableObjectNotFoundException;
 import org.flowable.common.engine.api.FlowableTaskAlreadyClaimedException;
@@ -95,6 +94,9 @@ public class TaskController {
     private final com.bpm.core.service.ApplicantResolver applicantResolver;
     // #68b：待辦清單的「代某某發起」標示。
     private final com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup;
+    // #96：申請人判定（onBehalfOf 優先、其次自然人 initiator）抽到共用元件，
+    // 催辦授權與完成通知收件人共用同一份。見 ApplicantIdentityLookup 類別註解。
+    private final com.bpm.core.service.ApplicantIdentityLookup applicantIdentityLookup;
     // #33／#6：通知的唯一發送端（退回／拒絕／結案／認領／催辦）。
     private final NotifyPublisher notifyPublisher;
     // #6：催辦頻率限制。既有 Redis（OrgService／BpmPermissionService 已在使用），
@@ -113,6 +115,7 @@ public class TaskController {
                           com.bpm.core.external.ExternalActorGuard actorGuard,
                           com.bpm.core.service.ApplicantResolver applicantResolver,
                           com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup,
+                          com.bpm.core.service.ApplicantIdentityLookup applicantIdentityLookup,
                           NotifyPublisher notifyPublisher,
                           StringRedisTemplate redis) {
         this.taskService = taskService;
@@ -124,6 +127,7 @@ public class TaskController {
         this.actorGuard = actorGuard;
         this.applicantResolver = applicantResolver;
         this.onBehalfOfLookup = onBehalfOfLookup;
+        this.applicantIdentityLookup = applicantIdentityLookup;
         this.notifyPublisher = notifyPublisher;
         this.redis = redis;
     }
@@ -421,38 +425,21 @@ public class TaskController {
                 vars.putIfAbsent("rejected", false);
                 vars.putIfAbsent("approved", false);
                 taskService.complete(id, vars);
-                auditType = task.getName() != null && task.getName().contains("補件")
-                        ? OperationType.TASK_RESUBMIT : resolveCompleteAuditType(vars);
 
-                // ── #33：完成後通知申請人（退回／拒絕／結案）────────────
+                // ── #33／#96：完成後通知申請人（退回／拒絕／結案）────────
                 //
-                // 位置：complete() 之後。事件種類由 vars 決定，判定規則只有
-                // 一份（NotifyPublisher.applicantEventFor）。通知失敗不影響
-                // 流程 —— publish() 吞掉所有例外，這裡不 try/catch 是刻意的：
-                // 若未來有人把 publish 改成會拋，這個呼叫點就是回滾簽核的破口，
-                // 因此讓「不拋」是發送端的責任，不是每個呼叫端各自記得包。
+                // ⚠️ 通知已經不在這裡發。改動前只有這條 HTTP 路徑直接呼叫
+                // notifyPublisher，而 ExternalApiController.completeTask 完成
+                // 任務時完全不發 —— 同一個「任務完成」事實有兩條路徑、規則
+                // 只有一套。現在兩條路徑都經過 FlowableConfig 註冊的全域
+                // listener（com.bpm.core.notify.CompletionNotifyListener），
+                // 事件判定仍只有 NotifyPublisher.applicantEventFor 一份。
                 //
-                // ⚠️ 補件（TASK_RESUBMIT）不通知：申請人自己重送時 vars 會由
-                // complete 補上 approved=false／rejected=false 預設值，
-                // 照 vars 判定會變成「您的申請已被退回」—— 規則與既有稽核
-                // （resolveCompleteAuditType 前的「補件」判斷）共用同一個
-                // 排除條件，不另外發明第二套。
-                //
-                // ⚠️ standalone 加簽子任務沒有 processInstanceId：
-                // 它不屬於任何流程，不該發 process_* 事件。
-                //
-                // ⚠️ 與既有 listener／稽核的順序：本通知在 complete() 返回、
-                // ProcessCompletedListener（webhook 與 PROCESS_COMPLETE 稽核）
-                // 之後立即送出；本方法的稽核則在尾端才 publish（掛在交易的
-                // beforeCommit）。若稽核最後失敗導致交易回滾，通知已經送出
-                // —— 這與既有 webhook listener 是同一個取捨（通知不進交易），
-                // 不是新風險；反過來把通知綁進交易，RabbitMQ 故障時會讓
-                // 簽核整個失敗，代價更大。
-                if (processInstanceId != null && auditType != OperationType.TASK_RESUBMIT) {
-                    notifyPublisher.taskCompleted(processInstanceId, task.getProcessDefinitionId(),
-                            id, task.getName(), vars, processEnded(processInstanceId),
-                            applicantOf(processInstanceId));
-                }
+                // 這裡若保留直接呼叫，listener 會與它各發一則（雙發），
+                // 而「恰好一則」正是 #96 的防線。稽核（下方 auditType）留在
+                // 本地：它是「誰完成了哪個動作」的 HTTP 端事實，不是通知。
+                auditType = NotifyPublisher.isRevisionTask(task.getName())
+                        ? OperationType.TASK_RESUBMIT : resolveCompleteAuditType(vars);
             }
             case "delegate" -> {
                 // 語意檢查（#77）：被 delegate 出去之後 delegatee 必須能簽。
@@ -876,36 +863,19 @@ public class TaskController {
     }
 
     /**
-     * 這張單現在還在跑嗎（{@code false} 代表剛完成或不存在）。
-     *
-     * <p>只在 complete() 之後呼叫；此時「查不到」等於「這次完成讓它結案」。
-     */
-    private boolean processEnded(String processInstanceId) {
-        return runtimeService.createProcessInstanceQuery()
-                .processInstanceId(processInstanceId).count() == 0;
-    }
-
-    /**
      * 這張單的自然人申請人：{@code onBehalfOf} 優先，其次 {@code initiator}；
      * 兩者都不是人（{@code system:<id>}）或不存在時回 {@code null}。
      *
-     * <p>這是 {@code ApplicantResolver} 前兩段的同一條規則（#83/#68c）：
-     * 代發時 {@code initiator} 仍是 {@code system:<id>}，不先取
-     * {@code onBehalfOf} 會把通知寄給系統身分。第三段（權限碼指定的
-     * 系統受理人）是「補件關卡派給誰」的答案，不是「這張單的申請人是誰」
-     * ——通知申請人時沒有第三段可言，查不到自然人就不寄。
+     * <p>#96：規則已抽到 {@link com.bpm.core.service.ApplicantIdentityLookup}
+     * —— 完成通知的 listener 也需要同一條判定，而它拿不到 controller 的
+     * private 方法。本方法保留為 delegate 是因為 {@code urgeTask} 的授權
+     * 仍要用它（催辦的「誰是申請人」與通知的收件人必須是同一份答案）。
      *
-     * <p>用 {@link com.bpm.core.service.OnBehalfOfLookup} 查歷史變數
-     * （同時涵蓋執行中與已結案），{@code accessGuard.initiatorOf} 也是
-     * runtime 優先、歷史次之 —— 兩者在 complete() 之後都能運作。
+     * <p>規則內容（三段順序、為什麼第三段不存在、為什麼查歷史變數）
+     * 見該類別的類別註解。
      */
     private String applicantOf(String processInstanceId) {
-        String onBehalfOf = onBehalfOfLookup.byProcessInstances(List.of(processInstanceId))
-                .get(processInstanceId);
-        if (onBehalfOf != null) return onBehalfOf;
-        String initiator = accessGuard.initiatorOf(processInstanceId);
-        if (initiator == null || ExternalActorIdentity.isSystemActor(initiator)) return null;
-        return initiator;
+        return applicantIdentityLookup.applicantOf(processInstanceId);
     }
 
     /**

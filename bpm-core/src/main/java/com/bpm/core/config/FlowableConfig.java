@@ -65,6 +65,9 @@ public class FlowableConfig {
     public EngineConfigurationConfigurer<SpringProcessEngineConfiguration> processEngineConfigurer(
             ProcessCompletedListener processCompletedListener,
             com.bpm.core.engine.UnreachableTaskListener unreachableTaskListener,
+            // #96：完成路徑的通知收斂。註冊成全域 event listener，HTTP 與
+            // 外部 API 兩條完成路徑都經過同一份判定（見該類別註解）。
+            com.bpm.core.notify.CompletionNotifyListener completionNotifyListener,
             OrgService orgService,
             com.bpm.core.service.InitialAssigneeResolver assigneeResolver,
             com.bpm.core.service.ApplicantResolver applicantResolver,
@@ -74,7 +77,8 @@ public class FlowableConfig {
             com.bpm.core.webhook.WebhookTaskListener webhookTaskListener,
             com.bpm.core.engine.BlankAssigneeNormalizingInterceptor blankAssigneeNormalizingInterceptor) {
         return config -> {
-            config.setEventListeners(List.of(processCompletedListener, unreachableTaskListener));
+            config.setEventListeners(List.of(processCompletedListener, unreachableTaskListener,
+                    completionNotifyListener));
             // #91 方向 B：所有 UserTask 建立後，把求值為空白的 assignee 正規化成 null。
             // 必須是全域的 CreateUserTaskInterceptor —— 見該類別註解說明為什麼
             // engine event listener／per-BPMN task listener／ActivityBehaviorFactory
