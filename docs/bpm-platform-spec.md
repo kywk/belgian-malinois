@@ -987,7 +987,7 @@ bpmn-js Properties Panel 中，UserTask 節點提供「審核對象類型」下�
     name: 'webhooks',
     type: 'Array',
     items: {
-        event: 'String',    // create | complete | timeout | reject
+        event: 'String',    // create | complete | reject | all
         url: 'String',      // webhook URL
         method: 'String',   // POST | PUT
         headers: 'Object',  // 自訂 headers（含認證）
@@ -995,6 +995,8 @@ bpmn-js Properties Panel 中，UserTask 節點提供「審核對象類型」下�
     }
 }
 ```
+
+⚠️ **設計器自 2026-10-02 起不再提供 `timeout` 選項**：Flowable 7.2.0 不發此事件（原因見下方 payload 規格警示），提供選項只會讓使用者存下永不投遞的設定。後端 `WebhookTaskListener.matches`／`buildPayload` 仍保留 `timeout` 的比對與 payload 支援，既有 BPMN 不受影響。
 
 #### 流程層 Webhook 設定（`<process>` 層）
 
