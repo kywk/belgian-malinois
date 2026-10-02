@@ -58,14 +58,18 @@ public enum OperationType {
     EXTERNAL_API_CALL,
     DATA_ACCESS,
     CONFIG_CHANGE,
+    /** 稽核紀錄 CSV 匯出（#40）。原本列在 NOT_YET_IMPLEMENTED，2026-10-02 實作後移出。 */
     EXPORT_DATA;
 
     /**
      * 對應的操作<b>尚未實作</b>，因此不會有程式碼發出這些值。
      *
-     * <p>已逐一確認（全 repo 搜尋 cancel／urge／return-initiator／export
+     * <p>已逐一確認（全 repo 搜尋 cancel／urge／return-initiator
      * 的實作，皆無命中）。實作其中任何一個時，請一併加上稽核並把它從這裡移除
      * —— {@code OperationTypeCoverageTest} 會確保這件事不被漏掉。
+     *
+     * <p>{@code EXPORT_DATA} 原本也在此清單（「資料匯出：無端點」），
+     * 已於 2026-10-02 由 {@code GET /api/audit-logs/export}（#40）實作後移出。
      *
      * <p>{@code TASK_UPDATE} 是另一種情況：{@code TaskController.updateTask}
      * 確實存在，但它的每一條分支都對應到更精確的型別
@@ -77,7 +81,6 @@ public enum OperationType {
             PROCESS_CANCEL,          // 撤案：無端點
             TASK_RETURN_INITIATOR,   // 退回發起人：無端點（TASK_RETURN 是退回上一站）
             TASK_URGE,               // 催辦：無端點
-            EXPORT_DATA,             // 資料匯出：無端點
             TASK_UPDATE              // 刻意不使用，見上方說明
     );
 }
