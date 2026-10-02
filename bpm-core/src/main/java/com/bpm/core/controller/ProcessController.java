@@ -1,5 +1,6 @@
 package com.bpm.core.controller;
 
+import com.bpm.core.service.ApplicantIdentityLookup;
 import com.bpm.core.service.InitialAssigneeResolver;
 import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.audit.AuditEventPublisher;
@@ -11,6 +12,7 @@ import com.bpm.core.security.ProcessAccessGuard;
 import com.bpm.core.service.FormVersionLocker;
 import com.bpm.core.service.ProcessInvolvementService;
 import org.flowable.common.engine.api.FlowableObjectNotFoundException;
+import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
@@ -20,6 +22,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Instant;
 import java.util.*;
 
 @RestController
@@ -73,26 +76,43 @@ public class ProcessController {
         return name.startsWith("_") || PROTECTED_VARIABLES.contains(name);
     }
 
+    /**
+     * 撤回案件時 body 沒帶 {@code reason} 的固定值（#7）。
+     *
+     * <p>它同時是 Flowable 的刪除原因（{@code ACT_HI_PROCINST.DELETE_REASON_}）
+     * 與稽核 detail 的 {@code reason}。用固定字串而不是 null：規格 §9.4 的
+     * {@code cancelled} 判定是「{@code endTime} 有值且 {@code deleteReason} 非 null」，
+     * 空的刪除原因會讓已撤回的案件在外部 API 與歷史端點上看起來像
+     * 「完成但沒有結果」。
+     */
+    private static final String DEFAULT_CANCEL_REASON = "applicant-cancel";
+
     private final RuntimeService runtimeService;
     private final RepositoryService repositoryService;
     private final TaskService taskService;
+    private final HistoryService historyService;
     private final AuditEventPublisher auditPublisher;
     private final FormVersionLocker formVersionLocker;
     private final ProcessAccessGuard accessGuard;
     private final ProcessInvolvementService involvementService;
+    private final ApplicantIdentityLookup applicantLookup;
 
     public ProcessController(RuntimeService runtimeService, RepositoryService repositoryService,
-                             TaskService taskService, AuditEventPublisher auditPublisher,
+                             TaskService taskService, HistoryService historyService,
+                             AuditEventPublisher auditPublisher,
                              FormVersionLocker formVersionLocker,
                              ProcessAccessGuard accessGuard,
-                             ProcessInvolvementService involvementService) {
+                             ProcessInvolvementService involvementService,
+                             ApplicantIdentityLookup applicantLookup) {
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
         this.taskService = taskService;
+        this.historyService = historyService;
         this.auditPublisher = auditPublisher;
         this.formVersionLocker = formVersionLocker;
         this.accessGuard = accessGuard;
         this.involvementService = involvementService;
+        this.applicantLookup = applicantLookup;
     }
 
     /**
@@ -228,6 +248,187 @@ public class ProcessController {
             result.put("currentTaskCount", currentTasks.size());
         }
         return result;
+    }
+
+    /**
+     * 撤回（撤案）—— 申請人本人撤回「第一關尚未處理」的案件（#7）。
+     *
+     * <h2>這個端點接上的是既有的預留值</h2>
+     *
+     * <p>{@link OperationType#PROCESS_CANCEL} 一直存在（且列在
+     * {@code NOT_YET_IMPLEMENTED}），但全 repo 沒有任何程式碼發出它 ——
+     * 也就是「撤案」這個操作以前根本沒有入口。本端點是唯一入口，
+     * 並在成功時寫出第一筆 {@code PROCESS_CANCEL} 稽核。
+     *
+     * <h2>誰可以撤回：申請人本人，判定只有一份</h2>
+     *
+     * <p>呼叫 {@link ApplicantIdentityLookup#applicantOf}（#96 抽出的唯一實作：
+     * {@code onBehalfOf} 優先、其次自然人 {@code initiator}、系統身分回
+     * {@code null}）。<b>不</b>用 {@code TaskController} 催辦那條的
+     * {@code ApplicantResolver.resolveApplicant}：那條的第三段是「系統案件的
+     * 受理人」（{@code bpm:external:revision} 持有人），是 #3 對催辦的裁決；
+     * 撤回沒有同樣的裁決，所以系統案件（{@code applicantOf} 回 null）
+     * <b>不開放</b> —— 沒有自然人申請人的案件，目前沒有任何身分可以撤回。
+     *
+     * <h2>拒絕的分流與 {@code TaskController.urgeTask} 一致</h2>
+     *
+     * <p>催辦是同一種形狀的授權問題（「只有申請人可以做這個動作」），
+     * 因此沿用它的分流，而不是另發明一套：
+     * <ol>
+     *   <li><b>非參與者 → 404</b>（{@link ProcessAccessGuard#denyNonParticipant}，
+     *       留一筆 {@code DATA_ACCESS {denied:true}}）。403 會確認案件存在，
+     *       對可枚舉的 id 等於把枚舉管道留著。</li>
+     *   <li><b>參與者但不是申請人 → 403</b>（他本來就看得到這張單，
+     *       沒有必要對他說謊），並留一筆 {@code DATA_ACCESS {denied:true,
+     *       reason:"not the applicant", action:"cancel"}}。</li>
+     * </ol>
+     * <p>系統案件（申請人判定回 null）的呼叫者走同一條分流：參與者 403、
+     * 非參與者 404。<b>刻意不</b>把系統案件開放給受理人 —— 見上。
+     *
+     * <h2>可撤回條件：第一關尚未處理</h2>
+     *
+     * <p>以「沒有任何<b>已完成</b>的歷史任務」判定（{@code finished().count() == 0}）：
+     * 只要有任何一個關卡被完成過，案件就已經進入處理，撤回會讓後續關卡與
+     * 已完成的事實失去意義 → 409（狀態衝突，不是權限問題）。
+     *
+     * <p>⚠️ <b>已聲明（claimed）但未完成仍可撤回</b>：聲明只是「我來處理」，
+     * 沒有任何關卡完成，所以仍在「第一關尚未處理」的範圍內。這是刻意的，
+     * 不是漏洞 —— 申請人撤回時，受理人手上的任務會隨實例一起消失。
+     *
+     * <h2>狀態碼一覽（所有拒絕都在刪除之前，零副作用）</h2>
+     *
+     * <ul>
+     *   <li>未認證 → 401。</li>
+     *   <li>body 的 {@code reason} 不是字串 → 400（不靜默忽略）。</li>
+     *   <li>案件不存在／已結束／重複撤回 → 404。重複撤回的第二次
+     *       runtime 已查不到，落在同一個 404。</li>
+     *   <li>參與者非申請人 → 403；非參與者 → 404（見上）。</li>
+     *   <li>已有完成任務 → 409。</li>
+     * </ul>
+     *
+     * <p>被拒的請求<b>不得</b>寫 {@code PROCESS_CANCEL}：403／404 只留
+     * {@code DATA_ACCESS} 拒絕痕跡（{@code publishDetached}，與催辦相同理由
+     * —— 拒絕後緊接著拋例外，掛在交易上的稽核永遠不會 commit），
+     * 400／409 不留任何稽核。案件本身在 403／404／409 之後都必須仍在
+     * runtime（測試逐條驗證）。
+     *
+     * <h2>執行與稽核：同一個交易，fail-closed</h2>
+     *
+     * <p>{@code runtimeService.deleteProcessInstance(id, reason)} 刪除執行中的
+     * 實例（歷史保留），reason 成為 {@code ACT_HI_PROCINST.DELETE_REASON_} ——
+     * 規格 §9.4 的 {@code cancelled} 正是「已刪除實例且 result=null」，
+     * 由既有的 {@code ExternalApiController.buildStatusFromHistory} 推導，
+     * 本端點<b>不</b>改動那條路。
+     *
+     * <p>{@code PROCESS_CANCEL} 稽核（operator = 呼叫者）用 {@code publish}
+     * 寫在刪除之後：本方法有 {@code @Transactional}，稽核掛在 beforeCommit，
+     * 寫不進去就整個交易回滾（刪除也不成立）→ 503。這是 repo 對寫入端點的
+     * 一致政策（P1-14 fail-closed），不是本端點自己的選擇。
+     *
+     * <p>detail 只放 {@code reason} 與 {@code cancelledAt}：
+     * 撤回原因（呼叫端提供）與發生時間。不放表單值、簽核意見或收件人。
+     *
+     * <h2>⚠️ 通知不在本端點範圍（已知殘餘）</h2>
+     *
+     * <p>撤回<b>不會</b>通知目前的受理人（沒有「案件已撤回」的信）。
+     * 受理人只會發現待辦任務消失。這是本工項明確的範圍外項目，
+     * 已回報 PM；日後若要做，應由 {@code CompletionNotifyListener} 那類
+     * 全域 listener 處理，而不是在這裡直接呼叫通知。
+     *
+     * <h2>⚠️ 競爭窗口（已知殘餘）</h2>
+     *
+     * <p>「先檢查 state／已完成任務，再刪除」與「有人同時完成任務或撤回」
+     * 之間存在 TOCTOU 窗口：預先檢查無法消除它。刪除當下實例已不存在時，
+     * Flowable 丟 {@code FlowableObjectNotFoundException}，這裡翻成 404
+     * （與 {@code startProcess} 對同型例外的處理一致）。但「完成任務」的
+     * 窗口沒有引擎層的鎖可以擋（Flowable 的樂觀鎖不管這個跨指令條件），
+     * 極端情況下可能刪到一個剛被完成的案件 —— 這是接受的取捨，見報告。
+     */
+    @PostMapping("/{id}/cancel")
+    @Transactional("primaryTransactionManager")
+    public Map<String, Object> cancelProcess(@PathVariable String id,
+                                             @RequestBody(required = false) Map<String, Object> body,
+                                             @CallerId String callerId) {
+        if (callerId == null || callerId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "無法確認身分，請先登入");
+        }
+
+        // ① payload 形狀先講清楚：reason 非字串 → 400（不靜默忽略）。
+        //    省略或空白視同沒帶，用固定值 —— 空白不可能表達撤回原因，
+        //    與 ProcessAccessGuard.requireSelf 對空白的處理同一取向。
+        String reason = cancelReasonOf(body);
+
+        // ② 只有執行中的案件可撤回。已結束與不存在都回 404：對呼叫端而言
+        //    兩者該做的事相同（不要重試），而重複撤回的第二次也落在這裡。
+        if (accessGuard.stateOf(id) != ProcessAccessGuard.InstanceState.RUNNING) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "案件不存在或已結束: " + id);
+        }
+
+        // ③ 授權：只有申請人本人。分流與 TaskController.urgeTask 完全相同
+        //    （參與者 403 + DATA_ACCESS、非參與者 404 + DATA_ACCESS），
+        //    差別只在申請人的判定不含「系統案件的受理人」那一段（見 javadoc）。
+        String applicant = applicantLookup.applicantOf(id);
+        if (applicant == null || !applicant.equals(callerId)) {
+            if (accessGuard.isParticipant(id, callerId)) {
+                // 參與者但不是申請人：不是探測（他看得到這張單），
+                // 但仍是一筆被拒的授權嘗試，留痕。detached 的理由見 javadoc。
+                auditPublisher.publishDetached(new AuditEvent(OperationType.DATA_ACCESS.name(),
+                        callerId, id, null,
+                        Map.of("denied", true, "reason", "not the applicant", "action", "cancel")));
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只有申請人可以撤回");
+            }
+            // 非參與者：404 + DATA_ACCESS {denied:true}（不會返回）。
+            accessGuard.denyNonParticipant(id, callerId);
+        }
+
+        // ④ 可撤回條件：第一關尚未處理 = 沒有任何已完成的任務。
+        //    claimed 但未完成不算「處理過」（見 javadoc）。
+        if (historyService.createHistoricTaskInstanceQuery()
+                .processInstanceId(id).finished().count() > 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "案件已進入處理，無法撤回");
+        }
+
+        // ⑤ 執行：刪除執行中的實例。歷史實例保留，reason 進 DELETE_REASON_，
+        //    外部 API 的 /status 因此照現行規則回 cancelled（§9.4）。
+        try {
+            runtimeService.deleteProcessInstance(id, reason);
+        } catch (FlowableObjectNotFoundException e) {
+            // race 保險：預先檢查之後、刪除之前，實例被別人撤回或完成了。
+            // 沒有這一層它會變成 500；這裡與 startProcess 的處理一致。
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "案件不存在或已結束: " + id, e);
+        }
+
+        // ⑥ 稽核：operator = 呼叫者（不是申請人判定值 —— 兩者在放行路徑上
+        //    必然相同，但記「真正做事的人」才是稽核的用途）。
+        //    與刪除同一個交易：publish 掛 beforeCommit，寫不進去就回滾
+        //    （刪除也不成立）→ 503。被拒路徑走不到這一行。
+        auditPublisher.publish(new AuditEvent(OperationType.PROCESS_CANCEL.name(), callerId,
+                id, null,
+                Map.of("reason", reason, "cancelledAt", Instant.now().toString())));
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("processInstanceId", id);
+        result.put("status", "cancelled");
+        return result;
+    }
+
+    /**
+     * 撤回請求的 {@code reason}：省略／空白 → {@link #DEFAULT_CANCEL_REASON}；
+     * 非字串 → 400。
+     *
+     * <p>非字串明確拒絕而不是靜默丟棄：呼叫端送了 {@code {"reason":123}}
+     * 卻拿到 200，會以為那個值被記進了稽核 —— 與 #66 對 {@code initiator}
+     * 的立場相同（送了就必須處理，不能假裝收下）。
+     */
+    private static String cancelReasonOf(Map<String, Object> body) {
+        if (body == null) return DEFAULT_CANCEL_REASON;
+        Object raw = body.get("reason");
+        if (raw == null) return DEFAULT_CANCEL_REASON;
+        if (!(raw instanceof String s)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "reason 必須是字串（可省略；省略或空白時為 " + DEFAULT_CANCEL_REASON + "）");
+        }
+        return s.isBlank() ? DEFAULT_CANCEL_REASON : s.trim();
     }
 
     /**
