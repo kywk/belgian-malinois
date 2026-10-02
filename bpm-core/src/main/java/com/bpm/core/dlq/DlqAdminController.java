@@ -36,7 +36,7 @@ public class DlqAdminController {
     /**
      * 重放指定 DLQ 的訊息。
      *
-     * @param queue      {@code bpm}（dlq.bpm）或 {@code audit}（dlq.audit）；其餘 400
+     * @param queue      {@code bpm}（dlq.parking.bpm）或 {@code audit}（dlq.parking.audit）；其餘 400
      * @param max        本輪最多重放幾筆，預設 100，上限 1000
      * @param operatorId 已認證的呼叫者，寫入 {@code DLQ_REPLAY} 稽核
      */

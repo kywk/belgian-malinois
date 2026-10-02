@@ -71,6 +71,32 @@ public class RabbitMQConfig {
         return BindingBuilder.bind(dlqAudit()).to(dlxExchange()).with("audit.#");
     }
 
+    // ── DLQ Parking（#51 留存收尾） ─────────────────────────────────
+    //
+    // 名字取「停車場」：DeadLetterConsumer 告警完把死信「停」進來，等人工
+    // 重放（POST /api/admin/dlq/replay）再開走。它和 dlq.* 的差別是
+    // dlq.* 有 consumer、訊息一進來就被消費；parking 刻意「無 consumer」，
+    // 所以訊息只進不出（除了重放端點），不再依賴「consumer 剛好停用」。
+    //
+    // 為什麼獨立成兩個 queue 而不是擴充 dlq.*：重放的來源必須與告警的
+    // 消費來源分開，否則 consumer 與重放會搶同一筆訊息；且 dlq.* 之後
+    // 若加 TTL／DLX 也不會波及留存的死信。
+    //
+    // ⚠️ 不設 TTL、不設 DLX：
+    // - 不設 TTL —— parking 的語意是「保留到人工處理」。TTL 到期會把
+    //   還沒人看過的死信靜默刪掉，那正是本功能要消除的風險。
+    // - 不設 DLX —— 這裡的訊息不該再被自動搬走；設了只會製造第二層
+    //   死信迴圈（而且 parking 無 consumer，也永遠不會 reject）。
+    @Bean
+    public Queue dlqParkingBpm() {
+        return QueueBuilder.durable("dlq.parking.bpm").build();
+    }
+
+    @Bean
+    public Queue dlqParkingAudit() {
+        return QueueBuilder.durable("dlq.parking.audit").build();
+    }
+
     @Bean
     public Queue auditLogQueue() {
         return QueueBuilder.durable("audit.log.queue")

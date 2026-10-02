@@ -37,25 +37,30 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * #51 的端到端驗證：DLQ 告警真的寫進稽核，人工重放真的回到原始目的地。
+ * #51 的端到端驗證：DLQ 告警真的寫進稽核、訊息真的 parking、人工重放真的
+ * 回到原始目的地。
  *
  * <h2>⚠️ x-death 不能用「手工組一筆訊息」製造</h2>
  *
- * <p>RabbitMQ 3.13+ 把 {@code x-death} 視為 broker 自己的標頭：
- * 客戶端發布的 {@code x-death} 會被<b>剝掉</b>（實測本測試的
- * {@code rabbitmq:3-management}＝3.13.7 確認）。所以「重放怎麼解讀
- * x-death」的主要路徑在這裡是<b>走真實死信</b>：讓 webhook 投遞持續失敗
+ * <p>客戶端無法偽造 broker 產生的 {@code x-death}；RabbitMQ 3.13 起也
+ * 不再把客戶端重發布的 x-death 當死信紀錄維護（實測本測試的
+ * {@code rabbitmq:3-management}＝3.13.7：重發布後標頭還在、但 count
+ * 不再累加；4.x 不再解讀）。所以「重放怎麼解讀 origin」的主要路徑在
+ * 這裡是<b>走真實死信</b>：讓 webhook 投遞持續失敗
  * （{@code WebhookTestSink.alwaysFail}）、retry 耗盡後由 broker 加上
- * x-death 進 DLQ，再重放。多筆 x-death 的順序、dlx 防呆等形狀由
+ * x-death 進 DLQ，consumer 告警後 parking，再重放。origin 標頭的優先序、
+ * 多筆 x-death 的順序、dlx 防呆等形狀由
  * {@code DlqReplayServiceDestinationTest} 以單元測試釘住。
  *
  * <h2>為什麼要停 listener 而不是只看回應</h2>
  *
- * <p>{@code DeadLetterConsumer}（dlq）與 {@code WebhookConsumer}（目標佇列）
- * 都是活的：不停掉的話，測試放進去的訊息會被搶著消費，斷言
- * 「訊息出現在原佇列」變成看誰先跑 —— 間歇性紅燈。停掉之後
- * {@code rabbitTemplate.receive()} 是唯一消費者，斷言才有意義，
+ * <p>{@code WebhookConsumer}（目標佇列）是活的：不停掉的話，測試放進去的
+ * 訊息會被搶著消費，斷言「訊息出現在原佇列」變成看誰先跑 —— 間歇性紅燈。
+ * 停掉之後 {@code rabbitTemplate.receive()} 是唯一消費者，斷言才有意義，
  * 並在 {@link #resumeListeners()} 保證復原（即使測試失敗）。
+ *
+ * <p>{@code DeadLetterConsumer}（dlq）在正常流程<b>不</b>停 —— 它正是
+ * 「告警＋parking」的執行者。只有要模擬「服務中斷期間累積死信」時才停它。
  */
 class DlqAlertReplayTest extends IntegrationTestBase {
 
@@ -94,6 +99,12 @@ class DlqAlertReplayTest extends IntegrationTestBase {
                                 + listenerRegistry.getListenerContainerIds()));
         container.stop();
         paused.put(queue, container);
+    }
+
+    /** 恢復先前暫停的 listener（例如模擬服務恢復後 consumer 開始 parking）。 */
+    private void resumeListener(String queue) {
+        AbstractMessageListenerContainer container = paused.remove(queue);
+        if (container != null && !container.isRunning()) container.start();
     }
 
     /** 清掉佇列裡既有殘留，讓斷言只看到本測試的訊息。 */
@@ -137,9 +148,14 @@ class DlqAlertReplayTest extends IntegrationTestBase {
         rabbitTemplate.convertAndSend("bpm.exchange", "bpm.webhook." + name, payload);
     }
 
-    /** 直接放一筆沒有 x-death 的訊息進 DLQ（測 fallback／max 用）。 */
+    /** 直接放一筆沒有 x-death 的訊息進 DLQ（測 fallback／legacy parking 用）。 */
     private void sendToDlqDirect(String routingKey, Map<String, Object> payload) {
         rabbitTemplate.convertAndSend("dlx.exchange", routingKey, payload);
+    }
+
+    /** 直接放一筆訊息進 parking queue（無 origin、無 x-death，測 fallback 用）。 */
+    private void sendToParkingDirect(String parkingQueue, Map<String, Object> payload) {
+        rabbitTemplate.convertAndSend(parkingQueue, payload);
     }
 
     private static String utf8(Message message) {
@@ -185,23 +201,96 @@ class DlqAlertReplayTest extends IntegrationTestBase {
         return out.get();
     }
 
+    // ── 告警＋parking ───────────────────────────────────────────────
+
+    @Test
+    @DisplayName("真實死信：告警後訊息 parking（dlq.bpm 清空）、帶 origin 標頭、稽核不含 payload")
+    void deadLetterIsAlertedAndParked() {
+        truncateAuditLog();
+        drain("dlq.bpm");
+        drain("dlq.parking.bpm");
+
+        String sinkName = "alert-" + UUID.randomUUID();
+        String secret = "SECRET-PAYLOAD-DO-NOT-AUDIT-" + UUID.randomUUID();
+        String event = "dlq-alert-test-" + UUID.randomUUID();
+
+        Logger consumerLogger = (Logger) LoggerFactory.getLogger(DeadLetterConsumer.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        consumerLogger.addAppender(appender);
+        try {
+            // dlq.bpm 的 listener 沒有停：死信一進 DLQ 就被 DeadLetterConsumer 消費
+            // （告警＋parking），這正是 production 的常態路徑。
+            WebhookTestSink.alwaysFail(sinkName);
+            publishWebhook(sinkName, "REPLAY-ALERT-1", event, Map.of("secret", secret));
+
+            // 先等 log：它證明 consumer 真的處理了這筆（而不是訊息沒到，
+            // 讓後面「稽核有寫」的斷言變成假綠）。
+            long deadline = System.currentTimeMillis() + 30_000;
+            while (System.currentTimeMillis() < deadline
+                    && appender.list.stream().noneMatch(e -> e.getLevel() == Level.ERROR
+                            && e.getFormattedMessage().contains(secret))) {
+                sleep(200);
+            }
+            assertThat(appender.list)
+                    .as("payload 全文仍照既有行為留在 ERROR log（截斷 2000 字）")
+                    .anyMatch(e -> e.getLevel() == Level.ERROR
+                            && e.getFormattedMessage().contains(secret));
+
+            AuditRow row = awaitAudit("DLQ_MESSAGE", event);
+            assertThat(row).as("DLQ 訊息必須寫一筆 DLQ_MESSAGE 稽核").isNotNull();
+            assertThat(row.operatorId()).isEqualTo("system");
+            assertThat(row.operatorSource()).isEqualTo("engine");
+            assertThat(row.detail())
+                    .contains("\"queue\":\"dlq.bpm\"")
+                    .contains("\"event\":\"" + event + "\"")
+                    .as("x-death 摘要必須指出訊息從哪來")
+                    .contains("bpm.webhook.queue")
+                    .as("稽核不得複製 payload 內容")
+                    .doesNotContain(secret);
+
+            // parking：訊息必須留下來，且帶著 origin 標頭（重放端靠這組
+            // 標頭回原始目的地，不依賴版本行為不一的 x-death）。
+            awaitMessageCount("dlq.parking.bpm", 1);
+            Message parked = rabbitTemplate.receive("dlq.parking.bpm", 2000);
+            assertThat(parked).as("告警後訊息必須 parking 到 dlq.parking.bpm").isNotNull();
+            assertThat(utf8(parked)).contains(secret);
+            assertThat(parked.getMessageProperties().getHeaders().get(DlqReplayService.ORIGIN_EXCHANGE_HEADER))
+                    .isEqualTo("bpm.exchange");
+            assertThat(parked.getMessageProperties().getHeaders().get(DlqReplayService.ORIGIN_ROUTING_KEY_HEADER))
+                    .isEqualTo("bpm.webhook." + sinkName);
+            assertThat(parked.getMessageProperties().getHeaders().get(DlqReplayService.ORIGIN_QUEUE_HEADER))
+                    .isEqualTo("bpm.webhook.queue");
+            // 不 assert x-death 的存在或消失：實測 3.13.7 重發布後它仍在
+            // （只是不再被 broker 更新），4.x 不再解讀 —— 版本行為不一，
+            // 重放靠的是上面的 origin 標頭，不是它。
+
+            assertThat(rabbitTemplate.receive("dlq.bpm", 200))
+                    .as("parking 成功後原訊息必須 ack，dlq.bpm 應清空")
+                    .isNull();
+        } finally {
+            consumerLogger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
     // ── 重放：真實死信路徑 ─────────────────────────────────────────
 
     @Test
-    @DisplayName("重放：真實 x-death 的 exchange／routing key 回原始佇列、DLQ 清空、寫 DLQ_REPLAY 稽核")
+    @DisplayName("重放 parking：origin 標頭的 exchange／routing key 回原始佇列、parking 清空、寫 DLQ_REPLAY 稽核")
     void replayRedeliversToOriginalDestination() throws Exception {
         truncateAuditLog();
-        pauseListener("dlq.bpm");
         drain("dlq.bpm");
+        drain("dlq.parking.bpm");
+        drain("bpm.webhook.queue");
 
-        // 讓 webhook 投遞持續失敗：retry 耗盡 → broker 加上 x-death → dlq.bpm。
-        // 這一則的 x-death 是 broker 產生的（queue=bpm.webhook.queue、
-        // exchange=bpm.exchange、routing-keys=[bpm.webhook.replay-primary]）。
+        // 讓 webhook 投遞持續失敗：retry 耗盡 → broker 加上 x-death → dlq.bpm
+        // → consumer 告警後 parking（origin 標頭＝bpm.exchange／bpm.webhook.replay-primary）。
         WebhookTestSink.alwaysFail("replay-primary");
         publishWebhook("replay-primary", "REPLAY-PRIMARY-1", "task.create", null);
-        awaitMessageCount("dlq.bpm", 1);
+        awaitMessageCount("dlq.parking.bpm", 1);
 
-        // 死信已就位；停掉目標 listener 讓重放後的訊息留在原佇列供斷言。
+        // 停掉目標 listener 讓重放後的訊息留在原佇列供斷言。
         pauseListener("bpm.webhook.queue");
         drain("bpm.webhook.queue");
 
@@ -209,38 +298,74 @@ class DlqAlertReplayTest extends IntegrationTestBase {
                         .header("X-User-Id", "admin001")
                         .param("queue", "bpm"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.queue").value("dlq.bpm"))
+                .andExpect(jsonPath("$.queue").value("dlq.parking.bpm"))
                 .andExpect(jsonPath("$.replayed").value(1))
                 .andExpect(jsonPath("$.failed").value(0))
                 .andExpect(jsonPath("$.remaining").value(0));
 
         Message replayed = rabbitTemplate.receive("bpm.webhook.queue", 2000);
         assertThat(replayed)
-                .as("重放後訊息必須出現在 x-death 指出的原始佇列（bpm.webhook.queue）")
+                .as("重放後訊息必須出現在 origin 標頭指出的原始佇列（bpm.webhook.queue）")
                 .isNotNull();
         assertThat(utf8(replayed)).contains("REPLAY-PRIMARY-1");
+        assertThat(rabbitTemplate.receive("dlq.parking.bpm", 200))
+                .as("重放成功必須 ack，parking 應清空")
+                .isNull();
         assertThat(rabbitTemplate.receive("dlq.bpm", 200))
-                .as("重放成功必須 ack，DLQ 應清空")
+                .as("重放不得把訊息丟回有 consumer 的舊 DLQ")
                 .isNull();
 
-        AuditRow row = awaitAudit("DLQ_REPLAY", "\"queue\":\"dlq.bpm\"");
+        AuditRow row = awaitAudit("DLQ_REPLAY", "\"queue\":\"dlq.parking.bpm\"");
         assertThat(row).as("重放必須留下 DLQ_REPLAY 稽核").isNotNull();
         assertThat(row.operatorId()).isEqualTo("admin001");
         assertThat(row.operatorSource()).isEqualTo("user");
         assertThat(row.detail())
-                .as("真實 x-death 必須走 x-death 路徑（fallbackUsed=0），而不是猜的")
+                .as("必須走正常路徑（origin 標頭；3.13 的 x-death 也可能還在），不是 fallback 猜的")
                 .contains("\"replayed\":1")
                 .contains("\"fallbackUsed\":0");
     }
 
-    // ── 重放：x-death 缺失的 fallback ───────────────────────────────
+    // ── 重放：legacy DLQ 的訊息 ─────────────────────────────────────
 
     @Test
-    @DisplayName("無 x-death fallback：payload 帶 __webhookUrl → bpm.webhook.queue，並記 WARN")
-    void fallbackWithoutXDeathRoutesWebhookByPayload() throws Exception {
+    @DisplayName("consumer 停用期間累積在 dlq.bpm 的訊息：服務恢復後自動 parking，重放端只看 parking")
+    void legacyDlqMessagesAreParkedWhenConsumerResumes() {
         pauseListener("dlq.bpm");
-        pauseListener("bpm.webhook.queue");
         drain("dlq.bpm");
+        drain("dlq.parking.bpm");
+
+        // 模擬服務中斷期間：死信進 dlq.bpm，但沒有 consumer 處理。
+        sendToDlqDirect("bpm", Map.of(
+                "event", "task.create",
+                "__webhookUrl", "http://localhost:1/hook",
+                "businessKey", "LEGACY-PARK-1"));
+        awaitMessageCount("dlq.bpm", 1);
+        assertThat(messageCount("dlq.parking.bpm"))
+                .as("consumer 停用時不該有 parking")
+                .isZero();
+
+        // 服務恢復：consumer 消費舊 DLQ 的訊息 → 告警 → parking。
+        resumeListener("dlq.bpm");
+        awaitMessageCount("dlq.parking.bpm", 1);
+        assertThat(messageCount("dlq.bpm"))
+                .as("consumer 恢復後必須把 legacy 死信 parking 並 ack")
+                .isZero();
+
+        Message parked = rabbitTemplate.receive("dlq.parking.bpm", 2000);
+        assertThat(parked).as("legacy 死信必須出現在 parking queue").isNotNull();
+        assertThat(utf8(parked)).contains("LEGACY-PARK-1");
+        assertThat(parked.getMessageProperties().getHeaders().get(DlqReplayService.ORIGIN_EXCHANGE_HEADER))
+                .as("legacy 訊息沒有 x-death，重放會走 fallback，因此不該有 origin 標頭")
+                .isNull();
+    }
+
+    // ── 重放：origin／x-death 缺失的 fallback ───────────────────────
+
+    @Test
+    @DisplayName("無 origin 也無 x-death fallback：payload 帶 __webhookUrl → bpm.webhook.queue，並記 WARN")
+    void fallbackWithoutXDeathRoutesWebhookByPayload() throws Exception {
+        pauseListener("bpm.webhook.queue");
+        drain("dlq.parking.bpm");
         drain("bpm.webhook.queue");
 
         Logger serviceLogger = (Logger) LoggerFactory.getLogger(DlqReplayService.class);
@@ -248,7 +373,7 @@ class DlqAlertReplayTest extends IntegrationTestBase {
         appender.start();
         serviceLogger.addAppender(appender);
         try {
-            sendToDlqDirect("bpm", Map.of(
+            sendToParkingDirect("dlq.parking.bpm", Map.of(
                     "event", "task.create",
                     "__webhookUrl", "http://localhost:1/hook",
                     "businessKey", "REPLAY-FALLBACK-WEBHOOK-1"));
@@ -262,7 +387,7 @@ class DlqAlertReplayTest extends IntegrationTestBase {
             assertThat(appender.list)
                     .as("fallback 必須留下可分辨的 WARN（正常重放不會有這行）")
                     .anyMatch(e -> e.getLevel() == Level.WARN
-                            && e.getFormattedMessage().contains("沒有 x-death"));
+                            && e.getFormattedMessage().contains("沒有 origin 標頭也沒有 x-death"));
 
             Message replayed = rabbitTemplate.receive("bpm.webhook.queue", 2000);
             assertThat(replayed)
@@ -276,14 +401,13 @@ class DlqAlertReplayTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("無 x-death fallback：沒有 __webhookUrl → bpm.notify.queue")
+    @DisplayName("無 origin 也無 x-death fallback：沒有 __webhookUrl → bpm.notify.queue")
     void fallbackWithoutXDeathRoutesNotifyByPayload() throws Exception {
-        pauseListener("dlq.bpm");
         pauseListener("bpm.notify.queue");
-        drain("dlq.bpm");
+        drain("dlq.parking.bpm");
         drain("bpm.notify.queue");
 
-        sendToDlqDirect("bpm", Map.of(
+        sendToParkingDirect("dlq.parking.bpm", Map.of(
                 "event", "task_assigned",
                 "assignee", "user001",
                 "businessKey", "REPLAY-FALLBACK-NOTIFY-1"));
@@ -310,18 +434,17 @@ class DlqAlertReplayTest extends IntegrationTestBase {
     @Test
     @DisplayName("max 是硬上限：3 筆只放 2 筆，remaining 回報 1")
     void maxLimitsReplayAndReportsRemaining() throws Exception {
-        pauseListener("dlq.bpm");
         pauseListener("bpm.webhook.queue");
-        drain("dlq.bpm");
+        drain("dlq.parking.bpm");
         drain("bpm.webhook.queue");
 
         for (int i = 1; i <= 3; i++) {
-            sendToDlqDirect("bpm", Map.of(
+            sendToParkingDirect("dlq.parking.bpm", Map.of(
                     "event", "task.create",
                     "__webhookUrl", "http://localhost:1/hook-" + i,
                     "businessKey", "REPLAY-MAX-" + i));
         }
-        awaitMessageCount("dlq.bpm", 3);
+        awaitMessageCount("dlq.parking.bpm", 3);
 
         mockMvc.perform(post("/api/admin/dlq/replay")
                         .header("X-User-Id", "admin001")
@@ -335,16 +458,16 @@ class DlqAlertReplayTest extends IntegrationTestBase {
         assertThat(rabbitTemplate.receive("bpm.webhook.queue", 2000)).isNotNull();
         assertThat(rabbitTemplate.receive("bpm.webhook.queue", 2000)).isNotNull();
         assertThat(rabbitTemplate.receive("bpm.webhook.queue", 200)).isNull();
-        assertThat(messageCount("dlq.bpm"))
-                .as("max 之外的 1 筆必須留在 DLQ")
+        assertThat(messageCount("dlq.parking.bpm"))
+                .as("max 之外的 1 筆必須留在 parking")
                 .isEqualTo(1);
-        drain("dlq.bpm");
+        drain("dlq.parking.bpm");
     }
 
     // ── 權限與參數 ─────────────────────────────────────────────────
 
     @Test
-    @DisplayName("未登入 401；一般使用者 403；queue 非白名單／max 超界 400；audit 空佇列可重放")
+    @DisplayName("未登入 401；一般使用者 403；queue 非白名單／max 超界 400；audit 空 parking 可重放")
     void authorizationAndValidation() throws Exception {
         // 未登入：蓋掉 defaultRequest 的閘道身分。
         mockMvc.perform(post("/api/admin/dlq/replay")
@@ -376,64 +499,13 @@ class DlqAlertReplayTest extends IntegrationTestBase {
                         .param("max", "1001"))
                 .andExpect(status().isBadRequest());
 
-        // audit 佇列（先清空）走完整端點路徑，回 0 筆而不是錯誤。
-        pauseListener("dlq.audit");
-        drain("dlq.audit");
+        // audit parking（先清空）走完整端點路徑，回 0 筆而不是錯誤。
+        drain("dlq.parking.audit");
         mockMvc.perform(post("/api/admin/dlq/replay")
                         .header("X-User-Id", "admin001")
                         .param("queue", "audit"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.queue").value("dlq.audit"))
+                .andExpect(jsonPath("$.queue").value("dlq.parking.audit"))
                 .andExpect(jsonPath("$.replayed").value(0));
-    }
-
-    // ── 告警 ────────────────────────────────────────────────────────
-
-    @Test
-    @DisplayName("DLQ 進來：ERROR log 留 payload，稽核寫 DLQ_MESSAGE（含真實 x-death 摘要）但不含 payload")
-    void deadLetterWritesAuditWithoutPayloadContent() {
-        truncateAuditLog();
-
-        String sinkName = "alert-" + UUID.randomUUID();
-        String secret = "SECRET-PAYLOAD-DO-NOT-AUDIT-" + UUID.randomUUID();
-        String event = "dlq-alert-test-" + UUID.randomUUID();
-
-        Logger consumerLogger = (Logger) LoggerFactory.getLogger(DeadLetterConsumer.class);
-        ListAppender<ILoggingEvent> appender = new ListAppender<>();
-        appender.start();
-        consumerLogger.addAppender(appender);
-        try {
-            // dlq.bpm 的 listener 沒有停：死信一進 DLQ 就被 DeadLetterConsumer 消費。
-            WebhookTestSink.alwaysFail(sinkName);
-            publishWebhook(sinkName, "REPLAY-ALERT-1", event, Map.of("secret", secret));
-
-            // 先等 log：它證明 consumer 真的處理了這筆（而不是訊息沒到，
-            // 讓後面「稽核有寫」的斷言變成假綠）。
-            long deadline = System.currentTimeMillis() + 30_000;
-            while (System.currentTimeMillis() < deadline
-                    && appender.list.stream().noneMatch(e -> e.getLevel() == Level.ERROR
-                            && e.getFormattedMessage().contains(secret))) {
-                sleep(200);
-            }
-            assertThat(appender.list)
-                    .as("payload 全文仍照既有行為留在 ERROR log（截斷 2000 字）")
-                    .anyMatch(e -> e.getLevel() == Level.ERROR
-                            && e.getFormattedMessage().contains(secret));
-
-            AuditRow row = awaitAudit("DLQ_MESSAGE", event);
-            assertThat(row).as("DLQ 訊息必須寫一筆 DLQ_MESSAGE 稽核").isNotNull();
-            assertThat(row.operatorId()).isEqualTo("system");
-            assertThat(row.operatorSource()).isEqualTo("engine");
-            assertThat(row.detail())
-                    .contains("\"queue\":\"dlq.bpm\"")
-                    .contains("\"event\":\"" + event + "\"")
-                    .as("x-death 摘要必須指出訊息從哪來")
-                    .contains("bpm.webhook.queue")
-                    .as("稽核不得複製 payload 內容")
-                    .doesNotContain(secret);
-        } finally {
-            consumerLogger.detachAppender(appender);
-            appender.stop();
-        }
     }
 }

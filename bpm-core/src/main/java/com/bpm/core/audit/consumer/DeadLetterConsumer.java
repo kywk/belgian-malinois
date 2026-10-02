@@ -2,6 +2,7 @@ package com.bpm.core.audit.consumer;
 
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.audit.model.OperationType;
+import com.bpm.core.dlq.DlqReplayService;
 import com.bpm.core.dto.AuditEvent;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -10,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
@@ -32,9 +34,9 @@ import java.util.Map;
  * 也沒有任何告警</b>（security-audit P1-14）。一筆處理失敗的訊息會靜默沉到
  * 死信佇列，然後<b>永遠沒有人知道稽核少了一筆、或某個通知從未送出</b>。
  *
- * <p>這個 consumer 不嘗試「修復」訊息 —— 它的唯一職責是讓遺失<b>可被看見</b>：
- * 以 ERROR 記錄完整內容，讓它進到日誌與告警管線，並且保留原始 payload
- * 以便人工重放。
+ * <p>這個 consumer 不嘗試「修復」訊息 —— 它把遺失<b>變成可收拾的</b>：
+ * 以 ERROR 記錄完整內容，讓它進到日誌與告警管線，並且把訊息 parking
+ * 起來保留原始 payload，供人工重放。
  *
  * <h2>#51：除了 log，再寫一筆稽核＋（選配）寄一封信</h2>
  *
@@ -54,6 +56,24 @@ import java.util.Map;
  * 外寄郵件是兩個最不該複製這些內容的地方（security-audit P2-1 的同一條線）。
  * payload 全文仍照既有行為留在 ERROR log（截斷 2000 字）。
  *
+ * <h2>#51 留存收尾：告警後 parking</h2>
+ *
+ * <p>告警只讓人知道訊息死了；訊息本身要留下來，人工重放才有東西可放。
+ * 兩個 listener 在 {@link #alert} 之後把訊息重發布到對應的 parking queue
+ * （{@code dlq.parking.bpm}／{@code dlq.parking.audit}，無 consumer、
+ * 無 TTL），成功才返回（ack 原訊息）。重放（{@code DlqReplayService}）
+ * 只讀 parking queue，因此任何時候都能把死信放回原始目的地，不再受限於
+ * 「consumer 停用期間剛好累積的訊息」。
+ *
+ * <p>重發布前把 {@code x-death} 最舊一筆的起源抄成
+ * {@code x-bpm-origin-exchange}／{@code x-bpm-origin-routing-key}／
+ * {@code x-bpm-origin-queue} 自訂標頭：RabbitMQ 3.13 起不再把客戶端
+ * 重發布的 x-death 當成死信紀錄維護（count 不再累加；4.x 將不再解讀），
+ * 重放端不該依賴它的內容或存在；自訂標頭是本系統自己的契約，會原樣
+ * 跟著訊息走。找不到 x-death 就不加標頭，重放會走 queue 名稱對照的
+ * fallback。標頭名稱的常數定義在 {@link DlqReplayService}（讀取端），
+ * 兩邊只有一份。
+ *
  * <h2>⚠️ 這裡的例外處理決定成敗</h2>
  *
  * <p>{@code dlq.bpm}／{@code dlq.audit} <b>沒有設定 DLX</b>。consumer 若往外
@@ -64,13 +84,12 @@ import java.util.Map;
  * log。稽核走 {@code publishDetached}（不拋），寄信失敗也只記 log。
  * 這個 consumer 永遠正常返回 → 訊息被 ack 移除，不會迴圈。
  *
- * <p>⚠️ 代價是：<b>正常情況下 DLQ 訊息被 ack 後就從佇列消失</b>，
- * 人工重放（{@code DlqReplayService}）只能處理「還在佇列裡」的訊息
- * （consumer 停用／服務中斷期間累積的）。這是刻意的取捨：先保證
- * 告警不會因為例外處理不當變成無限 requeue 熱迴圈。若維運政策是
- * 「死信必須留存待人工重放」，那就不能有這個自動 consumer ——
- * 兩個需求互斥，必須由部署／維運層決定（停用 dlq listener 或
- * 改為非破壞性的告警機制），不能同時成立。
+ * <p>⚠️ parking 失敗的取捨：重發布到 parking queue 失敗時，只記 ERROR
+ * 後<b>照常返回</b>（訊息被 ack＝從原佇列消失）。拋例外會無限 requeue；
+ * 而 parking 失敗多半是 broker／channel 層級的暫時故障，requeue 也不
+ * 保證下一輪就會成功。此時 ERROR log 與 {@code DLQ_MESSAGE} 稽核都已
+ * 寫入 —— 最壞情況仍可從 log 人工補救。這是「絕不熱迴圈」優先於
+ * 「絕不遺失」的取捨。
  */
 @Component
 public class DeadLetterConsumer {
@@ -83,15 +102,18 @@ public class DeadLetterConsumer {
     private final AuditEventPublisher auditPublisher;
     private final JavaMailSender mailSender;
     private final ObjectMapper objectMapper;
+    private final RabbitTemplate rabbitTemplate;
     private final String alertRecipients;
 
     public DeadLetterConsumer(AuditEventPublisher auditPublisher,
                               JavaMailSender mailSender,
                               ObjectMapper objectMapper,
+                              RabbitTemplate rabbitTemplate,
                               @Value("${bpm.dlq.alert-recipients:}") String alertRecipients) {
         this.auditPublisher = auditPublisher;
         this.mailSender = mailSender;
         this.objectMapper = objectMapper;
+        this.rabbitTemplate = rabbitTemplate;
         this.alertRecipients = alertRecipients;
     }
 
@@ -107,6 +129,7 @@ public class DeadLetterConsumer {
                         + "對應的業務操作已經完成。需人工重放。payload={} headers={}",
                 body(message), message.getMessageProperties().getHeaders());
         alert("dlq.audit", message);
+        park("dlq.parking.audit", message);
     }
 
     /**
@@ -117,6 +140,53 @@ public class DeadLetterConsumer {
         log.error("BPM 事件進入死信佇列 —— 該通知／webhook 未送出。payload={} headers={}",
                 body(message), message.getMessageProperties().getHeaders());
         alert("dlq.bpm", message);
+        park("dlq.parking.bpm", message);
+    }
+
+    /**
+     * 把死信「停」進 parking queue（#51 留存收尾），供人工重放。
+     *
+     * <p>見類別註解：告警與 parking 分開，parking 失敗不影響告警，也不
+     * 讓 listener 拋例外。重發布走 default exchange（routing key＝queue 名），
+     * parking queue 不綁任何 exchange。
+     */
+    private void park(String parkingQueue, Message message) {
+        try {
+            rabbitTemplate.send("", parkingQueue, withOriginHeaders(message));
+        } catch (Exception e) {
+            // 見類別註解「parking 失敗的取捨」：訊息會被 ack 而從原佇列
+            // 消失，但 log 與 DLQ_MESSAGE 稽核都在，仍可人工補救。
+            log.error("DLQ 訊息 parking 失敗（重發布到 {}），訊息將被 ack 而從原佇列移除；"
+                            + "ERROR log 與 DLQ_MESSAGE 稽核仍在，可據以人工補救。"
+                            + "messageId={} 原因={}",
+                    parkingQueue, message.getMessageProperties().getMessageId(), e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 從 {@code x-death} 最舊一筆抄出起源，寫成自訂標頭。
+     *
+     * <p>RabbitMQ 3.13 起不再把客戶端重發布的 x-death 當死信紀錄維護
+     * （4.x 不再解讀），重放端不依賴它；自訂標頭會原樣留在 parking
+     * 訊息上。找不到 x-death（或欄位為空）就不加，重放會走 queue
+     * 名稱對照的 fallback。
+     */
+    private static Message withOriginHeaders(Message message) {
+        List<Map<String, ?>> xDeath = message.getMessageProperties().getXDeathHeader();
+        if (xDeath == null || xDeath.isEmpty()) return message;
+
+        // 慣例：最新在前、起源在後。取起源那一筆。
+        Map<String, ?> origin = xDeath.get(xDeath.size() - 1);
+        MessageProperties props = message.getMessageProperties();
+        putIfPresent(props, DlqReplayService.ORIGIN_EXCHANGE_HEADER, string(origin.get("exchange")));
+        putIfPresent(props, DlqReplayService.ORIGIN_ROUTING_KEY_HEADER,
+                firstRoutingKey(origin.get("routing-keys")));
+        putIfPresent(props, DlqReplayService.ORIGIN_QUEUE_HEADER, string(origin.get("queue")));
+        return message;
+    }
+
+    private static void putIfPresent(MessageProperties props, String header, String value) {
+        if (!value.isBlank()) props.getHeaders().put(header, value);
     }
 
     /**
