@@ -166,13 +166,15 @@ POST /api/deployments                          → 部署 BPMN
 |------|-----|-----------|------|
 | 同意 | complete + approved=true | ✅ 往下 | 正常核可 |
 | 退件 | complete + approved=false | ✅ 退件分支 | 不同意，退回上一節點 |
-| 退回申請人 | complete + returnTo=initiator | ✅ 回起點 | 資料有誤，退回修改 |
+| 退回申請人 | complete + returnTo=initiator | ✅ 回起點 | 資料有誤，退回修改（⚠️ 尚未實作，見下方加註） |
 | **拒絕（終止）** | complete + rejected=true | ✅ 流程結束 | 直接否決，流程終止 |
 | 轉發 | delegate | ❌ 等回覆 | 請人代審 |
 | 改派 | PUT assignee | ❌ 換人繼續 | 完全換人 |
 | 加簽 | 見 4.4 加簽機制 | ❌ 等加簽 | 額外會簽 |
 | 批註 | POST /api/tasks/{id}/comments | ❌ 不影響 | 留言備註 |
 | 催辦 | 通知服務 | ❌ 不影響 | 提醒處理 |
+
+> ⚠️ **2026-10-02 加註**：上表「退回申請人」的 `returnTo=initiator` **目前不存在於程式碼** —— 全 repo 無 `returnTo` 的處理路徑，退回走 BPMN 預設路徑到「申請者補件」（`bpm-core/src/main/java/com/bpm/core/controller/TaskController.java` 的 complete 分支只寫入 `approved`／`rejected`）。此功能列為 `docs/backend-development-backlog.md` 工項 #1（🟡），§11.4 的 webhook payload 表亦已註明。本列保留為規格目標，非現況。
 
 拒絕操作的流程設計：BPMN 中每個 UserTask 後的 ExclusiveGateway 需增加 `rejected` 分支，導向 End Event（流程終止），並觸發通知申請人。
 
@@ -787,7 +789,7 @@ Headers:
 {
     "processInstanceId": "PRC-550e8400-e29b",
     "businessKey": "REG-2026-001",
-    "status": "running",           // running | completed | rejected | cancelled
+    "status": "running",           // running | completed | cancelled（駁回為 completed + result=rejected，見下方註記）
     "startedAt": "2026-04-16T10:00:00Z",
     "currentTasks": [
         {
@@ -806,6 +808,8 @@ Headers:
     X-API-Key: {apiKey}
     X-System-Id: {systemId}
 ```
+
+> **2026-10-02 修正**：原註解列出的 `rejected` 狀態**不存在**。實作回傳 `status=completed` 並以 `result=rejected` 表示駁回（`status` 僅 `running`／`completed`／`cancelled`；`cancelled` 為已刪除實例且 `result=null`）。見 `bpm-core/src/main/java/com/bpm/core/external/ExternalApiController.java:585-609`。
 
 ### 9.5 流程變數清單（對接文件）
 
@@ -971,10 +975,16 @@ bpmn-js Properties Panel 中，UserTask 節點提供「審核對象類型」下�
 |-------------|---------|-----------------|
 | 特定人員 | 人員選擇器（OrgSelector） | `flowable:assignee="${userId}"` |
 | 直屬主管（一階） | 無需額外輸入 | `flowable:assignee="${orgService.getDirectManager(initiator)}"` |
-| 直屬主管（二階） | 選擇階數（1-N） | `flowable:assignee="${orgService.getManagerChain(initiator, 2)[1]}"` |
+| 直屬主管（二階） | 選擇階數（1-N） | `flowable:assignee="${orgService.getManagerAtLevel(initiator, 2)}"` |
 | 特定權限 | 權限碼選擇器 | `flowable:candidateUsers="${permService.getUsersByPermission('xxx')}"` |
 | 特定單位 | 部門選擇器 | `flowable:candidateGroups="${deptId}"` |
 | 特定 Callback | 輸入 Callback 名稱 | 搭配 Message Catch Event，等待外部指定審核人 |
+
+> ⚠️ **2026-10-02 加註（本表與設計器實作的差異）**：
+> - 「直屬主管（N 階）」原列 `${orgService.getManagerChain(initiator, 2)[1]}`；該寫法已由後端 lint rule j 判為 **error**（`BpmnLintService.java:296-303` —— 主管鏈較短時越界索引會回 null，產生無人可見的任務），設計器現產生 `${orgService.getManagerAtLevel(initiator, N)}`（`bpm-frontend/src/bpmn/assigneeExpressions.js:40-41`，N 預設 2）。
+> - 設計器另提供「發起人所屬單位」→ `flowable:candidateGroups="${orgService.getDeptId(initiator)}"`，本表未列。
+> - 「特定人員」「特定單位」在設計器目前是**文字輸入**（人員 ID／部門代碼字面值，`bpm-frontend/src/bpmn/AssigneeProps.js:84-123`），不是 OrgSelector／部門選擇器；「特定單位」儲存字面值而非 `${deptId}`（security-audit P2-6）。
+> - 「特定 Callback」目前**不在設計器選項中**（`ASSIGNEE_TYPES` 無此項）。
 
 ### 11.4 節點級 Webhook 設定（Properties Panel 擴充）
 
@@ -1518,25 +1528,27 @@ Record N+1: hash = SHA-256(record_N+1_content + hash_of_record_N)
 - [ ] **前端**：ExternalFormLink.vue（外部表單連結元件）
 
 ### Phase 4（3週）— 流程設計平台
-- [ ] **前端**：bpmn-js Editor 整合
-- [ ] **前端**：Properties Panel 擴充 — 審核對象類型選擇器
-- [ ] **前端**：Properties Panel 擴充 — formKey 綁定選擇器（內建表單/外部連結）
-- [ ] **前端**：Properties Panel 擴充 — 節點級 Webhook 設定 UI
-- [ ] **BPM Core**：節點級 Webhook 後端 Listener + 非同步發送
-- [ ] **BPM Core**：BPMN Lint 自動驗證（含 formKey 必填、外部流程 initiator 檢查）
-- [ ] Git 自動 commit + CI/CD pipeline（含微服務獨立部署）
+- [x] **前端**：bpmn-js Editor 整合（`bpm-frontend/src/views/BpmnEditor.vue`、`composables/useBpmnModeler.js`）
+- [x] **前端**：Properties Panel 擴充 — 審核對象類型選擇器（`bpm-frontend/src/bpmn/AssigneeProps.js`、`assigneeExpressions.js`）
+- [x] **前端**：Properties Panel 擴充 — formKey 綁定選擇器（內建表單/外部連結）（`bpm-frontend/src/bpmn/FormProps.js`）
+- [x] **前端**：Properties Panel 擴充 — 節點級 Webhook 設定 UI（`bpm-frontend/src/bpmn/WebhookProps.js`、`webhookStorage.js`）
+- [x] **BPM Core**：節點級 Webhook 後端 Listener + 非同步發送（`webhook/WebhookTaskListener.java`、`WebhookConsumer.java`，經 RabbitMQ）
+- [x] **BPM Core**：BPMN Lint 自動驗證（含 formKey 必填、外部流程 initiator 檢查）（`lint/BpmnLintService.java` rule b／rule h）
+- [ ] Git 自動 commit + CI/CD pipeline（含微服務獨立部署）—— ⬜ 未完成：deploy job 仍為 `echo` 佔位（見 remediation backlog R-07／R-08）
 
 ### Phase 5（3週）— 加簽與外部整合
-- [ ] **BPM Core**：通用加簽機制（動態子任務）
-- [ ] **BPM Core**：特定子流程加簽（Call Activity）
-- [ ] **BPM Core**：外部系統管理 API（§9.1 CRUD + API Key 輪換 + IP 白名單）
-- [ ] **BPM Core**：外部系統發起流程 API（含 effectiveInitiator 處理）
-- [ ] **BPM Core**：外部系統查詢流程狀態 API（§9.4）
-- [ ] **BPM Core**：節點 API 觸發（自動化審批）
-- [ ] **BPM Core**：流程變數規格管理 API（§9.5 ProcessVariableSpec）
-- [ ] **BPM Core**：外部表單連結機制（external: formKey 處理）
-- [ ] **前端**：外部系統管理後台頁面
-- [ ] **前端**：流程變數規格管理 UI
+- [x] **BPM Core**：通用加簽機制（動態子任務）（`controller/CountersignController.java`；`acceptance/CountersignTcA01Test.java`）
+- [ ] **BPM Core**：特定子流程加簽（Call Activity）—— ⬜ 未完成（`docs/backend-development-backlog.md` 工項 #4）
+- [x] **BPM Core**：外部系統管理 API（§9.1 CRUD + API Key 輪換 + IP 白名單）（`external/ExternalSystemAdminController.java`）
+- [x] **BPM Core**：外部系統發起流程 API（含 effectiveInitiator 處理）（`external/ExternalApiController.java`；R-20 的 `onBehalfOf`）
+- [x] **BPM Core**：外部系統查詢流程狀態 API（§9.4）（`ExternalApiController.java:378-398,552-609`）
+- [x] **BPM Core**：節點 API 觸發（自動化審批）（`ExternalApiController.completeTask`；`acceptance/ExternalApiTcA04Test.java`）
+- [x] **BPM Core**：流程變數規格管理 API（§9.5 ProcessVariableSpec）（`external/ProcessVariableSpecController.java`）
+- [x] **BPM Core**：外部表單連結機制（external: formKey 處理）（`FormProps.js`、`components/ExternalFormLink.vue`、`service/FormVersionLocker.java`）
+- [x] **前端**：外部系統管理後台頁面（`views/ExternalSystemAdmin.vue`）
+- [x] **前端**：流程變數規格管理 UI（`views/ProcessVariableSpecAdmin.vue`）
+
+> **2026-10-02 勾選核對**：Phase 4 除「Git 自動 commit + CI/CD pipeline」外皆已對應到程式碼；Phase 5 除「特定子流程加簽（Call Activity）」外皆已對應到程式碼。未勾項目另見 `docs/backend-development-backlog.md` #4、remediation backlog R-07／R-08。勾選依現況功能存在，不代表該項的安全強化全數完成（例如外部節點 API 的任務層級限制見 R-19）。
 
 ### Phase 6（持續）— 成熟化
 - [ ] **BPM Core**：Teams / Line Works 通知渠道

@@ -31,15 +31,15 @@ Nginx 路由（`infra/nginx/nginx.conf`）：`/api/` → bpm-core，`/` → SPA�
 
 計畫與決策文件集中在 `docs/plan/`（索引見 `docs/plan/README.md`）。**動到框架版本、服務邊界或安全性之前先看該目錄**，不要重新規劃已經決定的事。
 
-- `docs/plan/2026-09-28-handover.md` —— ⚠️ **先讀**：`feature/tech-debt-remediation` 分支的交接，所有程式碼變更皆**未經編譯**
+- `docs/plan/2026-09-28-handover.md` —— `feature/tech-debt-remediation` 分支的交接（歷史文件）。該分支的變更已於 2026-09-28～29 以 `mvn verify`（Testcontainers）驗證並併入 `main`（見 `docs/backend-completed-items.md` 第八節）；文中「未經編譯」屬當時狀態
 - `docs/plan/2026-09-28-security-audit.md` —— 全系統安全與正確性審查（40+ 項，含一條 RCE 路徑）
-- `docs/plan/2026-09-28-springboot4-upgrade.md` —— Boot 4 + Flowable 8 分階段升級（22 人日）
-- `docs/plan/2026-09-28-adr-001-form-service-consolidation.md` —— form-service 併入 bpm-core（3 人日，提議中）
+- `docs/plan/2026-09-28-springboot4-upgrade.md` —— Boot 4 + Flowable 8 分階段升級（Stage 0–4 ✅，Stage 5 起待開工；總計 22 人日）
+- `docs/plan/2026-09-28-adr-001-form-service-consolidation.md` —— form-service 併入 bpm-core（✅ 已完成＝升級 Stage 3，2026-09-28）
 - `docs/plan/2026-09-28-remediation-backlog.md` —— 工程品質與安全性改進 R-01 ~ R-25
 
-部署狀態：**尚未部署，只有本機開發**。因此 Stage 2 測試網優先於 R-01 認證授權。
+部署狀態：**尚未部署，只有本機開發**。Stage 2 測試網與 R-01 認證授權均已於 2026-09-28～29 完成。
 
-⛔ **部署前阻斷項（2026-09-28 決策）**：R-18（`/api/admin/**` 完全無認證）在 R-01 完成前，本系統**不得部署到任何多人可連線的環境**（含 SIT／UAT）。決策理由與例外條件見 `docs/plan/2026-09-28-remediation-backlog.md` 的 R-18 段落。刻意不做 nginx 半套止血 —— 它會擋掉前端所有管理頁面，卻換不到真正的授權。
+✅ **部署前阻斷項已解除（R-01 於 2026-09-29 完成）**：R-18（`/api/admin/**` 完全無認證）原本在 R-01 完成前列為部署阻斷項；`security/SecurityConfig.java` 現在對 `/api/admin/**` 要求 `ROLE_ADMIN`（:263）、其餘 `/api/**` 要求登入（:281）、預設 `denyAll`（:285）。決策理由與例外條件見 `docs/plan/2026-09-28-remediation-backlog.md` 的 R-18 段落。⚠️ 部署前仍須確認 prod 環境變數（`docker-compose.prod.yml` 的 `OIDC_ISSUER_URI`、`GATEWAY_SHARED_SECRET` 等未設定會讓啟動失敗）。
 
 ## 必讀的既有事實（容易踩雷）
 
@@ -95,21 +95,21 @@ cd bpm-core && mvn verify
 ## 進度與 backlog
 
 - 已完成：`docs/backend-completed-items.md`（Phase 1–5 共 87 項 / ~107.5 人日，另第八節為 2026-09-28～29 的技術債修復與安全強化 18 項）。
-- 待辦：`docs/backend-development-backlog.md`（2026-09-29 逐項核對：70 項中 ✅22／🟡21／⬜27，剩餘估時上限 ~114 人日）。
-  - P0：退回／駁回機制、Org/Perm 去 mock（真實 RestClient + Redis 快取 + 失效 webhook）、表單版控、端到端啟流程、認證授權整合。
+- 待辦：`docs/backend-development-backlog.md`（2026-10-02 統計：94 項中 ✅51／🟡20／⬜23，剩餘估時上限 ~96 人天）。
+  - P0：退回／駁回機制、Org/Perm 去 mock（真實 RestClient + Redis 快取 + 失效 webhook）、表單版控、端到端啟流程、~~認證授權整合~~（已完成，R-01）。
 - 獨立專案 backlog：`docs/rbac-enterprise-backlog.md`（企業權限中心，104 項 / ~149 人日，未開工；第十三節為 BPM 端已定案的介面約定）。
-- 驗收案例 11 項中 4 項未通過：**TC-A01 附屬簽、TC-A02 多方意見、TC-A04 外部系統 API**（`docs/history/2026-04-19-test-and-verify/tasks.md`）。
+- ~~驗收案例 11 項中 4 項未通過：**TC-A01 附屬簽、TC-A02 多方意見、TC-A04 外部系統 API**~~ —— 已於第八節補上對應自動化測試（`bpm-core/src/test/java/com/bpm/core/acceptance/`），`acceptance-test.sh` 為 PASS 7 / FAIL 0（2026-10-02）。`docs/history/2026-04-19-test-and-verify/tasks.md` 屬歷史紀錄。
 
 ## 已知技術債（勿當作 bug 重複回報，修改前先確認範圍）
 
-1. **無應用層認證授權**。所有 `/api/**` 全開放，含 `/api/admin/**`、`/api/internal/cache-invalidate`、`/api/audit-logs/integrity-check`；身分靠請求參數自報（`assignee`、`operatorId`、`createdBy`…）。前端 `Bearer {userId}` 為假 token。router 已有 `beforeEach` 角色守衛（2026-09-28），但那只是 UX 層防線，後端仍全開放。對應 backlog #62 / R-01。
-2. ~~**零單元測試**~~ —— **已於 2026-09-28 建立測試網**（Stage 2）。bpm-core 有 `src/test`，以 Testcontainers 起真實 MSSQL／RabbitMQ／Redis（**刻意不用 H2**：`DATETIMEOFFSET`、`NVARCHAR(MAX)`、`IDENTITY`、`MERGE`、`INSTEAD OF` 觸發器都無法在 H2 重現，而稽核 hash chain 與表單版本鎖定正好踩在這些行為上）。`mvn verify` 會實際執行測試，CI 的 status check 不再是空門。**前端仍無測試框架**（對應 backlog #64）。
+1. ~~**無應用層認證授權**。所有 `/api/**` 全開放，含 `/api/admin/**`、`/api/internal/cache-invalidate`、`/api/audit-logs/integrity-check`；身分靠請求參數自報（`assignee`、`operatorId`、`createdBy`…）。前端 `Bearer {userId}` 為假 token。router 已有 `beforeEach` 角色守衛（2026-09-28），但那只是 UX 層防線，後端仍全開放。~~ —— **已於 2026-09-29 完成（R-01，completed-items #98）**：`security/SecurityConfig.java` 啟用 Spring Security（JWT 只驗不簽＋信任閘道過濾器），`/api/admin/**` 要 `ROLE_ADMIN`、`/api/**` 要登入、預設 `denyAll`；身分由 `security/CallerIdArgumentResolver.java` 只從 SecurityContext 推導（不 fallback 標頭）。前端改帶真 JWT（`services/session.js`；dev 由 `devToken.js` 簽發，production bundle 不含簽發能力）。⚠️ 個案層級授權仍由各 controller 的守衛負責。
+2. ~~**零單元測試**~~ —— **已於 2026-09-28 建立測試網**（Stage 2）。bpm-core 有 `src/test`，以 Testcontainers 起真實 MSSQL／RabbitMQ／Redis（**刻意不用 H2**：`DATETIMEOFFSET`、`NVARCHAR(MAX)`、`IDENTITY`、`MERGE`、`INSTEAD OF` 觸發器都無法在 H2 重現，而稽核 hash chain 與表單版本鎖定正好踩在這些行為上）。`mvn verify` 會實際執行測試，CI 的 status check 不再是空門。~~**前端仍無測試框架**（對應 backlog #64）~~ —— **已於 2026-09-30 建立 Vitest 測試框架**（`bpm-frontend/vitest.config.js`、`package.json` 的 `test: vitest run`；測試檔為 `src/**/*.spec.js`）。
 3. **CI/CD 雙軌並行**：GitHub Actions 與 GitLab CI 同時維護，registry 不一致（GHCR vs `$CI_REGISTRY`），而 `docker-compose.prod.yml` 只認 GHCR 命名。所有 deploy job 仍是 `echo` 佔位。
 4. **`bpmn-definitions/` 目錄不存在**，兩邊的 BPMN deploy job 實質 no-op；env 替換用 shell 假 YAML parser，遇到 `http://` 的冒號會解析錯誤。
-5. **密碼治理（部分已修）**：`infra/mssql/entrypoint.sh` 的密碼不一致已於 2026-09-28 修復（改讀 `MSSQL_SA_PASSWORD`，未設即啟動失敗）。**尚未處理**：開發密碼仍散落於兩個 `application.yml` 與 `docker-compose.yml`；`bpm.webhook.hmac-secret` 預設字面值 `bpm-webhook-secret`。見 backlog R-04。
-6. **外部 API 授權**：字串子串比對已於 2026-09-28 改為精確比對（R-09，commit `f12a8c2`，**未經編譯驗證**），授權判定集中在 `external/ExternalSystemPolicy.java`，擁有權改用 server 寫入的 `_externalSystemId`。**R-20 已於 2026-09-29 完成**：`initiator` 一律由 server 寫成 `system:<systemId>`、body 帶 `initiator` 回 400，代發改用 `onBehalfOf`（需 `allowOnBehalfOf`）；`firstTaskAssignee`／候選群組驗證與 lint rule h 升 error 見 #68／#88。其餘外部 API 授權項目見 `docs/plan/2026-09-28-remediation-backlog.md`（該檔部分條目尚未隨現況加註）。`lastUsedAt` 仍每請求寫一次 DB。
-7. **Redis 快取失效用 `KEYS` 掃描**（`perm:users:{code}:*`），production 隱憂。
-8. 文件／版控雜項（見 backlog R-11 ~ R-17）：~~根目錄 `backend-development-backlog.md` 與 `docs/` 那份重複~~（2026-09-29 已刪除根目錄那份，`docs/` 三份規劃文件納入版控）；`bpm-frontend/dist/` 被 commit 進版控；無根 README、無 ESLint/Prettier/Checkstyle/Spotless 設定；`docker-compose.prod.yml` 仍有已淘汰的 `version: '3.8'` 且未設 JVM heap 上限（backlog #50）。
+5. **密碼治理（部分已修）**：`infra/mssql/entrypoint.sh` 的密碼不一致已於 2026-09-28 修復（改讀 `MSSQL_SA_PASSWORD`，未設即啟動失敗）。**尚未處理**：開發密碼仍散落於 `bpm-core/src/main/resources/application.yml` 與 `docker-compose.yml`（form-service 已整併，不再有第二份）；`bpm.webhook.hmac-secret` 預設字面值 `bpm-webhook-secret`。見 backlog R-04。
+6. **外部 API 授權**：字串子串比對已於 2026-09-28 改為精確比對（R-09，commit `f12a8c2`；**已由後續測試網驗證**，見 completed-items #99），授權判定集中在 `external/ExternalSystemPolicy.java`，擁有權改用 server 寫入的 `_externalSystemId`。**R-20 已於 2026-09-29 完成**：`initiator` 一律由 server 寫成 `system:<systemId>`、body 帶 `initiator` 回 400，代發改用 `onBehalfOf`（需 `allowOnBehalfOf`）；`firstTaskAssignee`／候選群組驗證與 lint rule h 升 error 見 #68／#88。其餘外部 API 授權項目見 `docs/plan/2026-09-28-remediation-backlog.md`（該檔部分條目尚未隨現況加註）。`lastUsedAt` 仍每請求寫一次 DB。
+7. ~~**Redis 快取失效用 `KEYS` 掃描**（`perm:users:{code}:*`），production 隱憂。~~ —— **已於 2026-09-28 完成（R-10）**：`BpmPermissionService.evictDeptScoped` 改用 `SCAN`（游標分批）；同時部門快取 key 改為 `perm:users-by-dept:{deptId}:{code}`，避免與全域 key 前綴互撞（security-audit P2-8）。
+8. 文件／版控雜項（見 backlog R-11 ~ R-17）：~~根目錄 `backend-development-backlog.md` 與 `docs/` 那份重複~~（2026-09-29 已刪除根目錄那份，`docs/` 三份規劃文件納入版控）；~~`bpm-frontend/dist/` 被 commit 進版控~~（R-12 已移出並列入 `.gitignore`）；~~`docker-compose.prod.yml` 仍有已淘汰的 `version: '3.8'`~~（R-14 已移除該行）。**仍未處理**：無根 README（R-16）、無 ESLint/Prettier/Checkstyle/Spotless 設定（R-15）、`docker-compose.prod.yml` 未設 JVM heap 上限（backlog #50）。
 9. ~~**潛在 bug**：`data.sql` 的 snake_case 與 `@UniqueConstraint` 的 camelCase~~ —— **已於 2026-09-28 在乾淨 DB 上驗證為非問題**，Hibernate 正確解析成 `(form_key, version)`。
 
    但同一次驗證發現了真正的問題並已修復：**全 schema 的文字欄位都是 VARCHAR 而定序是 Latin1**，中文寫入時被靜默換成問號。已造成表單名稱全毀、通知信主旨全毀，以及稽核 `operator_name` 損壞後使 `integrityCheck` 全面誤報。56 個欄位已轉為 NVARCHAR（migration `nvarchar_all_text_columns`），並加上 `hibernate.use_nationalized_character_data` 與 `SchemaEncodingGuardTest` 防止復發。
