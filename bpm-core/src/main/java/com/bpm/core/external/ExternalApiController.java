@@ -41,6 +41,13 @@ public class ExternalApiController {
      * 「為什麼把 onBehalfOf 的既有檢查也收進來」。
      */
     private final ExternalActorGuard actorGuard;
+    /**
+     * 第一關受理人的代理人代換（#5）。BPMN 的 {@code managerReview} 由
+     * {@link com.bpm.core.service.InitialAssigneeResolver#resolve} 決定，
+     * 而本類別在流程啟動後會<b>再設定一次</b> {@code firstTaskAssignee} ——
+     * 那一行必須走同一個代換，否則會把 BPMN 已代換的代理人蓋回休假者本人。
+     */
+    private final com.bpm.core.service.InitialAssigneeResolver assigneeResolver;
 
     /**
      * 流程實例的擁有者。啟動時由 server 寫入，外部系統無法透過 request body 影響。
@@ -55,7 +62,8 @@ public class ExternalApiController {
                                   ProcessVariableSpecRepository specRepo,
                                   AuditEventPublisher auditPublisher, FormVersionLocker formVersionLocker,
                                   ExternalSystemPolicy policy,
-                                  ExternalActorGuard actorGuard) {
+                                  ExternalActorGuard actorGuard,
+                                  com.bpm.core.service.InitialAssigneeResolver assigneeResolver) {
         this.runtimeService = runtimeService;
         this.taskService = taskService;
         this.historyService = historyService;
@@ -69,6 +77,8 @@ public class ExternalApiController {
         // #88：原本這裡注入 OrgService 供 onBehalfOf 的 inline try/catch 使用。
         // 規則移到 ExternalActorGuard 後本類別不再直接碰組織系統。
         this.actorGuard = actorGuard;
+        // #5：見欄位註解 —— 啟動後補設定第一關受理人時要與 BPMN 走同一份代換。
+        this.assigneeResolver = assigneeResolver;
     }
 
     // ── 1. Start Process ──
@@ -369,7 +379,22 @@ public class ExternalApiController {
                 .orderByTaskCreateTime().asc().list();
         Task firstTask = firstTasks.isEmpty() ? null : firstTasks.get(0);
         if (firstTask != null) {
-            if (firstAssignee != null) taskService.setAssignee(firstTask.getId(), firstAssignee);
+            if (firstAssignee != null) {
+                // ── #5：必須與 BPMN 走同一份代理人代換 ────────────────
+                //
+                // BPMN 的 managerReview 在啟動當下已用 assigneeResolver.resolve
+                // 把受理人代換成代理人（若 firstTaskAssignee 設了代理人）。
+                // 這一行原本傳原始值，等於<b>把代換結果蓋回去</b> ——
+                // 外部系統看到的 200 與 BPMN 實際指派的人不一致，
+                // 而且沒有任何錯誤訊息。走 effectiveAssignee 之後，
+                // 「誰來簽」的規則只有一份（與 resolve 共用）。
+                //
+                // ⚠️ 存在性驗證不受影響：actorGuard.requireKnownPerson 已在
+                // 流程啟動<b>之前</b>驗過原始的 firstTaskAssignee（見上方）。
+                // 這裡只做代換，不再查一次網路。
+                taskService.setAssignee(firstTask.getId(),
+                        assigneeResolver.effectiveAssignee(firstAssignee));
+            }
             // ⚠️ 用守衛回傳的那一份清單（已驗過授權、已 trim、已丟棄空白），
             // 不可在這裡再 split 一次 —— 驗證過的與實際寫入的必須是同一份。
             for (String g : firstCandidateGroups) {

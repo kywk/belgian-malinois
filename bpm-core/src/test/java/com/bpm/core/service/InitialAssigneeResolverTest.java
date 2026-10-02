@@ -1,6 +1,7 @@
 package com.bpm.core.service;
 
 import org.flowable.engine.delegate.DelegateExecution;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -9,6 +10,7 @@ import java.util.HashMap;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -31,6 +33,19 @@ class InitialAssigneeResolverTest {
 
     private final OrgService orgService = mock(OrgService.class);
     private final InitialAssigneeResolver resolver = new InitialAssigneeResolver(orgService);
+
+    /**
+     * {@code resolveEffective} 的預設答案＝本人（沒有代理人）。
+     *
+     * <p>用 {@code doAnswer} 而不是 {@code when(...)}：{@code when} 的 stub
+     * 呼叫本身會被 Mockito 記成一次互動，下面「只給候選群組不得查代理人」
+     * 的 {@code verify(never())} 就會誤紅。個別測試要模擬代理人時，
+     * 在測試方法內再 {@code when(...)} 覆寫（後註冊的 stub 勝出）。
+     */
+    @BeforeEach
+    void defaultNoSubstitute() {
+        doAnswer(inv -> inv.getArgument(0)).when(orgService).resolveEffective(anyString());
+    }
 
     /**
      * 用 stub 的 {@code DelegateExecution} 呼叫真正的 resolve。
@@ -100,6 +115,56 @@ class InitialAssigneeResolverTest {
 
         assertThat(resolve("user001", "", "")).isEqualTo("mgr001");
         assertThat(resolve("user001", "   ", "  ")).isEqualTo("mgr001");
+    }
+
+    // ── #5：代理人代換 ────────────────────────────────────────────
+
+    @Test
+    @DisplayName("#5 人工發起：主管有代理人 → 第一關派給代理人")
+    void managerSubstituteIsUsed() {
+        when(orgService.getDirectManager("user001")).thenReturn("mgr001");
+        when(orgService.resolveEffective("mgr001")).thenReturn("user002");
+
+        assertThat(resolve("user001", null, null))
+                .as("主管休假時任務必須改派給代理人，不能停在休假期間的收件匣")
+                .isEqualTo("user002");
+    }
+
+    @Test
+    @DisplayName("#5 外部明確受理人有代理人 → 也代換（存在性驗證在呼叫端、代換之前）")
+    void explicitAssigneeSubstituteIsUsed() {
+        // ExternalActorGuard.requireKnownPerson 驗的是原始 firstTaskAssignee，
+        // 而它排在流程啟動之前；本方法只做代換，不繞過那個驗證。
+        when(orgService.resolveEffective("mgr001")).thenReturn("user002");
+
+        assertThat(resolve("system:erp", "mgr001", null)).isEqualTo("user002");
+    }
+
+    @Test
+    @DisplayName("#5 只給候選群組 → 不查代理人，仍回 null")
+    void candidateGroupsOnlyDoesNotResolveSubstitute() {
+        // 這一格沒有指名任何人，也就沒有「這個人休假」的對象。
+        // 回傳任何代理人都會把群組派工變成單人指派。
+        assertThat(resolve("system:erp", null, "finance,hr")).isNull();
+
+        verify(orgService, never()).resolveEffective(anyString());
+    }
+
+    @Test
+    @DisplayName("#5 鏈頂人員沒有主管 → 不查代理人（null 不是人）")
+    void chainTopManagerIsNotResolved() {
+        when(orgService.getDirectManager("user001")).thenReturn(null);
+
+        assertThat(resolve("user001", null, null)).isNull();
+        verify(orgService, never()).resolveEffective(anyString());
+    }
+
+    @Test
+    @DisplayName("#5 effectiveAssignee(null) 原樣回 null，不查組織系統")
+    void effectiveAssigneeNullPassesThrough() {
+        assertThat(resolver.effectiveAssignee(null)).isNull();
+
+        verify(orgService, never()).resolveEffective(anyString());
     }
 
     @Test
