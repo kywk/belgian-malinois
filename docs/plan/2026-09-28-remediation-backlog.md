@@ -236,7 +236,18 @@
 
 **關聯**：本決策同時決定了 R-09（commit `f12a8c2`）的實際有效性 —— 在 R-01 完成前，R-09 的授權收緊在可連線環境中仍是可繞過的。
 
-### R-19 外部系統可自我核准（1 人日）
+### ✅ R-19 外部系統可自我核准（已完成 2026-10-02）
+
+> **✅ 已完成（`123e494`，merge `c69ce1a`；`startProcess` 的 `_` 殘留由 `c05afae` 補齊）。**
+> 現況（2026-10-02 複驗）：
+> - `completeTask` 順序：擁有權 403 → `allowedProcessKeys` 403 → 任務必須是 `assignee`／
+>   `candidateUsers` 明確包含 `system:<systemId>`（403）→ `_` 前綴 400 → 既有
+>   `validateVariables` 400。全部在 `taskService.complete` 之前，被拒零副作用。
+> - `startProcess` 也拒絕 `_` 前綴（與 `completeTask` 同一份 helper）。
+> - 線上實測：自我核准 403 且任務仍在、`approved` 未寫入；未授權流程 key 403；
+>   `_externalSystemId` 400；`system:<id>` 持有的任務可完成（200）。
+> - ⚠️ 未收緊「未宣告的非 `_` 變數」（沿用既有 `validateVariables` 語意）；
+>   Call Activity 子流程的任務要求子流程 key 也在授權清單內。
 
 `external/ExternalApiController.java` 的 `completeTask` 只檢查「流程實例屬於誰」，**不檢查「這個 task 該不該由外部系統做」**：沒有任何 assignee / candidate / taskDefinitionKey 限制。
 
@@ -295,7 +306,13 @@ R-09 修掉了白名單的兩個實作 bug（重複值 500、元素未 trim）�
 
 次要：error message 回顯 client IP，對外洩漏內部 proxy 位址。
 
-### R-23 `_externalSystemId` 可被任意寫入（依賴 R-01）
+### ✅ R-23 `_externalSystemId` 可被任意寫入（已完成 2026-10-02）
+
+> **✅ 已完成（`c05afae`，merge `0974b8f`）。** 兩個外部入口（`startProcess`／`completeTask`）
+> 一律拒絕 `_` 前綴變數名（400 並指名，同一份 `rejectReservedVariableNames`）；
+> `_externalSystemId` 另由 server 最後覆寫。內部 `TaskController` 的 `_` 前綴保護為更早既有。
+> ⚠️ 掃描範圍是「所有」variable 寫入路徑的抽樣（兩個外部入口＋內部完成路徑）；
+> form／countersign 等其他寫入端若日後新增 `_` 變數再一併檢查。
 
 擁有權標記是普通 Flowable 變數，在無認證的內部 API 下不是 server-only：`controller/TaskController.java` 的 `PUT /api/tasks/{id}`（action=complete）把 `req.variables()` 逐筆寫入後丟給 `taskService.complete` → 任何未認證呼叫者都能覆寫 `_externalSystemId`，把任一流程實例「過戶」給指定的外部系統。
 

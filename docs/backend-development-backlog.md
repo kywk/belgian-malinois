@@ -19,7 +19,7 @@
 - **audit-log-service**：已於 2026-04-24 併入 bpm-core；稽核為 fail-closed（寫不進就回滾）
 - **認證**：平台層 JWT 驗證＋信任閘道已完成（R-01）；個案層級授權仍由各 controller 負責
 - **外圍系統整合（組織／權限）仍以 Mock 替代**，真正的權限中心見 `docs/rbac-enterprise-backlog.md`
-- **測試（2026-10-02 實測）**：後端 **759** 個（`mvn clean verify`；Testcontainers：真實 MSSQL／RabbitMQ／Redis）、前端 **154** 個（Vitest）
+- **測試（2026-10-02 實測）**：後端 **840** 個（`mvn clean verify`；Testcontainers：真實 MSSQL／RabbitMQ／Redis）、前端 **165** 個（Vitest）
 - 安全與正確性修復（P0／P1／P2、R 編號）另見 `docs/plan/2026-09-28-security-audit.md`、
   `docs/plan/2026-09-28-remediation-backlog.md`，已完成部分列在 `docs/backend-completed-items.md` 第八節
 
@@ -36,7 +36,7 @@
 | 3 | 加簽 - 動態子任務 | 建立 Sub Task、原任務暫停、加簽完成恢復、多人加簽 | 5d | ✅ `CountersignController`；有未完成子任務時不得 complete（409） |
 | 4 | 加簽 - Call Activity | 預定義加簽子流程模板整合、前端 Call Activity 節點配置 | 3d | ⬜ |
 | 5 | 代理人機制 | `orgService.resolveEffective()` 考慮代理人、自動轉派 | 2d | 🟡 `resolveEffective` 已有；持有人全不在時改派代理人（68d8518）；缺一般指派與既有任務的自動轉派 |
-| 6 | 催辦功能 | 催辦 API、觸發通知、防頻繁催辦限制 | 1d | ⬜ 前端 `urge()` 只是假提示 |
+| 6 | 催辦功能 | 催辦 API、觸發通知、防頻繁催辦限制 | 1d | ✅ **2026-10-02 完成**（`6d37d43`＋前端 `a6703ee`，merge `26417bb`）。`POST /api/tasks/urge?processInstanceId=`：授權僅申請人（非參與者 404／參與者非申請人 403）、Redis `SetIfAbsent` 30 分鐘冷卻（案件為 key、fail-open；產品參數待確認）、收件人＝目前待處理任務的 assignee（候選任務送候選人、群組無 email → 409）。線上實測：200 `{cooldownMinutes:30, recipients:[mgr001]}`／第二次 429／主管 403／未知案件 404，MailHog 收到「催辦提醒」信。⚠️ 成功催辦的稽核收尾中 |
 | 7 | 流程撤回（申請人撤案） | 撤回 API、判斷是否可撤回（第一節點尚未處理） | 2d | ⬜ |
 
 ### 1.2 OrgService / PermService 整合（目前為 Mock）
@@ -76,8 +76,8 @@
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
 | 25 | Webhook Payload 完整化 | 依規格補齊所有事件欄位（task.created、completed、rejected、timeout、process.completed） | 3d | ✅ **2026-10-02 完成**（`fcfb951`／`792e2db`，merge `4af4e53`）。依使用者裁決沿用 P2-1 紅線：**不送** `variables`／`comment`／`operatorName`／候選人；補 `task.timeout` 的 `assignee`／`dueDate`／`overdueHours`（整點小時無條件捨去、下限 0、`dueDate=null` → `null`）。spec §11.4 欄位表改以實作為準。⚠️ **重大上游事實**：Flowable 7.2.0 **不發 timeout task event**（`BaseTaskListener` 只有 create／assignment／complete／delete／all；整個 flowable-engine 無 `timeout` 字面值，2026-10-02 以 `javap -p -c` 驗證）→ `event="timeout"` 目前永遠不投遞；payload 已依合約墊好，替代機制已裁決：設計器 2026-10-02 移除 `timeout` 選項（`d53d668`，merge `34c6756`），後端保留相容 |
-| 26 | HMAC 簽章實作 | webhook payload HMAC-SHA256 簽章 | 1d | 🟡 HMAC-SHA256 簽章已實作，但投遞未接上，實際不會觸發（見 #67） |
-| 27 | Webhook 重試機制 | 失敗指數退避重試（1s→2s→4s，max 3次）、DLQ | 2d | 🟡 retry 1s×2 最多 3 次＋`dlq.bpm`、SSRF 防護已有；同樣未接上（見 #67） |
+| 26 | HMAC 簽章實作 | webhook payload HMAC-SHA256 簽章 | 1d | ✅ **2026-10-02 收尾**（測試 `e3eb4cc`，merge `6c19e2a`）。簽章走 `X-BPM-Signature` 標頭、對實際 body 計算；`WebhookSignatureHeadersTest` 釘住重放標頭（`X-BPM-Timestamp`＝body `deliveryTimestamp`、`X-BPM-Delivery-Id` 為 UUID 且兩筆不重複、body 不得含 `hmacSignature`）。另補 prod 啟動防護（`d34c3c6`，merge `0aa4d50`）：prod 未設或沿用預設 `bpm-webhook-secret` → 拒絕啟動 |
+| 27 | Webhook 重試機制 | 失敗指數退避重試（1s→2s→4s，max 3次）、DLQ | 2d | ✅ **2026-10-02 收尾**（測試 `e3eb4cc`，merge `6c19e2a`）。`WebhookRetryDlqTest` 以 `WebhookTestSink` 失敗注入證明：暫態失敗 2 次後成功（間隔對得上執行期 `RabbitProperties`）、持續失敗恰 3 次後進 `dlq.bpm`（帶 `x-death: bpm.webhook.queue/rejected`）、SSRF 拒絕 log ERROR 且**不重試不進 DLQ**。⚠️ 實際語意是 `max-attempts=3`＝共 3 次嘗試（2 個 backoff：1s、2s）；原描述「1s→2s→4s」不精確，已按實測記錄 |
 | 28 | payloadTemplate 自訂 Payload | 允許外部系統客製 webhook payload 結構 | 2d | ⬜ |
 
 ### 1.6 通知服務
@@ -88,7 +88,7 @@
 | 30 | NotifyTemplate CRUD API | 通知模板管理、變數替換引擎 | 2d | ✅ `/api/admin/notify-templates`，`${var}` 替換 |
 | 31 | Email 通知完整實作 | 模板渲染 + 發送（spring-boot-starter-mail 已引入） | 2d | ✅ 收件人仍寫死為 `userId@company.com` |
 | 32 | Teams 通知整合 | Microsoft Teams webhook 推送 | 2d | ⬜ |
-| 33 | 通知觸發事件完整化 | 任務指派、認領、加簽、催辦、退回、拒絕、完成、超時預警 | 3d | 🟡 只會發出 `task_assigned`；退回、拒絕、完成、加簽、催辦、逾時都沒有發送端 |
+| 33 | 通知觸發事件完整化 | 任務指派、認領、加簽、催辦、退回、拒絕、完成、超時預警 | 3d | ✅ **2026-10-02 完成**（`6d37d43`／`fdab9ce`，merge `26417bb`）。新增唯一發送端 `NotifyPublisher`：退回（`approved=false` 且非拒絕）／拒絕（`rejected=true`）／結案（核准且流程結束，避免與拒絕信矛盾）／認領（收件人＝其他候選人）／加簽（standalone task 不經 BPMN listener，由建立端呼叫、事件沿用 `task_assigned`）／催辦。通知吞例外不影響簽核；P2-1 紅線守住。線上實測：退回／拒絕／核准／催辦信件都在 MailHog；認領信亦在 acceptance 流程中出現。⚠️ 超時預警不做（Flowable 7.2.0 不發 timeout 事件）；external API 的完成路徑仍不通知（見殘餘） |
 
 ### 1.7 BPMN Lint 驗證（Service 已建，規則需補齊）
 
@@ -96,7 +96,7 @@
 |---|------|------|------|------|
 | 34 | formKey 存在性驗證 | 呼叫 form-service 確認 formKey 對應表單存在 | 1d | ✅ 併入後直接呼叫 `FormService` |
 | 35 | EL 函數白名單驗證 | 僅允許 orgService/permService/bpmQueryService 的合法方法 | 1d | 🟡 bean 層白名單＋執行期 `setBeans()`；未逐一檢查方法 |
-| 36 | 外部系統流程 Lint | 檢查允許外部發起的流程第一個 UserTask 不使用 initiator EL | 1d | 🟡 規則 h 已可執行，但嚴重度仍是 warning |
+| 36 | 外部系統流程 Lint | 檢查允許外部發起的流程第一個 UserTask 不使用 initiator EL | 1d | ✅ **2026-10-02 追認**。rule h 已於 #68d（2026-09-30）由 warning 升為 **error**（`BpmnLintService.java:327-333`），本列描述為當時殘留；部署會被擋下。無新程式改動 |
 | 37 | ExclusiveGateway default flow 驗證 | 確保每個 Gateway 都有 default sequence flow | 0.5d | ✅ 只要求「每條出線都有條件」的閘道 |
 | 38 | Service Task 錯誤邊界事件驗證 | 確保 Service Task 都有 Error Boundary Event | 0.5d | ✅ warning |
 
@@ -105,7 +105,7 @@
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
 | 39 | Hash chain 完整性驗證 API | `/api/audit-logs/integrity-check` | 2d | ✅ 逐筆走鏈，v2 雜湊涵蓋全部欄位 |
-| 40 | 匯出 CSV/Excel | `/api/audit-logs/export`，匯出操作本身也記錄 | 2d | ⬜ |
+| 40 | 匯出 CSV/Excel | `/api/audit-logs/export`，匯出操作本身也記錄 | 2d | ✅ **2026-10-02 完成**（`990cf1e`，merge `b3a8dd4`；使用者裁決只做 CSV）。UTF-8 BOM＋RFC 4180 逃逸、逐頁 500 筆直接寫 response（**不用 `StreamingResponseBody`** —— ASYNC dispatch 會丟失逐請求閘道身分、每次成功匯出噴 ERROR）、篩選參數與列表逐字相同、共用查詢補 `a.id DESC` 全序、匯出以既有 `EXPORT_DATA` 留痕（篩選＋命中筆數）。線上實測：dir001 200／admin001 403／user001 403／未登入 401；CSV 269KB 格式正確；`EXPORT_DATA` 查得到。待裁決：筆數上限、CSV 公式注入、中斷語意 |
 | 41 | 異常操作偵測 | 短時間大量審批、異常存取模式偵測 + 告警 | 3d | ⬜ （`UnreachableTaskListener` 只告警沒人看得到的任務，不算異常偵測） |
 | 42 | 操作類型完整覆蓋 | 確保所有操作類型都有對應的 publish 呼叫 | 2d | ✅ `OperationTypeCoverageTest` 守住；未實作的操作列在 `NOT_YET_IMPLEMENTED` |
 
@@ -127,7 +127,7 @@
 |---|------|------|------|------|
 | 50 | JVM 記憶體配置 | Dockerfile 加入 JAVA_TOOL_OPTIONS、docker-compose resource limits | 0.5d | ⬜ Dockerfile 無 `JAVA_TOOL_OPTIONS`；prod compose 只有 mssql 有記憶體上限 |
 | 51 | RabbitMQ DLQ 告警 | Dead Letter Queue 消費者 + 告警通知 | 1d | 🟡 `DeadLetterConsumer` 只記 ERROR log；缺主動告警 |
-| 52 | 多版本流程並行處理 | 確保新案用新版、舊案繼續舊版的邏輯正確 | 1d | 🟡 依賴 Flowable 預設行為＋表單版本鎖定；無專門測試 |
+| 52 | 多版本流程並行處理 | 確保新案用新版、舊案繼續舊版的邏輯正確 | 1d | ✅ **2026-10-02 完成**（`a80d323`，merge `f04f584`）。`MultiVersionProcessTest` 3 條（真實 DB）：v2 部署後新實例走 v2、v1 舊實例連完成後的路由都走 v1；表單版本鎖（發布 v2 後舊實例鎖 v1、同定義下新實例鎖 v2 的內建對照）；新舊並存的版本查詢與 `resourcedata`。只加測試、未發現缺陷 |
 | 53 | BPMN 環境變數替換 | 部署時依環境替換 `${ENV_*}` 變數 | 1d | ⬜ |
 
 ---
@@ -224,7 +224,7 @@
 
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
-| 95 | 文件與現況同步（#68 範圍外清單） | 修正現行文件與程式碼落差：`CLAUDE.md` 的 R-18 阻斷／無應用層認證敘述、`docs/plan/README.md` 狀態表（49.5 → 19.5 人日）、spec §4.3 `returnTo`（未實作）、§9.4 status（駁回是 `completed + result=rejected`）、§11.3 `getManagerAtLevel`、Phase 4/5 逐項對程式碼勾選；歷史快照（security-audit／handover）只加註 | 0.2d | ✅ **2026-10-02 完成**（`8da65e9`，merge `b471e69`）。每一處附 file:line；未勾：Phase 4 CI/CD（R-07／R-08）、Phase 5 Call Activity（#4）。⚠️ 另發現 R-19／R-23 的外部 `_` 變數過濾殘留（程式缺陷，未修） |
+| 95 | 文件與現況同步（#68 範圍外清單） | 修正現行文件與程式碼落差：`CLAUDE.md` 的 R-18 阻斷／無應用層認證敘述、`docs/plan/README.md` 狀態表（49.5 → 19.5 人日）、spec §4.3 `returnTo`（未實作）、§9.4 status（駁回是 `completed + result=rejected`）、§11.3 `getManagerAtLevel`、Phase 4/5 逐項對程式碼勾選；歷史快照（security-audit／handover）只加註 | 0.2d | ✅ **2026-10-02 完成**（`8da65e9`，merge `b471e69`）。每一處附 file:line；未勾：Phase 4 CI/CD（R-07／R-08）、Phase 5 Call Activity（#4）。⚠️ 另發現 R-19／R-23 的外部 `_` 變數過濾殘留（程式缺陷）—— 已於同日修復：R-19 修 `completeTask`、收尾 `c05afae` 修 `startProcess`（同一份 helper） |
 
 ---
 
@@ -297,21 +297,21 @@
 
 | 類別 | 工項數 | ✅ | 🟡 | ⬜ | 剩餘估時（上限） |
 |------|--------|----|----|----|---------|
-| 流程引擎核心 | 7 | 1 | 3 | 3 | 13d |
+| 流程引擎核心 | 7 | 2 | 3 | 2 | 12d |
 | Org/Perm 正式整合 | 5 | 3 | 2 | 0 | 5d |
 | 外部系統接入 | 8 | 7 | 1 | 0 | 1d |
 | 非同步/Callback | 4 | 0 | 0 | 4 | 9d |
-| Webhook | 4 | 1 | 2 | 1 | 5d |
-| 通知服務 | 5 | 3 | 1 | 1 | 5d |
-| BPMN Lint | 5 | 3 | 2 | 0 | 2d |
-| 稽核 Log | 4 | 2 | 0 | 2 | 5d |
+| Webhook | 4 | 3 | 0 | 1 | 2d |
+| 通知服務 | 5 | 4 | 0 | 1 | 2d |
+| BPMN Lint | 5 | 4 | 1 | 0 | 1d |
+| 稽核 Log | 4 | 3 | 0 | 1 | 3d |
 | 通用 Delegate | 7 | 0 | 1 | 6 | 12d |
-| 基礎設施 | 4 | 0 | 2 | 2 | 3.5d |
+| 基礎設施 | 4 | 1 | 1 | 2 | 2.5d |
 | Form Service | 6 | 2 | 2 | 2 | 6d |
 | 跨服務整合 | 6 | 1 | 4 | 1 | 17d |
 | 2026-09-29 新增 | 29 | 28 | 0 | 1 | 12.5d |
 | 2026-10-02 新增 | 1 | 1 | 0 | 0 | 0d |
-| **合計** | **95** | **52** | **20** | **23** | **~96 人天** |
+| **合計** | **95** | **59** | **15** | **21** | **~85 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -319,6 +319,8 @@
 > 與 #70（實為 ⬜）都算成 ✅、項數也多記 1）。#25／#67／#68 完成後：
 > ✅ 51、🟡 20、⬜ 23；「2026-09-29 新增」實際 29 項（28✅／1⬜＝#70）。
 > 同日再新增 #95（文件同步，✅）→ 總計 95 項、✅ 52。
+> 2026-10-02（第二波）：R-19、#26／#27、#40、#52、#6、#33、#36 完成，另補
+> webhook HMAC 的 prod 啟動防護。✅ 59、🟡 15、⬜ 21，剩餘上限 ~85 人天。
 
 > 2026-09-29 晚間更新：#66、#69 完成（+3 項新發現 #71～#73）。
 > #67 的估時由 2d 上修為 4d（三段斷線、8～12 檔案、三種格式互不相通）。
@@ -404,6 +406,16 @@
 > 同日後續（使用者裁決）：前端移除 `timeout` 選項（`34c6756`；後端保留相容）、
 > 非法 event 加「（無效，後端不投遞）」提示、pool 限制記為已知限制；
 > #95 文件同步（`b471e69`）。前端 **159** 全綠。
+>
+> **2026-10-02（第二波）—— R-19＋#26／#27＋#40＋#52＋#6＋#33 完成，後端 840、前端 165 全綠。**
+> 六項：R-19 外部完成任務最小授權（`c69ce1a`）、#26／#27 HMAC 重放與重試／DLQ 驗證（`6c19e2a`）、
+> #40 稽核 CSV 匯出（`b3a8dd4`）、webhook HMAC prod 防護（`0aa4d50`）、#52 多版本測試（`f04f584`）、
+> #33＋#6 通知觸發完整化與催辦（`26417bb`）。另：前端 webhook 面板以真實瀏覽器
+> （computer-use／CDP）完成視覺驗證；R-23 的 `startProcess` `_` 過濾與 TASK_URGE 稽核已於收尾完成（`0974b8f`）。
+> 線上實測：acceptance PASS 7/0；催辦 200／429／403／404＋MailHog 四種通知信；匯出 CSV
+> 200／403／403／401＋`EXPORT_DATA` 留痕；R-19 自我核准 403 且零副作用、未授權 key 403、
+> `_` 變數 400、系統持有任務可完成（200）。⚠️ dev 庫新增探測殘留 `probe-r19e2e`
+> 與已停用外部系統 `probe19e2e`。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是

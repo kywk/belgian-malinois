@@ -22,7 +22,7 @@ public class NotifyConfig {
     private String processDefinitionKey;
 
     @Column(nullable = false, length = 30)
-    private String eventType; // task_assigned | process_returned | process_rejected | process_completed | task_timeout
+    private String eventType; // task_assigned | task_claimed | task_urged | process_returned | process_rejected | process_completed（task_timeout 不實作：Flowable 7.2.0 不發此事件）
 
     @Column(nullable = false, length = 30)
     private String channel;
