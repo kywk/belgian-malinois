@@ -251,6 +251,27 @@ public class ExternalApiController {
                             + "或（已授權時）onBehalfOf");
         }
 
+        // ── R-23 殘留：保留命名空間，與 completeTask 同一份 helper ──────
+        //
+        // ⚠️ 改動前 startProcess 完全不擋 `_` 前綴：body 的 variables 是自由
+        // map，呼叫端可以夾帶 _externalSystemId（R-20 之後會被下面 server
+        // 的 put 覆寫，但「靜默忽略」讓呼叫端以為設定生效了）、
+        // _formVersions（表單版本鎖的內容，見 FormVersionLocker）、
+        // _callbackUrl（server 只會依 body.callbackUrl 覆寫，variables 裡
+        // 夾帶的值會留著）。這是 R-19 在 completeTask 修掉的同一個缺陷，
+        // 差別只在入口 —— R-23 的修法要求所有 variable 寫入路徑一致拒絕。
+        //
+        // 順序沿用 completeTask：rejectReservedVariableNames → validateVariables
+        // （見該方法的 javadoc）。兩者都是「payload 用了不該用的名字／形狀」
+        // → 400；且都排在啟動之前，被拒的請求不啟動流程、不寫變數、不寫稽核。
+        //
+        // ⚠️ 檢查的是「呼叫端傳進來的」variables：server 稍後才寫入的
+        // _externalSystemId／_formVersions／_callbackUrl 不受影響
+        // （它們在下面才 put，不經過這一行）。
+        //
+        // 為什麼可以排在下面的 404 預檢之前：保留變數的 400 不隨部署清單
+        // 改變，不像 #80 的 404 需要排在 403 之後才不會變成枚舉工具。
+        rejectReservedVariableNames(variables);
         // Validate variables against ProcessVariableSpec
         validateVariables(processDefKey, variables);
 
