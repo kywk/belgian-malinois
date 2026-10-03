@@ -128,14 +128,9 @@
             <artifactId>mssql-jdbc</artifactId>
             <scope>runtime</scope>
         </dependency>
-        <!-- Stage 5（S5-0c）：Boot 4 屬性遷移輔助。runtime scope，啟動時報告已改名／
-             移除的屬性並暫時在執行期代為對應（spring-boot-properties-migrator）。
-             它是遷移工具，不是正式依賴 —— Stage 5 驗收完成後移除。 -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-properties-migrator</artifactId>
-            <scope>runtime</scope>
-        </dependency>
+        <!-- Stage 5（S5-0c）：Boot 4 屬性遷移輔助已於驗收後移除（2026-10-03）。
+             保留這行註解是為了讓下一個人知道它曾經在場、以及為什麼不在了：
+             它是遷移工具，不是正式依賴（移除後啟動與完整套件均已重驗）。 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
