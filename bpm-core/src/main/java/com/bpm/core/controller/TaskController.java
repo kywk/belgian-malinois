@@ -805,7 +805,8 @@ public class TaskController {
         Map<Task, List<String>> deliverable = new LinkedHashMap<>();
         LinkedHashSet<String> recipients = new LinkedHashSet<>();
         for (Task t : currentTasks) {
-            List<String> to = taskRecipients(t);
+            // 收件人規則只有一份：NotifyPublisher.taskRecipients（#7n 收斂）。
+            List<String> to = NotifyPublisher.taskRecipients(taskService, t);
             if (!to.isEmpty()) {
                 deliverable.put(t, to);
                 recipients.addAll(to);
@@ -888,24 +889,6 @@ public class TaskController {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                     "無法確認催辦權限，請稍後再試");
         }
-    }
-
-    /**
-     * 一個任務的催辦／通知收件人。
-     *
-     * <p>assignee 優先；沒有 assignee 的候選任務取候選「人」。
-     * 候選群組沒有 email（見 {@link #urgeTask}），刻意不回傳。
-     */
-    private List<String> taskRecipients(Task task) {
-        if (task.getAssignee() != null && !task.getAssignee().isBlank()) {
-            return List.of(task.getAssignee());
-        }
-        return taskService.getIdentityLinksForTask(task.getId()).stream()
-                .filter(l -> IdentityLinkType.CANDIDATE.equals(l.getType()))
-                .map(IdentityLink::getUserId)
-                .filter(u -> u != null && !u.isBlank())
-                .distinct()
-                .toList();
     }
 
     /**

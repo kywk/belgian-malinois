@@ -88,6 +88,24 @@ public class ProcessController {
      */
     private static final String DEFAULT_CANCEL_REASON = "applicant-cancel";
 
+    /**
+     * 撤回原因長度上限（#7 遺留）。
+     *
+     * <p>{@code reason} 會原樣寫進 {@code ACT_HI_PROCINST.DELETE_REASON_}
+     * （{@code nvarchar(4000)}）。超過欄位容量時 Flowable 在
+     * {@code deleteProcessInstance} 才丟 SQL 例外，呼叫端拿到的是 500
+     * —— 一個「輸入太長」的使用者錯誤卻回報成伺服器故障，而且錯誤發生在
+     * 刪除當下（交易中途）。因此進入引擎之前先擋：超過上限回 400，
+     * 訊息寫明上限；檢查在 ①（早於所有狀態／授權檢查），案件與稽核零副作用。
+     *
+     * <p>上限選 1000 而不是貼著 4000：4000 是 DB 的硬界線，貼著它等於把
+     * 「剛好塞得進」當成目標；1000 留了 4 倍餘裕，日後欄位或引擎版本
+     * 變動不會立刻踩線，稽核 detail 也不會被一段自由文字撐大。
+     * 正常撤回原因（例如預設值「applicant-cancel」或「臨時取消」）遠低於
+     * 這個數字，一般使用者不可能碰到。
+     */
+    private static final int MAX_CANCEL_REASON_LENGTH = 1000;
+
     private final RuntimeService runtimeService;
     private final RepositoryService repositoryService;
     private final TaskService taskService;
@@ -304,6 +322,8 @@ public class ProcessController {
      * <ul>
      *   <li>未認證 → 401。</li>
      *   <li>body 的 {@code reason} 不是字串 → 400（不靜默忽略）。</li>
+     *   <li>body 的 {@code reason} 超過長度上限 → 400（訊息寫明上限；
+     *       不讓它變成引擎層的 500，見 {@link #MAX_CANCEL_REASON_LENGTH}）。</li>
      *   <li>案件不存在／已結束／重複撤回 → 404。重複撤回的第二次
      *       runtime 已查不到，落在同一個 404。</li>
      *   <li>參與者非申請人 → 403；非參與者 → 404（見上）。</li>
@@ -338,9 +358,8 @@ public class ProcessController {
      * <p>刪除成功後，對刪除前收集到的每個「有可送對象」的待處理任務發一則
      * {@code process_cancelled}（{@link NotifyPublisher#processCancelled}）。
      * 收件人是現任受理人：assignee 優先、候選任務送候選人
-     * （規則抽在 {@link NotifyPublisher#taskRecipients}，既有副本的收斂
-     * 見該方法）；候選群組沒有 email、無人任務沒有收件人，兩者都略過，
-     * 不送空訊息。
+     * （規則只有一份，抽在 {@link NotifyPublisher#taskRecipients}）；
+     * 候選群組沒有 email、無人任務沒有收件人，兩者都略過，不送空訊息。
      *
      * <p><b>為什麼每任務一則</b>：平行關卡時各任務的受理人不同，一則合併信
      * 無法回答每個人「我手上哪個任務消失了」；與催辦的每任務一則一致
@@ -414,8 +433,8 @@ public class ProcessController {
         // ⑤ 通知收件人必須在刪除<b>之前</b>收集：任務隨實例一起消失，
         //    刪除後查不到任何人。只收「有可送對象」的任務 —— 候選群組
         //    沒有 email、無人任務沒有收件人，都不送空訊息。
-        //    收件人規則用 NotifyPublisher.taskRecipients（共用實作；
-        //    TaskController 的既有副本待收斂，見該方法）。
+        //    收件人規則用 NotifyPublisher.taskRecipients（唯一實作；
+        //    TaskController 催辦走同一條，見該方法）。
         Map<Task, List<String>> deliverable = new LinkedHashMap<>();
         for (Task t : taskService.createTaskQuery().processInstanceId(id).list()) {
             List<String> to = NotifyPublisher.taskRecipients(taskService, t);
@@ -463,13 +482,21 @@ public class ProcessController {
 
     /**
      * 撤回請求的 {@code reason}：省略／空白 → {@link #DEFAULT_CANCEL_REASON}；
-     * 非字串 → 400。
+     * 非字串 → 400；超過 {@link #MAX_CANCEL_REASON_LENGTH} → 400。
      *
      * <p>非字串明確拒絕而不是靜默丟棄：呼叫端送了 {@code {"reason":123}}
      * 卻拿到 200，會以為那個值被記進了稽核 —— 與 #66 對 {@code initiator}
      * 的立場相同（送了就必須處理，不能假裝收下）。
+     *
+     * <p>長度檢查在 {@code trim()} 之後：前後空白不算內容，一段 1001 字元的
+     * 正常原因不會因為前後各一個空白被誤擋。純空白字串走「省略」那條路，
+     * 不是超長錯誤。
+     *
+     * <p>package-private 而非 private：讓單元測試直接釘住上限與訊息
+     * （{@code ProcessControllerCancelReasonTest}），不必為了驗一句 400
+     * 的訊息啟動整個 Spring context。
      */
-    private static String cancelReasonOf(Map<String, Object> body) {
+    static String cancelReasonOf(Map<String, Object> body) {
         if (body == null) return DEFAULT_CANCEL_REASON;
         Object raw = body.get("reason");
         if (raw == null) return DEFAULT_CANCEL_REASON;
@@ -477,7 +504,13 @@ public class ProcessController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "reason 必須是字串（可省略；省略或空白時為 " + DEFAULT_CANCEL_REASON + "）");
         }
-        return s.isBlank() ? DEFAULT_CANCEL_REASON : s.trim();
+        String reason = s.trim();
+        if (reason.length() > MAX_CANCEL_REASON_LENGTH) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "reason 過長（" + reason.length() + " 字元，上限 "
+                            + MAX_CANCEL_REASON_LENGTH + " 字元）");
+        }
+        return reason.isEmpty() ? DEFAULT_CANCEL_REASON : reason;
     }
 
     /**

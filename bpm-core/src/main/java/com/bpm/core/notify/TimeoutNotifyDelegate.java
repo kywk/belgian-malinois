@@ -10,8 +10,6 @@ import org.flowable.engine.RepositoryService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.delegate.DelegateExecution;
 import org.flowable.engine.delegate.JavaDelegate;
-import org.flowable.identitylink.api.IdentityLink;
-import org.flowable.identitylink.api.IdentityLinkType;
 import org.flowable.task.api.Task;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,7 +17,6 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Objects;
 
 /**
  * 邊界計時器到期時的逾期提醒發送端（#23）。
@@ -74,9 +71,10 @@ import java.util.Objects;
  *
  * <p>與催辦／通知的既有天花板一致：assignee 優先；沒有 assignee 的候選任務
  * 取候選「人」（{@code candidate} identity link 的 userId）；候選群組沒有
- * email，略過。兩者皆無 → no-op。收件人解析仍只有一份，在
- * {@code EmailConsumer.resolveRecipients}；這裡只決定 payload 放
- * {@code assignee} 還是 {@code candidateUsers}。
+ * email，略過。兩者皆無 → no-op。候選人抽取與催辦共用
+ * {@link NotifyPublisher#candidateUsers} 這一格（#7n 收斂），收件人解析仍
+ * 只有一份，在 {@code EmailConsumer.resolveRecipients}；這裡只決定 payload
+ * 放 {@code assignee} 還是 {@code candidateUsers}。
  *
  * <h2>⚠️ fail-open：提醒失敗絕不影響流程</h2>
  *
@@ -178,7 +176,9 @@ public class TimeoutNotifyDelegate implements JavaDelegate {
             String assignee = task.getAssignee();
             List<String> candidates = List.of();
             if (assignee == null || assignee.isBlank()) {
-                candidates = candidateUsers(task);
+                // 候選人抽取只有一份（與催辦共用）；外層的「assignee 優先」
+                // 判斷保留在這裡 —— 有 assignee 時不取候選人。
+                candidates = NotifyPublisher.candidateUsers(taskService, task);
                 if (candidates.isEmpty()) {
                     log.debug("任務 {} 沒有 assignee 也沒有候選人，略過逾時提醒", task.getId());
                     continue;
@@ -249,21 +249,5 @@ public class TimeoutNotifyDelegate implements JavaDelegate {
         log.warn("逾時提醒的 current activity {} 不是 boundary event 也不是可回溯的節點，略過",
                 activityId);
         return null;
-    }
-
-    /**
-     * 候選「人」清單。
-     *
-     * <p>候選群組（groupId）沒有 email，刻意不回傳 —— 與
-     * {@code TaskController.taskRecipients}／{@code NotifyTaskListener} 同一條天花板。
-     */
-    private List<String> candidateUsers(Task task) {
-        return taskService.getIdentityLinksForTask(task.getId()).stream()
-                .filter(l -> IdentityLinkType.CANDIDATE.equals(l.getType()))
-                .map(IdentityLink::getUserId)
-                .filter(Objects::nonNull)
-                .filter(u -> !u.isBlank())
-                .distinct()
-                .toList();
     }
 }
