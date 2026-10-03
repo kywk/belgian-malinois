@@ -1,5 +1,6 @@
 package com.bpm.core.config;
 
+import com.bpm.core.notify.EmailNotifyDelegate;
 import com.bpm.core.notify.NotifyTaskListener;
 import com.bpm.core.notify.TimeoutNotifyDelegate;
 import com.bpm.core.service.BpmPermissionService;
@@ -78,6 +79,7 @@ public class FlowableConfig {
             NotifyTaskListener notifyTaskListener,
             TimeoutNotifyDelegate timeoutNotifyDelegate,
             com.bpm.core.webhook.WebhookTaskListener webhookTaskListener,
+            EmailNotifyDelegate emailNotifyDelegate,
             com.bpm.core.engine.BlankAssigneeNormalizingInterceptor blankAssigneeNormalizingInterceptor) {
         return config -> {
             config.setEventListeners(List.of(processCompletedListener, unreachableTaskListener,
@@ -87,34 +89,42 @@ public class FlowableConfig {
             // engine event listener／per-BPMN task listener／ActivityBehaviorFactory
             // 都不行。它只在 handleAssignments 之後跑，所以是既有 row 的 UPDATE。
             config.setCreateUserTaskInterceptor(blankAssigneeNormalizingInterceptor);
-            config.setBeans(Map.of(
-                    "orgService", orgService,
-                    "permService", permService,
-                    "bpmQueryService", bpmQueryService,
+            // ⚠️ Map.ofEntries 而非 Map.of：通用 delegate（#43／#48／#49）之後
+            // 這張 map 會超過 Map.of 的 10 對上限。兩者都是不可變、不接受 null
+            // 的 Map，語意相同。
+            config.setBeans(Map.ofEntries(
+                    Map.entry("orgService", orgService),
+                    Map.entry("permService", permService),
+                    Map.entry("bpmQueryService", bpmQueryService),
                     // 第一個任務的受理人判斷（P2-7）。BPMN 的 managerReview 由它決定，
                     // 因為 initiator 在外部系統發起時是 system:<id>，不是人。
-                    "assigneeResolver", assigneeResolver,
+                    Map.entry("assigneeResolver", assigneeResolver),
                     // ⚠️ 補件關卡（#83）。三個 UserTask（leave-approval 的
                     // applicantRevision、purchase-approval 的 revisionFromManager
                     // 與 revisionFromFinance）原本寫死 ${initiator}，而外部系統發起時
                     // 那是 system:<id> —— 不是人，於是 TaskHolderGuard 的四個條件
                     // 全部不命中，沒有任何人能簽，案件靜默卡死。
                     // 必須與 BpmnLintService.EL_WHITELIST 同一份內容。
-                    "applicantResolver", applicantResolver,
+                    Map.entry("applicantResolver", applicantResolver),
                     // ⚠️ 不可移除：purchase-approval 的 delegateExpression 依賴它
-                    "notifyTaskListener", notifyTaskListener,
+                    Map.entry("notifyTaskListener", notifyTaskListener),
                     // ⚠️ 不可移除（#23）：設計師在流程的 UserTask 上掛
                     // 非中斷式 boundary timer，再把 delegateExpression 指向它。
                     // 與 webhookTaskListener／notifyTaskListener 同一條分界：
                     // 只加在這份 map，不進 BpmnLintService.EL_WHITELIST ——
                     // 它是 delegateExpression 的解析對象，不是運算式可呼叫的函式。
-                    "timeoutNotifyDelegate", timeoutNotifyDelegate,
+                    Map.entry("timeoutNotifyDelegate", timeoutNotifyDelegate),
                     // ⚠️ 不可移除（#67）：兩支 BPMN 的每個 UserTask 都以
                     // delegateExpression="${webhookTaskListener}" 引用它。
                     // 漏掉它與漏掉 notifyTaskListener 的症狀完全相同 ——
                     // 任務建立時拋「無法解析 delegateExpression」，
                     // 而且是在部署之後、第一次送出案件時才發生。
-                    "webhookTaskListener", webhookTaskListener));
+                    Map.entry("webhookTaskListener", webhookTaskListener),
+                    // #43 通用寄信 delegate。與 timeoutNotifyDelegate／
+                    // webhookTaskListener 同一條分界：只加在這份 map，
+                    // 不進 BpmnLintService.EL_WHITELIST —— 它是
+                    // delegateExpression 的解析對象，不是運算式可呼叫的函式。
+                    Map.entry("emailNotifyDelegate", emailNotifyDelegate)));
         };
     }
 }
