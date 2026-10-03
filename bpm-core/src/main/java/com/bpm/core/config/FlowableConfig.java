@@ -81,6 +81,7 @@ public class FlowableConfig {
             com.bpm.core.webhook.WebhookTaskListener webhookTaskListener,
             EmailNotifyDelegate emailNotifyDelegate,
             com.bpm.core.engine.DataValidationDelegate dataValidationDelegate,
+            com.bpm.core.engine.ExternalApiDelegate externalApiDelegate,
             com.bpm.core.engine.BlankAssigneeNormalizingInterceptor blankAssigneeNormalizingInterceptor) {
         return config -> {
             config.setEventListeners(List.of(processCompletedListener, unreachableTaskListener,
@@ -129,7 +130,11 @@ public class FlowableConfig {
                     // #48 通用資料驗證 delegate。失敗丟 BpmnError
                     // （errorCode=DATA_VALIDATION_FAILED），由設計師用 boundary
                     // error 接住；同樣只加在這份 map，不進 EL 白名單。
-                    Map.entry("dataValidationDelegate", dataValidationDelegate)));
+                    Map.entry("dataValidationDelegate", dataValidationDelegate),
+                    // #49 通用外部 API delegate。🔴 它的 url 來自 BPMN，
+                    // 因此 WebhookUrlPolicy（唯一的 SSRF 閘門）是它的安全相依。
+                    // 同樣只加在這份 map，不進 EL 白名單。
+                    Map.entry("externalApiDelegate", externalApiDelegate)));
         };
     }
 }
