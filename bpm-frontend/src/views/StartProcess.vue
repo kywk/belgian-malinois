@@ -73,17 +73,27 @@ const purchaseForm = reactive({ itemName: '', quantity: 1, amount: 0, reason: ''
 function onProcessChange() { result.value = null }
 
 async function submit() {
-  let variables = {}
+  // #60：表單值不再以 variables 直接送出，而是走 formData。
+  // 後端會先以 formDefinitionId 指向的 schema 驗證（缺必填／型別錯 → 400），
+  // 通過後才把欄位推導成流程變數、落地表單資料並啟動流程。
+  // formDefinitionId 送 BPMN 的 formKey（'leave-request'）；後端會解析成
+  // 表單定義的 id —— 前端不需要先打一趟 API 拿 id。
+  let formDefinitionId = ''
+  let values = {}
 
   if (processKey.value === 'leave-approval') {
+    formDefinitionId = 'leave-request'
     const [start, end] = leaveForm.dateRange || []
-    variables = {
+    values = {
       leaveType: leaveForm.leaveType,
+      // dateRange 維持既有的 "起~訖" 字串格式：FormSchemaValidator 同時接受
+      // 這個格式與 ["起","訖"] 陣列，後端流程變數本來就存這個字串。
       dateRange: start && end ? `${fmt(start)}~${fmt(end)}` : '',
       reason: leaveForm.reason
     }
   } else {
-    variables = {
+    formDefinitionId = 'purchase-request'
+    values = {
       itemName: purchaseForm.itemName,
       quantity: purchaseForm.quantity,
       amount: purchaseForm.amount,
@@ -100,7 +110,10 @@ async function submit() {
     // http.js 的 interceptor 會自動附上 Authorization: Bearer。
     const { data } = await http.post('/api/process-instances', {
       processDefinitionKey: processKey.value,
-      variables
+      formData: {
+        formDefinitionId,
+        dataJson: JSON.stringify(values)
+      }
     })
     result.value = { type: 'success', msg: `申請已送出，流程 ID：${data.processInstanceId}，目前審核人：${data.currentTask?.assignee || '-'}` }
     setTimeout(() => router.push('/my-applications'), 2000)
