@@ -166,6 +166,38 @@ public class FormService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }
 
+    /**
+     * 解析 {@code POST /api/process-instances} 的 {@code formData.formDefinitionId}（#60）。
+     *
+     * <h2>為什麼需要這一層：id 與 formKey 是兩個不同的識別</h2>
+     *
+     * <p>{@code FormData.formDefinitionId} 存的是定義資料列的 id（seed 用
+     * {@code NEWID()}，是 UUID），而 BPMN 與前端只知道 formKey
+     * （{@code leave-request}／{@code purchase-request}）。前端啟動流程時
+     * 送的是後者；若直接把它當 id 傳給 {@link FormSchemaValidator}，
+     * {@code findById("leave-request")} 查不到 → 依 #55 的已知缺口
+     * <b>整包 dataJson 靜默略過驗證</b>，而落地的那一列也不指向任何定義
+     * （{@code requireNotUsedByRunningProcess} 之類以 id 為條件的查詢全部落空）。
+     *
+     * <p>解析順序：<b>先當 id、查不到再當 formKey 找最新 published</b>。
+     * 先 id 是為了不改變既有呼叫端（它們送的是真正的 UUID）；後 formKey
+     * 是為了讓「只知道流程」的前端不必先打一趟 {@code GET /api/forms/{formKey}}
+     * 拿 id。兩者都查不到時回 {@code null} —— 呼叫端沿用原值，讓 validator
+     * 走它既有的「查不到定義 → 略過並 warn」路徑，而不是在這裡另外發明一種
+     * 錯誤語意（見 {@link FormSchemaValidator} 類別註解第 3 點）。
+     *
+     * <p>⚠️ 取「最新 published」與 {@code FormVersionLocker} 鎖進
+     * {@code _formVersions} 的是同一條查詢（{@code findLatestPublished}），
+     * 所以表單資料指向的版本與案件鎖定的版本一致。
+     */
+    @Transactional(value = "formTransactionManager", readOnly = true)
+    public FormDefinition findDefinitionByIdOrKey(String idOrKey) {
+        if (idOrKey == null || idOrKey.isBlank()) return null;
+        FormDefinition byId = defRepo.findById(idOrKey).orElse(null);
+        if (byId != null) return byId;
+        return defRepo.findLatestPublished(idOrKey).orElse(null);
+    }
+
     @Transactional("formTransactionManager")
     public FormDefinition update(String id, FormDefinition updated) {
         FormDefinition existing = defRepo.findById(id)
@@ -341,6 +373,30 @@ public class FormService {
         // 而變成覆寫他人已送出的資料（submittedAt 不可更新 → 篡改無跡）。
         data.setId(null);
         return dataRepo.save(data);
+    }
+
+    /**
+     * 依 id 刪除一筆表單資料 —— <b>只給流程啟動的跨 DB 補償使用</b>（#60）。
+     *
+     * <h2>為什麼需要這個方法</h2>
+     *
+     * <p>{@code ProcessController.startProcess} 把表單寫入放在流程啟動交易
+     * <b>之後</b>（form 交易先 commit），若主交易最後 commit 失敗，就會留下
+     * 一筆「沒有案件的孤兒表單資料」。沒有 XA 可用的前提下，只能由該方法
+     * 在 {@code afterCompletion(STATUS_ROLLED_BACK)} 做 best-effort 刪除
+     * （完整取捨見 ProcessController 的 javadoc）。
+     *
+     * <p>用 {@code deleteById} 而不是 {@code delete}：Spring Data JPA 4 的
+     * {@code deleteById} 對不存在的 id 是 no-op（先 findById 再刪），
+     * 補償路徑可能重試、也可能與其他清理動作競態，不該因為「已經沒有那筆」
+     * 而拋例外。
+     *
+     * <p>刻意<b>不</b>加任何授權／狀態守衛：這是伺服器內部的補償動作，
+     * 不是使用者可呼叫的刪除入口（表單資料沒有對外的 DELETE 端點）。
+     */
+    @Transactional("formTransactionManager")
+    public void deleteDataById(String id) {
+        dataRepo.deleteById(id);
     }
 
     /**
