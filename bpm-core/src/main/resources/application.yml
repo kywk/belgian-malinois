@@ -124,12 +124,10 @@ spring:
 flowable:
   database-schema-update: true
   async-executor-activate: true
-  # Stage 5（S5-0b）：Flowable 8 預設用 Jackson 3，而本專案 Java 程式碼仍在 Jackson 2
-  # （5 個注入點，見 pom 的 spring-boot-jackson2）。設成 jackson2 讓流程變數的 JSON
-  # 仍走 Jackson 2；Stage 6 完成 Jackson 3 遷移後再移除。
-  # ⚠️ Flowable 的 metadata 已標「jackson2 is deprecated for removal」——
-  # 這是有退場時程的技術債，不是可無限期延後的選配。
-  variable-json-mapper: jackson2
+  # Stage 5（S5-0b）曾設 `variable-json-mapper: jackson2`，把流程變數的 JSON 留在
+  # Jackson 2；Stage 6 完成 Jackson 3 遷移後已移除 —— 現在 Java 程式碼與 Flowable 8
+  # 預設的 Jackson 3 是同一顆。⚠️ Flowable 的 metadata 把 jackson2 標為
+  # 「deprecated for removal」，留著會是下一個升版的斷點，不是可延後的選配。
 
 bpm:
   # 三個 DataSource 共用的連線來源（security-audit P2-3）。
