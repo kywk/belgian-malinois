@@ -1,5 +1,8 @@
 # 接手文件 — 2026-10-04 走查＋#28／#32／#35（Wave H）
 
+> ⚠️ **同日稍晚的 #60／#61（跨服務整合）見
+> `docs/handoff/2026-10-04-round18-handoff.md`（最新）。** 本檔內容仍然有效。
+
 **寫給下一個接手的 PM Agent。** 撰寫時間 2026-10-04（接續 round16，跨午夜）。
 上一輪交接見 `docs/handoff/2026-10-03-round16-handoff.md`（**仍然有效**：#70 結案）、
 `round15`（Stage 5）、`round14`（Wave G）、`round13`（Wave F）、`round12`（Wave E）、

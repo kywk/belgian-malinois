@@ -1620,7 +1620,7 @@ Record N+1: hash = SHA-256(record_N+1_content + hash_of_record_N)
 - [x] **前端**：Properties Panel 擴充 — 節點級 Webhook 設定 UI（`bpm-frontend/src/bpmn/WebhookProps.js`、`webhookStorage.js`）
 - [x] **BPM Core**：節點級 Webhook 後端 Listener + 非同步發送（`webhook/WebhookTaskListener.java`、`WebhookConsumer.java`，經 RabbitMQ）
 - [x] **BPM Core**：BPMN Lint 自動驗證（含 formKey 必填、外部流程 initiator 檢查）（`lint/BpmnLintService.java` rule b／rule h）
-- [ ] Git 自動 commit + CI/CD pipeline（含微服務獨立部署）—— ⬜ 未完成：deploy job 仍為 `echo` 佔位（見 remediation backlog R-07／R-08）
+- [ ] Git 自動 commit + CI/CD pipeline（含微服務獨立部署）—— 🔶 **Git 自動 commit 已完成（#61，JGit、fail-closed、稽核記 short id）；CI/CD pipeline 仍未完成**：deploy job 仍為 `echo` 佔位（見 remediation backlog R-07／R-08）
 
 ### Phase 5（3週）— 加簽與外部整合
 - [x] **BPM Core**：通用加簽機制（動態子任務）（`controller/CountersignController.java`；`acceptance/CountersignTcA01Test.java`）

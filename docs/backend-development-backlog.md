@@ -1,7 +1,7 @@
 # Greyhound BPM 平台 — 後端開發工項清單
 
 > 產出日期：2026-06-08
-> 最後更新：2026-10-04（**走查＋#28／#32／#35 完成；前端 DynamicForm 鏈斷裂修復**；#70 全部完成：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3，EOL 安全債清償；Wave G：#97／#44／#45／#46／#47；Wave F：待決策六項；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
+> 最後更新：2026-10-04（**#60／#61 跨服務整合完成；同日走查＋#28／#32／#35；前端 DynamicForm 鏈斷裂修復**；#70 全部完成：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3，EOL 安全債清償；Wave G：#97／#44／#45／#46／#47；Wave F：待決策六項；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
 > 基於規格文件 vs 實際程式碼差異分析
 >
 > 狀態：✅ 完成　🟡 部分完成（說明欄寫缺什麼）　⬜ 未開始
@@ -149,8 +149,8 @@
 
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
-| 60 | 流程啟動完整流程 | 前端提交 → form-data 儲存 → variables 設定 → 流程啟動 → formVersion 鎖定 | 2d | 🟡 啟動＋formVersion 鎖定已有；form-data 不在同一交易；**initiator 取自 body**（見 #66） |
-| 61 | BPMN 部署流程 | bpmn-js 設計 → Lint 驗證 → Git commit → 部署 Flowable → 版本管理 | 3d | 🟡 lint → 部署 → 稽核記 SHA-256；缺 Git commit |
+| 60 | 流程啟動完整流程 | 前端提交 → form-data 儲存 → variables 設定 → 流程啟動 → formVersion 鎖定 | 2d | ✅ 2026-10-04：`POST /api/process-instances` 可選 `formData{formDefinitionId,dataJson}`（formKey→定義 id 解析）；schema 驗證零副作用、欄位推導成變數（deny-list；與 variables 重疊 → 400）、表單寫入最後＋主交易回滾 `afterCompletion` 補償（無 XA 的取捨見 javadoc）；前端 StartProcess 改走 formData。merge `6d0866e` |
+| 61 | BPMN 部署流程 | bpmn-js 設計 → Lint 驗證 → Git commit → 部署 Flowable → 版本管理 | 3d | ✅ 2026-10-04：JGit 版控（`bpm.bpmn.git.*`，**enabled 預設 false**）；啟用時 lint→寫檔→**commit（失敗 503、不上線）**→Flowable deploy→稽核記 `gitCommit` short id；同內容不產生空 commit。**CI/CD pipeline 仍缺**（R-07／R-08）。merge `c5b5b6d` |
 | 62 | 認證授權整合 | Sa-Token / JWT 對接、API Gateway 層 JWT 驗證 | 3d | ✅ 後端：JWT 驗證＋信任閘道、預設 denyAll（R-01）；前端 OIDC 流程依決策延後 |
 | 63 | 單元測試 | bpm-core Service/Controller 層單元測試 | 5d | 🟡 約 280 個測試，偏回歸與安全守衛，非系統性覆蓋 |
 | 64 | 整合測試 | 流程端到端測試（啟動→審核→完成）、外部系統接入測試 | 5d | 🟡 Testcontainers＋`acceptance/`（TC-A01／A02／A04）＋`acceptance-test.sh` |
@@ -321,7 +321,7 @@
 | 2026-09-29 新增 | 29 | 29 | 0 | 0 | 0d |
 | 2026-10-02 新增 | 2 | 2 | 0 | 0 | 0d |
 | 2026-10-03 新增 | 1 | 1 | 0 | 0 | 0d |
-| **合計** | **97** | **89** | **6** | **2** | **~24 人天** |
+| **合計** | **97** | **91** | **4** | **2** | **~19 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -575,6 +575,16 @@
 > 驗收：**1297 全綠**（+67）、既有 dev DB 熱啟動套用 V8、seed＋acceptance 7/0；
 > 線上實測：`orgService.nope` 部署 400／`getDeptId` 200、webhookUrl 讀取端全遮蔽。
 > 統計：✅ 89、🟡 6、⬜ 2；剩餘上限 **~24 人天**。
+>
+> **2026-10-04（#60／#61 跨服務整合）—— 啟動流程與部署版控收斂。**
+> #60：`POST /api/process-instances` 可選 `formData`——schema 驗證零副作用、欄位推導變數
+> （deny-list；與 variables 重疊 400）、表單寫入最後＋主交易回滾 `afterCompletion` 補償
+> （無 XA；`formKey→定義 id` 解析）；前端 StartProcess 改走 formData。
+> #61：JGit 版控（`bpm.bpmn.git.enabled` 預設 false）；啟用時 lint→寫檔→**commit（失敗 503、不上線）**
+> →Flowable deploy→稽核記 `gitCommit` short id；同內容不產生空 commit。
+> 驗收：**1321 全綠**（+24）、熱啟動（Git 開啟）seed 三次部署各一 commit、acceptance 7/0；
+> 線上實測 formData 啟動 200／落地、缺必填與重疊 400、legacy variables 200。
+> 統計：✅ 91、🟡 4、⬜ 2；剩餘上限 **~19 人天**。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是
