@@ -1,7 +1,7 @@
 # Greyhound BPM 平台 — 後端開發工項清單
 
 > 產出日期：2026-06-08
-> 最後更新：2026-10-04（**#41／#53 完成（異常偵測、環境變數替換）；同日 #60／#61 跨服務整合、走查＋#28／#32／#35；前端 DynamicForm 鏈斷裂修復**；#70 全部完成：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3，EOL 安全債清償；Wave G：#97／#44／#45／#46／#47；Wave F：待決策六項；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
+> 最後更新：2026-10-04（**#63／#64 完成（測試覆蓋＋端到端；修復 PROCESS_COMPLETED result 真 bug）；同日 #41／#53、#60／#61、走查＋#28／#32／#35；前端 DynamicForm 鏈斷裂修復**；#70 全部完成：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3，EOL 安全債清償；Wave G：#97／#44／#45／#46／#47；Wave F：待決策六項；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
 > 基於規格文件 vs 實際程式碼差異分析
 >
 > 狀態：✅ 完成　🟡 部分完成（說明欄寫缺什麼）　⬜ 未開始
@@ -152,8 +152,8 @@
 | 60 | 流程啟動完整流程 | 前端提交 → form-data 儲存 → variables 設定 → 流程啟動 → formVersion 鎖定 | 2d | ✅ 2026-10-04：`POST /api/process-instances` 可選 `formData{formDefinitionId,dataJson}`（formKey→定義 id 解析）；schema 驗證零副作用、欄位推導成變數（deny-list；與 variables 重疊 → 400）、表單寫入最後＋主交易回滾 `afterCompletion` 補償（無 XA 的取捨見 javadoc）；前端 StartProcess 改走 formData。merge `6d0866e` |
 | 61 | BPMN 部署流程 | bpmn-js 設計 → Lint 驗證 → Git commit → 部署 Flowable → 版本管理 | 3d | ✅ 2026-10-04：JGit 版控（`bpm.bpmn.git.*`，**enabled 預設 false**）；啟用時 lint→寫檔→**commit（失敗 503、不上線）**→Flowable deploy→稽核記 `gitCommit` short id；同內容不產生空 commit。**CI/CD pipeline 仍缺**（R-07／R-08）。merge `c5b5b6d` |
 | 62 | 認證授權整合 | Sa-Token / JWT 對接、API Gateway 層 JWT 驗證 | 3d | ✅ 後端：JWT 驗證＋信任閘道、預設 denyAll（R-01）；前端 OIDC 流程依決策延後 |
-| 63 | 單元測試 | bpm-core Service/Controller 層單元測試 | 5d | 🟡 約 280 個測試，偏回歸與安全守衛，非系統性覆蓋 |
-| 64 | 整合測試 | 流程端到端測試（啟動→審核→完成）、外部系統接入測試 | 5d | 🟡 Testcontainers＋`acceptance/`（TC-A01／A02／A04）＋`acceptance-test.sh` |
+| 63 | 單元測試 | bpm-core Service/Controller 層單元測試 | 5d | ✅ 2026-10-04：盤點後選 15 個高風險類別（授權守衛／認證鏈／parser）**+198 條**純 Mockito 單元測試；3 條負控（稽核旁路、任務持有者、webhook 解析）。merge `6aea769` |
+| 64 | 整合測試 | 流程端到端測試（啟動→審核→完成）、外部系統接入測試 | 5d | ✅ 2026-10-04：請假／採購生命週期＋外部 API 全鏈（**+20 條**）；**發現並修復真 bug**——`PROCESS_COMPLETED` 在最後一關寫入變數時 `result` 誤判 `unknown`（每張正常核准單都中）；修復 `AuditDeliveryTest` 反覆 flake（確定性隔離＋交錯證明）。merge `3a59d29` |
 | 65 | API 文件 | Swagger/OpenAPI 文件產生、外部系統對接文件 | 2d | ✅ **2026-10-03 完成**（`a7d1310`，merge `43eb5f0`）。springdoc 2.9.1（parent POM 實證與 Boot 3.5.16 同版）；**prod 關閉**（`application.yml` prod 文件 `springdoc.*.enabled=false`）、dev/test 開放；`SecurityConfig` 僅加文件路徑 permitAll（雙層防護，`OpenApiProdDisabledTest` 守門）。線上實測：`/v3/api-docs` 200（title「Greyhound BPM 平台 API」）、`/swagger-ui.html` 302。⚠️ prod 執行期未實測（設定層＋框架語意） |
 
 ---
@@ -321,7 +321,7 @@
 | 2026-09-29 新增 | 29 | 29 | 0 | 0 | 0d |
 | 2026-10-02 新增 | 2 | 2 | 0 | 0 | 0d |
 | 2026-10-03 新增 | 1 | 1 | 0 | 0 | 0d |
-| **合計** | **97** | **93** | **4** | **0** | **~15 人天** |
+| **合計** | **97** | **95** | **2** | **0** | **~5 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -598,6 +598,15 @@
 > 線上實測：ENV 部署 200／引擎 XML resolved／原始檔保留佔位／未設定 400；
 > 3 次 denied → `ANOMALY_DETECTED`（user001、hitCount=3、threshold=2）＋ERROR log。
 > 統計：✅ 93、🟡 4、⬜ 0；剩餘上限 **~15 人天**（#63／#64 施工中）。
+>
+> **2026-10-04（#63／#64）—— 測試覆蓋收斂與一個真 bug 的修復。**
+> #63：15 個高風險類別 **+198 條**純 Mockito 單元測試（授權守衛／認證鏈／parser），3 條負控。
+> #64：請假／採購生命週期＋外部 API 全鏈 **+20 條**；**端到端測試抓到真 bug**——
+> `PROCESS_COMPLETED` 在最後一關寫入變數時歷史尚未 flush，`result` 一律 `unknown`（每張正常核准單都中），
+> 以事件實體 `getVariables()` 補強修復；`AuditDeliveryTest` flake 確定性修復（交錯證明）。
+> 驗收：**1584 全綠**（+218）、熱啟動＋acceptance 7/0；線上完整請假流程（formData 啟動→主管核准）
+> 的 `PROCESS_COMPLETE` 稽核 `result=approved`。
+> 統計：✅ 95、🟡 2、⬜ 0；剩餘上限 **~5 人天**（僅 #8／#9，下一批）。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是
