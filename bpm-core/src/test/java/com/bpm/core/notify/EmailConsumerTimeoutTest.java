@@ -2,6 +2,7 @@ package com.bpm.core.notify;
 
 import com.bpm.core.repository.NotifyConfigRepository;
 import com.bpm.core.repository.NotifyTemplateRepository;
+import com.bpm.core.webhook.WebhookUrlPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
@@ -36,7 +38,8 @@ class EmailConsumerTimeoutTest {
     void setUp() {
         mailSender = Mockito.mock(JavaMailSender.class);
         consumer = new EmailConsumer(mailSender, Mockito.mock(NotifyConfigRepository.class),
-                Mockito.mock(NotifyTemplateRepository.class));
+                Mockito.mock(NotifyTemplateRepository.class),
+                new WebhookUrlPolicy(""), new ObjectMapper(), 2000, 2000);
     }
 
     @Test

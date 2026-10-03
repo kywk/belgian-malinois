@@ -1,0 +1,31 @@
+-- Teams 通知的 Incoming Webhook URL（#32：NotifyConfig.channel=teams）。
+--
+-- ## 為什麼需要
+--
+-- 改動前 NotifyConfig 只有 channel=email 一條路徑，Teams 推送只存在於
+-- BPMN 節點層（#44 的 TeamsNotifyDelegate）——管理員無法用「事件 → 通知
+-- 設定」的方式把某個流程事件的提醒送進 Teams 頻道。本欄位就是那個目標位址：
+-- channel=teams 的設定以它為投遞目標。
+--
+-- ## 為什麼可空
+--
+-- 只有 channel=teams 需要它；email 設定（以及頻道白名單外的舊資料）留 null。
+-- 刻意不回填：既有資料列沒有 webhook 目標，回填任何值都是替它們偽造一個
+-- 投遞目的地。Teams 設定在寫入端（NotifyAdminController）強制必填，因此
+-- 「有 channel=teams 但沒有 URL」只會出現在 migration 前的舊資料或直接
+-- DB 寫入，消費端遇到時記 warn 並略過（見 EmailConsumer）。
+--
+-- ## 為什麼是 NVARCHAR(1000)
+--
+-- Teams Incoming Webhook URL 含一長串 token 查詢參數，實測可達數百字元；
+-- 1000 足夠且不需要 MAX。文字欄位一律 NVARCHAR（V2 的 nvarchar 政策）——
+-- URL 的查詢參數可能含非 ASCII，VARCHAR 會把它吃掉。
+--
+-- ⚠️ 這個值是可張貼到頻道的 bearer credential，因此稽核只記 sha256 前綴＋
+-- 長度（見 NotifyAdminController.configDigest），不把全文複製進稽核庫。
+--
+-- 包存在性判斷：與 V3／V4／V5／V7 相同，讓 migration 在 ddl-auto 建出來的
+-- 舊 dev DB 上也能重跑。
+IF COL_LENGTH('bpm_notify_config', 'webhook_url') IS NULL
+    ALTER TABLE bpm_notify_config
+        ADD webhook_url NVARCHAR(1000) NULL;
