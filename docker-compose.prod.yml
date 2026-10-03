@@ -53,6 +53,13 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          # BPM 的通知／事件量不大，768M 是保守起點；RabbitMQ 預設
+          # vm_memory_high_watermark=0.4，約 300M 就對 publisher 背壓。
+          # 日後依實際用量調整，不要先給大。
+          memory: 768M
 
   redis:
     image: redis:7-alpine
@@ -64,6 +71,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          # Redis 只放快取與分散式鎖，資料集小；256M 為保守起點。
+          # 這是容器上限，超過會被 OOM kill —— 之後依 used_memory 調升。
+          memory: 256M
 
   bpm-core:
     image: ghcr.io/${GITHUB_REPO}/bpm-core:${IMAGE_TAG:-latest}
@@ -112,6 +125,14 @@ services:
       # prod 尤其不能少：附件是簽核案件的證據，容器重建就遺失等於紀錄消失。
       - bpm-uploads:/app/uploads
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # 與 mssql 相同的 2G 起點。搭配 Dockerfile 的
+          # MaxRAMPercentage=75，heap 上限約 1.5G，其餘 25% 留給
+          # metaspace／native／執行緒堆疊。這是保守的 prod 起點值，
+          # 之後依 GC log 與監控調升，不要先給大。
+          memory: 2G
 
   nginx:
     image: nginx:alpine
@@ -123,6 +144,11 @@ services:
     depends_on:
       - bpm-core
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # 只做靜態檔與反向代理；alpine nginx 128M 綽綽有餘。
+          memory: 128M
 
 volumes:
   mssql-data:

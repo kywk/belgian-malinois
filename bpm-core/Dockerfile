@@ -30,4 +30,20 @@ RUN mkdir -p /app/uploads /app/bpmn-definitions \
 USER appuser
 
 EXPOSE 8080
+
+# 執行期 JVM 記憶體參數。用 ENV 讓 JVM 自己讀取，任何以 java 啟動的
+# process 都套用，不限目前的 ENTRYPOINT。
+#
+# -XX:MaxRAMPercentage=75：heap 隨容器的 cgroup 記憶體上限縮放
+#   （JDK 10+ 的 UseContainerSupport 預設開啟，JDK 21 不需要明寫）。
+#   刻意不寫死 -Xmx：日後調高 compose／k8s 的 memory limit 時 heap
+#   會跟著長，不會出現「limit 2G、-Xmx 4G」而 JVM 被 kernel OOM kill。
+#   留 25% 給 metaspace、native memory、執行緒堆疊與 NIO buffer；
+#   這是 container-aware JVM 的常見起點 —— 比例再高，尖峰時 native
+#   部分容易先撞到上限；再低則白白浪費可用的 heap。
+# -XX:+ExitOnOutOfMemoryError：真的 OOM 時直接結束 process，讓
+#   orchestrator（compose 的 restart: unless-stopped／k8s）重啟；
+#   否則 heap 已壞的 JVM 會繼續服務，錯誤只會延後爆發。
+ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+
 ENTRYPOINT ["java", "-jar", "app.jar"]
