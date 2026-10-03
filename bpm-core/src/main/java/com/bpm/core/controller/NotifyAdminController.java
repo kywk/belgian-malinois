@@ -264,6 +264,36 @@ public class NotifyAdminController {
         }
     }
 
+    /**
+     * 回應用的複本：{@code webhookUrl} 以 {@code ***} 遮蔽（有值時）。
+     *
+     * <p>Teams Incoming Webhook URL 是 bearer token —— 拿到它就能往該頻道
+     * 貼任意訊息。管理 API 的讀取端不需要回讀原值（設定時就是呼叫端自己
+     * 送進來的），回讀只增加外洩面。理由與 {@code apiKey}／
+     * {@code callbackSecret} 相同（見
+     * {@code ExternalSystemAdminController.masked}）。null 保持 null：
+     * email 設定沒有這個欄位，「沒有」與「有但看不到」是不同狀態。
+     *
+     * <p>⚠️ <b>絕不可直接在 entity 上遮蔽</b>：create／update 有
+     * {@code @Transactional}，回傳的 entity 仍受 EntityManager 管理，
+     * 改動會在 commit 時 flush 進 DB，把真正的 URL 蓋成 {@code ***}
+     * （與 ExternalSystemAdminController 的線上實測教訓同源）。
+     */
+    private static NotifyConfig masked(NotifyConfig c) {
+        NotifyConfig m = new NotifyConfig();
+        m.setId(c.getId());
+        m.setProcessDefinitionKey(c.getProcessDefinitionKey());
+        m.setEventType(c.getEventType());
+        m.setChannel(c.getChannel());
+        m.setWebhookUrl(c.getWebhookUrl() == null ? null : MASK);
+        m.setTemplateId(c.getTemplateId());
+        m.setEnabled(c.getEnabled());
+        return m;
+    }
+
+    /** 遮蔽值。update 收到它代表「這個欄位不改」，見 {@link #updateConfig}。 */
+    static final String MASK = "***";
+
     @PostMapping("/notify-configs")
     @Transactional("primaryTransactionManager")
     public NotifyConfig createConfig(@RequestBody NotifyConfig c,
@@ -273,14 +303,17 @@ public class NotifyAdminController {
         requireValidTeamsWebhook(c);
         NotifyConfig saved = configRepo.save(c);
         auditor.record(operatorId, CONFIG, "create", saved.getId(), configDigest(saved));
-        return saved;
+        // 回應同樣遮蔽：讓「webhookUrl 永不回讀」成為一條沒有例外的規則，
+        // 呼叫端不必記哪個端點會回全文。
+        return masked(saved);
     }
 
     @GetMapping("/notify-configs")
     public List<NotifyConfig> listConfigs(@RequestParam(required = false) String processDefinitionKey) {
-        if (processDefinitionKey != null)
-            return configRepo.findByProcessDefinitionKeyOrderByEventType(processDefinitionKey);
-        return configRepo.findAll();
+        List<NotifyConfig> configs = processDefinitionKey != null
+                ? configRepo.findByProcessDefinitionKeyOrderByEventType(processDefinitionKey)
+                : configRepo.findAll();
+        return configs.stream().map(NotifyAdminController::masked).toList();
     }
 
     /**
@@ -307,6 +340,14 @@ public class NotifyAdminController {
                                      @CallerId String operatorId) {
         NotifyConfig existing = configRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+        // #32 收尾：list/create/update 的回應都遮蔽 webhookUrl，管理端
+        // 「讀出來、改別的欄位、送回去」的 round-trip 會帶著 "***" 回來。
+        // 把它當成「這個欄位不改」——否則 PUT 會試著把遮蔽字串寫成 URL：
+        // channel=teams 會被 policy 擋成 400（訊息誤導），其他 channel
+        // 則會把真 URL 蓋成字串 "***"（靜默毀損）。在驗證之前先換回真值。
+        if (MASK.equals(c.getWebhookUrl())) {
+            c.setWebhookUrl(existing.getWebhookUrl());
+        }
         requireExistingTemplate(c.getTemplateId());
         // #32：與 create 同一條規則（見 requireValidTeamsWebhook）——
         // 順序同樣是「先驗證再碰 entity」，被擋下時交易回捲且零 save。
@@ -324,7 +365,7 @@ public class NotifyAdminController {
         before.forEach((k, v) -> detail.put("before." + k, v));
         configDigest(saved).forEach((k, v) -> detail.put("after." + k, v));
         auditor.record(operatorId, CONFIG, "update", id, detail);
-        return saved;
+        return masked(saved);
     }
 
     @DeleteMapping("/notify-configs/{id}")

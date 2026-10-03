@@ -115,6 +115,10 @@ class TeamsNotifyIntegrationTest extends IntegrationTestBase {
         return send("PUT", path, body);
     }
 
+    private HttpResponse<String> get(String path) throws Exception {
+        return send("GET", path, null);
+    }
+
     // ── fixture ─────────────────────────────────────────────────────
 
     /** 走 {@code POST /api/admin/notify-templates} 建立模板，回傳 id。 */
@@ -272,6 +276,66 @@ class TeamsNotifyIntegrationTest extends IntegrationTestBase {
         String id = res.body().replaceAll(".*\"id\":\"([^\"]*)\".*", "$1");
         createdConfigs.add(id);
         assertThat(configRepo.findById(id).orElseThrow().getWebhookUrl()).isEqualTo(url);
+    }
+
+    // ── 讀取端遮蔽（#32 收尾）───────────────────────────────────────
+
+    @Test
+    @DisplayName("GET notify-configs 遮蔽 webhookUrl：回 ***、不回 bearer token 全文")
+    void listConfigsMasksWebhookUrl() throws Exception {
+        String templateId = givenTemplate("T32-mask-list");
+        String url = sinkUrl("teams-mask-list-" + UUID.randomUUID());
+        String id = givenTeamsConfig("leave-approval", uniqueEvent("task_assigned"), templateId, url);
+
+        var res = get("/api/admin/notify-configs?processDefinitionKey=leave-approval");
+
+        assertThat(res.statusCode()).isEqualTo(200);
+        assertThat(res.body())
+                .as("讀取端不得回傳 bearer token 全文（同 apiKey／callbackSecret 的遮蔽慣例）")
+                .doesNotContain(url)
+                .contains("\"webhookUrl\":\"***\"");
+        assertThat(res.body())
+                .as("遮蔽的是值不是整列 —— 管理端仍看得到這筆設定")
+                .contains(id);
+    }
+
+    @Test
+    @DisplayName("PUT 帶回遮蔽值 *** → 視為不改：DB 原值不變、回應仍遮蔽")
+    void updateWithMaskedUrlKeepsExisting() throws Exception {
+        String templateId = givenTemplate("T32-mask-put");
+        String key = "leave-approval";
+        String eventType = uniqueEvent("task_assigned");
+        String url = sinkUrl("teams-mask-put-" + UUID.randomUUID());
+        String id = givenTeamsConfig(key, eventType, templateId, url);
+
+        var res = put("/api/admin/notify-configs/" + id,
+                teamsBody(key, eventType, templateId, "\"***\""));
+
+        assertThat(res.statusCode())
+                .as("*** 是「不改」，不是不合法 URL；回 " + res.body())
+                .isEqualTo(200);
+        assertThat(configRepo.findById(id).orElseThrow().getWebhookUrl())
+                .as("round-trip 不得把遮蔽字串寫成 URL，也不得把原值清掉")
+                .isEqualTo(url);
+        assertThat(res.body()).doesNotContain(url).contains("\"webhookUrl\":\"***\"");
+    }
+
+    @Test
+    @DisplayName("PUT 換新 URL → DB 更新，但回應仍只回遮蔽值")
+    void updateWithNewUrlReturnsMasked() throws Exception {
+        String templateId = givenTemplate("T32-mask-put2");
+        String key = "leave-approval";
+        String eventType = uniqueEvent("task_assigned");
+        String id = givenTeamsConfig(key, eventType, templateId,
+                sinkUrl("teams-mask-old-" + UUID.randomUUID()));
+        String newUrl = sinkUrl("teams-mask-new-" + UUID.randomUUID());
+
+        var res = put("/api/admin/notify-configs/" + id,
+                teamsBody(key, eventType, templateId, "\"" + newUrl + "\""));
+
+        assertThat(res.statusCode()).isEqualTo(200);
+        assertThat(configRepo.findById(id).orElseThrow().getWebhookUrl()).isEqualTo(newUrl);
+        assertThat(res.body()).doesNotContain(newUrl).contains("\"webhookUrl\":\"***\"");
     }
 
     // ── 端到端：真的經過 RabbitMQ 打到 sink ─────────────────────────
