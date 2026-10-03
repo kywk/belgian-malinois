@@ -53,6 +53,10 @@ public class WebhookConsumer {
         // This consumer handles the actual HTTP delivery.
         String url = (String) payload.remove("__webhookUrl");
         String method = (String) payload.remove("__webhookMethod");
+        // 自訂 body（#28）：listener 依 payloadTemplate 渲染好的完整字串。
+        // remove 掉是必要的 —— 否則它會被序列進預設 body（或日後任何
+        // payload 的序列化），把整個模板當成一個欄位送到接收端。
+        String customBody = (String) payload.remove(WebhookPayloadTemplate.BODY_KEY);
         if (url == null || url.isBlank()) {
             log.debug("Webhook event received (no URL configured): {}", payload.get("event"));
             return;
@@ -79,9 +83,16 @@ public class WebhookConsumer {
             //
             // 現在簽章只放標頭、不塞進 body（GitHub／Stripe 的做法），
             // 接收端直接對收到的原始 body 計算 HMAC 即可驗證。
+            //
+            // ⚠️ #28 的自訂 body 也走同一條：簽章是對「真正送出的 body」
+            // （customBody 或序列化結果）算的，而不是對 map —— 否則自訂
+            // body 的接收端會驗不過章，而症狀是「有標頭但驗不過」。
             payload.put("deliveryTimestamp", java.time.Instant.now().toString());
             payload.put("deliveryId", java.util.UUID.randomUUID().toString());
-            String body = objectMapper.writeValueAsString(payload);
+            // 有自訂 body 就用它，否則照舊把整個 payload 序列化。
+            // deliveryTimestamp／deliveryId 即使不在自訂 body 裡，仍在標頭中
+            // （X-BPM-Timestamp／X-BPM-Delivery-Id），重放偵測不受影響。
+            String body = customBody != null ? customBody : objectMapper.writeValueAsString(payload);
             String signature = computeHmac(body);
 
             var request = restClient.method(

@@ -148,6 +148,19 @@ class WebhookDeliveryWiringTest extends IntegrationTestBase {
     }
 
     /**
+     * 帶 {@code payloadTemplate} 的 webhook 元素（#28）。
+     *
+     * <p>模板是 JSON，內含雙引號；XML 屬性裡必須轉義成 {@code &quot;}
+     * —— Flowable 解析後拿回的是原始的 {@code "}。漏了轉義的症狀是部署時
+     * SAXParseException，看起來與被測行為無關。
+     */
+    private String webhookWithTemplate(String event, String url, String method, String template) {
+        return "<flowable:webhook event=\"" + event + "\" url=\"" + url
+                + "\" method=\"" + method + "\" payloadTemplate=\""
+                + template.replace("&", "&amp;").replace("\"", "&quot;") + "\"/>";
+    }
+
+    /**
      * 舊格式的 {@code <documentation>} 元素。
      *
      * <p>必須排在 {@code <extensionElements>} <b>之前</b>（BPMN XSD 的 sequence 順序），
@@ -340,6 +353,114 @@ class WebhookDeliveryWiringTest extends IntegrationTestBase {
                     .containsEntry("event", "task.complete")
                     .containsEntry("action", "rejected")
                     .containsEntry("rejectReason", "證件不清");
+        }
+    }
+
+    // ── 自訂 body：payloadTemplate（#28）────────────────────────────
+
+    /**
+     * {@code payloadTemplate} 的端到端驗證：自訂 body 真的被投遞、簽章對它有效。
+     *
+     * <h2>為什麼不能只測 listener 的 map</h2>
+     *
+     * <p>單元測試釘住 {@code __webhookBody} 的字串，但「consumer 真的拿它當
+     * body」與「簽章是對它算的」是另一段程式碼。這裡錯了不會有任何錯誤：
+     * 接收端收到的是預設 JSON（模板被忽略），或收到自訂 body 但簽章驗不過
+     * （簽章還是對預設 JSON 算的）—— 兩者都只有真的打到 HTTP 才看得到。
+     */
+    @Nested
+    @DisplayName("payloadTemplate：自訂 body")
+    class PayloadTemplate {
+
+        @Test
+        @DisplayName("自訂 body 被實際投遞，未知 placeholder 原樣保留，簽章對自訂 body 有效")
+        void customBodyIsActuallyDeliveredAndSigned() {
+            String template = "{\"task\":\"{{taskName}}\",\"pid\":\"{{processInstanceId}}\","
+                    + "\"unknown\":\"{{nope}}\"}";
+            String key = deploySingleTaskProcess("wh-template",
+                    nodeWithHooks(webhooksElement(
+                            webhookWithTemplate("create", sinkUrl("t1"), "POST", template))));
+
+            var pi = runtimeService.startProcessInstanceByKey(key, Map.of("businessKey", "WH-T1"));
+
+            awaitDelivery(() -> !WebhookTestSink.receivedTo("t1").isEmpty(), "自訂 body 的投遞");
+            WebhookTestSink.Received r = WebhookTestSink.receivedTo("t1").get(0);
+
+            // 逐位元釘住送出的 body：這是「模板真的生效」的唯一直接證據。
+            assertThat(r.body()).isEqualTo(
+                    "{\"task\":\"審核關卡\",\"pid\":\"" + pi.getId() + "\",\"unknown\":\"{{nope}}\"}");
+
+            // ⚠️ 簽章必須對「實際送出的自訂 body」計算。若 consumer 忘了改用
+            // customBody 來算 HMAC，這裡就會紅 —— 而接收端驗不過章。
+            assertThat(r.signature())
+                    .as("X-BPM-Signature 必須等於對自訂 body 計算的 HMAC")
+                    .isEqualTo(expectedHmac(r.body()));
+
+            // 契約欄位（__*）與 consumer 額外附加的 deliveryTimestamp／deliveryId
+            // 都不該出現在自訂 body 裡：body 的內容完全由模板決定。
+            assertThat(body(r))
+                    .doesNotContainKeys("__webhookUrl", "__webhookMethod", "__webhookBody",
+                            "deliveryTimestamp", "deliveryId");
+        }
+
+        @Test
+        @DisplayName("值裡的雙引號與反斜線被轉義成合法 JSON")
+        void valuesAreJsonEscaped() {
+            String template = "{\"bk\":\"{{businessKey}}\"}";
+            String key = deploySingleTaskProcess("wh-template-escape",
+                    nodeWithHooks(webhooksElement(
+                            webhookWithTemplate("create", sinkUrl("t2"), "POST", template))));
+
+            runtimeService.startProcessInstanceByKey(key,
+                    Map.of("businessKey", "A\"B\\C"));
+
+            awaitDelivery(() -> !WebhookTestSink.receivedTo("t2").isEmpty(), "轉義案例的投遞");
+            WebhookTestSink.Received r = WebhookTestSink.receivedTo("t2").get(0);
+
+            assertThat(r.body()).isEqualTo("{\"bk\":\"A\\\"B\\\\C\"}");
+            assertThat(r.signature()).isEqualTo(expectedHmac(r.body()));
+        }
+
+        @Test
+        @DisplayName("null 值代換成空字串（鍵留著）")
+        void nullValueBecomesEmptyString() {
+            String template = "{\"bk\":\"{{businessKey}}\"}";
+            String key = deploySingleTaskProcess("wh-template-null",
+                    nodeWithHooks(webhooksElement(
+                            webhookWithTemplate("create", sinkUrl("t3"), "POST", template))));
+
+            // 刻意不給 businessKey：payload 的 businessKey 是 null。
+            runtimeService.startProcessInstanceByKey(key, Map.of());
+
+            awaitDelivery(() -> !WebhookTestSink.receivedTo("t3").isEmpty(), "null 案例的投遞");
+            assertThat(WebhookTestSink.receivedTo("t3").get(0).body())
+                    .isEqualTo("{\"bk\":\"\"}");
+        }
+
+        @Test
+        @DisplayName("同一節點有模板與無模板各一筆 → 各自的 body 互不影響")
+        void templatedAndPlainConfigsAreIndependent() {
+            // 這一條是「共用 map 洩漏」的端到端版本：無模板的那一筆若繼承了
+            // 自訂 body，它收到的會是別人的 body。
+            String key = deploySingleTaskProcess("wh-template-mixed", nodeWithHooks(webhooksElement(
+                    webhookWithTemplate("create", sinkUrl("t4"), "POST", "{\"only\":\"{{taskId}}\"}"),
+                    webhook("create", sinkUrl("t5"), "POST"))));
+
+            var pi = runtimeService.startProcessInstanceByKey(key, Map.of("businessKey", "WH-T5"));
+
+            awaitDelivery(() -> !WebhookTestSink.receivedTo("t4").isEmpty()
+                    && !WebhookTestSink.receivedTo("t5").isEmpty(), "兩筆設定的投遞");
+
+            WebhookTestSink.Received custom = WebhookTestSink.receivedTo("t4").get(0);
+            assertThat(custom.body()).startsWith("{\"only\":\"").endsWith("\"}");
+
+            WebhookTestSink.Received plain = WebhookTestSink.receivedTo("t5").get(0);
+            assertThat(body(plain))
+                    .as("無模板的設定走既有的預設 JSON body")
+                    .containsEntry("event", "task.create")
+                    .containsEntry("businessKey", "WH-T5")
+                    .doesNotContainKey("__webhookBody");
+            assertThat(plain.signature()).isEqualTo(expectedHmac(plain.body()));
         }
     }
 

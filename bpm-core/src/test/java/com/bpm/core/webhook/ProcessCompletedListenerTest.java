@@ -224,5 +224,53 @@ class ProcessCompletedListenerTest {
             verify(rabbitTemplate, org.mockito.Mockito.times(2))
                     .convertAndSend(eq("bpm.exchange"), eq("bpm.webhook.leave-approval"), any(Object.class));
         }
+
+        // ── 自訂 body（#28）────────────────────────────────────────
+
+        @Test
+        @DisplayName("有模板 → __webhookBody 是渲染後的字串；沒有模板的那一筆不得繼承它")
+        @SuppressWarnings("unchecked")
+        void templateRendersPerConfigWithoutLeaking() {
+            // ⚠️ 這一條同時守住一個實作細節：改動前所有設定共用同一份 map。
+            // 若沿用那個形狀，第二筆（沒有模板）會繼承第一筆的 __webhookBody
+            // —— 送出一個不屬於自己的 body，而且不會有任何錯誤。
+            wire(List.of(
+                    new WebhookConfig("process.completed", "https://erp.example/a", "POST",
+                            "{\"r\":\"{{result}}\"}"),
+                    new WebhookConfig("all", "https://erp.example/b", "POST")));
+
+            listener.onEvent(event);
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+            verify(rabbitTemplate, org.mockito.Mockito.times(2))
+                    .convertAndSend(eq("bpm.exchange"), eq("bpm.webhook.leave-approval"), captor.capture());
+
+            assertThat(captor.getAllValues().get(0))
+                    .containsEntry("__webhookBody", "{\"r\":\"approved\"}");
+            assertThat(captor.getAllValues().get(1))
+                    .as("第二筆沒有模板，不得繼承第一筆的自訂 body")
+                    .doesNotContainKey("__webhookBody");
+        }
+
+        @Test
+        @DisplayName("流程層 payload 的欄位都在 KNOWN_FIELDS 內（lint 白名單不漂移）")
+        @SuppressWarnings("unchecked")
+        void processPayloadFieldsAreKnown() {
+            wire(List.of(new WebhookConfig("process.completed",
+                    "https://erp.example/done", "POST")));
+
+            listener.onEvent(event);
+
+            ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq("bpm.exchange"), eq("bpm.webhook.leave-approval"), captor.capture());
+
+            // __webhookUrl／__webhookMethod 是 listener 與 consumer 的契約欄位，
+            // 不是 payload 資料 —— 模板引用不到它們（渲染在加入之前）。
+            assertThat(captor.getValue().keySet().stream()
+                    .filter(k -> !k.startsWith("__")).toList())
+                    .isSubsetOf(WebhookPayloadTemplate.KNOWN_FIELDS);
+        }
     }
 }

@@ -252,4 +252,93 @@ class WebhookTaskPayloadTest {
                             "candidateUsers", "candidateGroups");
         }
     }
+
+    // ── 自訂 body（#28）─────────────────────────────────────────────
+
+    /**
+     * 模板與 listener 之間的接線。
+     *
+     * <p>⚠️ 這一組刻意斷言 {@code __webhookBody} 的<b>字串內容</b>而不是
+     * 「有沒有這個鍵」：鍵存在但渲染順序錯了（例如在加入 {@code __webhookUrl}
+     * 之後才渲染、或把 {@code __webhookBody} 自己渲染進去）時，端到端測試
+     * 照樣會綠（body 送出去了、簽章也對），只有把內容釘住才抓得到。
+     */
+    @Nested
+    @DisplayName("payloadTemplate：notify 送出的 __webhookBody")
+    class PayloadTemplateWiring {
+
+        @Test
+        @DisplayName("有模板 → __webhookBody 是渲染後的字串；__* 契約欄位不在可引用範圍")
+        @SuppressWarnings("unchecked")
+        void templateRendersIntoContractField() {
+            DelegateTask task = taskWithEvent("create");
+            when(task.getAssignee()).thenReturn("mgr001");
+            when(task.getDueDate()).thenReturn(Date.from(Instant.parse("2026-01-01T00:00:00Z")));
+            when(resolver.resolve(PROC_DEF, "approve")).thenReturn(List.of(
+                    new WebhookConfig("create", "https://erp.example/hook", "POST",
+                            "{\"t\":\"{{taskName}}\",\"u\":\"{{__webhookUrl}}\"}")));
+
+            listener.notify(task);
+
+            ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq("bpm.exchange"), eq("bpm.webhook.task"), captor.capture());
+
+            assertThat(captor.getValue())
+                    .as("模板在加入 __* 之前渲染：__webhookUrl 不是資料，只能是未代換的 placeholder")
+                    .containsEntry("__webhookBody", "{\"t\":\"審核關卡\",\"u\":\"{{__webhookUrl}}\"}")
+                    .containsEntry("__webhookUrl", "https://erp.example/hook");
+        }
+
+        @Test
+        @DisplayName("沒有模板 → 完全沒有 __webhookBody（既有 payload 逐欄不變）")
+        @SuppressWarnings("unchecked")
+        void noTemplateMeansNoCustomBody() {
+            DelegateTask task = taskWithEvent("create");
+            when(task.getAssignee()).thenReturn("mgr001");
+            when(resolver.resolve(PROC_DEF, "approve")).thenReturn(List.of(
+                    new WebhookConfig("create", "https://erp.example/hook", "POST")));
+
+            listener.notify(task);
+
+            ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+            verify(rabbitTemplate).convertAndSend(
+                    eq("bpm.exchange"), eq("bpm.webhook.task"), captor.capture());
+
+            assertThat(captor.getValue())
+                    .doesNotContainKey("__webhookBody")
+                    .containsEntry("event", "task.create")
+                    .containsEntry("taskName", "審核關卡");
+        }
+    }
+
+    /**
+     * KNOWN_FIELDS（lint 用的白名單）與實際 payload 的漂移守門（#28）。
+     *
+     * <p>兩個 listener put 的欄位與 {@link WebhookPayloadTemplate#KNOWN_FIELDS}
+     * 是同一份事實的兩個寫法，沒有機制強制同步。新增 payload 欄位卻忘了加進
+     * 白名單，症狀會是「模板引用一個明明存在的欄位，lint 卻說未知」——
+     * 使用者被錯誤訊息誤導，比不警告更糟。這裡用實際的 payload map 比對，
+     * 漂移時紅在新增欄位的那一次改動上。
+     */
+    @Nested
+    @DisplayName("KNOWN_FIELDS 與實際 payload 不得漂移")
+    class KnownFieldsMirror {
+
+        @Test
+        @DisplayName("每個事件 buildPayload 的欄位都在 KNOWN_FIELDS 內")
+        void everyTaskPayloadFieldIsKnown() {
+            DelegateTask task = taskWithEvent("complete");
+            when(task.getAssignee()).thenReturn("mgr001");
+            when(task.getDueDate()).thenReturn(new Date());
+            when(task.getVariable("rejected")).thenReturn(true);
+            when(task.getVariable("rejectReason")).thenReturn("證件不清");
+
+            for (String event : List.of("create", "complete", "delete", "timeout", "assignment")) {
+                assertThat(WebhookPayloadTemplate.KNOWN_FIELDS)
+                        .as("事件 %s 的 payload 欄位必須都在 KNOWN_FIELDS 內（新增欄位時同步白名單）", event)
+                        .containsAll(listener.buildPayload(task, event).keySet());
+            }
+        }
+    }
 }

@@ -1,5 +1,5 @@
 import { h } from 'preact'
-import { TextFieldEntry, SelectEntry } from '@bpmn-io/properties-panel'
+import { TextAreaEntry, TextFieldEntry, SelectEntry } from '@bpmn-io/properties-panel'
 import { useService } from 'bpmn-js-properties-panel'
 import {
   DEFAULT_EVENT,
@@ -71,6 +71,7 @@ function buildGroup(element, config) {
     entries.push({ id: `webhook-event-${i}`, component: makeWhEvent(element, webhooks, wh, i, config), isEdited: () => true })
     entries.push({ id: `webhook-url-${i}`, component: makeWhUrl(element, webhooks, wh, i), isEdited: () => true })
     entries.push({ id: `webhook-method-${i}`, component: makeWhMethod(element, webhooks, wh, i), isEdited: () => true })
+    entries.push({ id: `webhook-payload-template-${i}`, component: makeWhPayloadTemplate(element, webhooks, wh, i), isEdited: () => true })
   })
 
   // 舊格式的設定還在 documentation 裡時，明講出來。
@@ -125,6 +126,35 @@ function makeWhMethod(element, webhooks, wh, i) {
     const modeling = useService('modeling')
     const debounce = useService('debounceInput')
     return h(SelectEntry, { id: `webhook-method-${i}`, label: 'Method', element, debounce, getOptions: () => METHODS, getValue: () => wh.method || 'POST', setValue: (v) => { wh.method = v; saveWebhooks(modeling, element, webhooks) } })
+  }
+}
+
+/**
+ * 自訂 body 模板（#28）。
+ *
+ * <p>用 {@code TextAreaEntry} 而不是 {@code TextFieldEntry}：模板是 JSON，
+ * 單行輸入框會把整段擠成一行，使用者沒辦法檢查括號與引號有沒有配對。
+ *
+ * <p>語法與可引用欄位的說明放在 label 的提示文字而不是驗證：
+ * 未知的 {@code {{field}}} 在後端是<b>原樣保留</b>（body 仍送得出去），
+ * 不是錯誤 —— 設計器把它擋下來只會讓一個能跑的設定存不了檔。
+ * 真正的部署前提醒由後端 lint（{@code webhook-payload-template}）負責。
+ *
+ * <p>存檔路徑與其他欄位完全相同（同一次 updateProperties，undo 是一步）；
+ * 空白時不寫入屬性，見 {@code webhookStorage.buildExtensionElements}。
+ */
+function makeWhPayloadTemplate(element, webhooks, wh, i) {
+  return function (props) {
+    const modeling = useService('modeling')
+    const debounce = useService('debounceInput')
+    return h(TextAreaEntry, {
+      id: `webhook-payload-template-${i}`,
+      label: 'Payload 模板（選填）',
+      element,
+      debounce,
+      getValue: () => wh.payloadTemplate || '',
+      setValue: (v) => { wh.payloadTemplate = v; saveWebhooks(modeling, element, webhooks) }
+    })
   }
 }
 function makeWhAdd(element, webhooks, config) {

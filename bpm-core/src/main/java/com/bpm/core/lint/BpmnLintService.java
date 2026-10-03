@@ -4,6 +4,8 @@ import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.*;
 import org.springframework.beans.factory.annotation.Value;
 import com.bpm.core.form.service.FormService;
+import com.bpm.core.webhook.WebhookConfig;
+import com.bpm.core.webhook.WebhookPayloadTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.xml.stream.XMLInputFactory;
@@ -366,6 +368,11 @@ public class BpmnLintService {
             }
         }
 
+        // Rule l: webhook payloadTemplate 只能引用 payload 既有欄位（#28）。
+        // 與上面的 per-element 規則分開跑：webhook 容器可以掛在 process 上，
+        // 也可以掛在任何 FlowElement 上，遍歷形狀與 UserTask 專屬規則不同。
+        lintWebhookPayloadTemplates(process, errors);
+
         return new LintResult(errors.stream().noneMatch(e -> "error".equals(e.severity())), errors);
     }
 
@@ -516,6 +523,57 @@ public class BpmnLintService {
         if (!hasBoundary) {
             errors.add(new LintError(st.getId(), st.getName(), "service-error-boundary",
                     "ServiceTask 必須有錯誤邊界事件", "warning"));
+        }
+    }
+
+    /**
+     * 規則 l：webhook 的 {@code payloadTemplate} 只能引用 payload 既有欄位（#28）。
+     *
+     * <h2>為什麼是 warning 而不是 error</h2>
+     *
+     * <p>未知欄位在投遞時的行為是<b>原樣保留</b>（見
+     * {@link WebhookPayloadTemplate}）：body 仍送得出去，接收端會看到一個
+     * 沒被代換的 {@code {{typo}}}。這是「可能寫錯」而不是「必然壞掉」，
+     * 而且模板本身是合法的 BPMN —— 用 error 擋部署會讓一支能跑的流程部署不了，
+     * 而誤擋會逼人繞過 lint（見 {@code LintRuleCorrectnessTest} 類別註解）。
+     * 這裡的價值是部署前讓人<b>看得見</b>拼錯的欄位名。
+     *
+     * <p>對照的是 {@link WebhookPayloadTemplate#KNOWN_FIELDS}（任務層＋流程層
+     * 欄位名的聯集）。刻意<b>不</b>依事件細分：同一個模板語意在 lint 時
+     * 不需要知道事件（模板與 event 屬性是獨立的設定），而且「流程層模板引用
+     * taskId」在執行期只是原樣保留，不是錯誤 —— 細分只會製造假警告。
+     *
+     * <p>這條規則同時是 P2-1 紅線的部署期可見性：模板寫 {@code {{salary}}}
+     * 之類的流程變數名稱會落在「未知欄位」而被警告。執行期它們本來就拿不到
+     * （模板只查 payload map，結構上碰不到流程變數），所以這裡不是安全閘門，
+     * 只是讓人知道「這個欄位不會被代換」。
+     */
+    private void lintWebhookPayloadTemplates(org.flowable.bpmn.model.Process process,
+                                             List<LintError> errors) {
+        // 流程層（<process>）與節點層用同一份檢查 —— 與 resolver 的兩層對稱一致。
+        checkWebhookPayloadTemplates(process, process.getId(), process.getName(), errors);
+        for (FlowElement el : process.getFlowElements()) {
+            checkWebhookPayloadTemplates(el, el.getId(), el.getName(), errors);
+        }
+    }
+
+    private void checkWebhookPayloadTemplates(BaseElement element, String elementId, String elementName,
+                                              List<LintError> errors) {
+        for (ExtensionElement container : element.getExtensionElements()
+                .getOrDefault(WebhookConfig.ELEMENT, List.of())) {
+            for (ExtensionElement hook : container.getChildElements()
+                    .getOrDefault(WebhookConfig.CHILD, List.of())) {
+                // ⚠️ namespace 傳 null：屬性在 XML 上無前置（同 resolver 的說明）。
+                String template = hook.getAttributeValue(null, WebhookConfig.ATTR_PAYLOAD_TEMPLATE);
+                Set<String> unknown = WebhookPayloadTemplate.unknownFields(template);
+                if (unknown.isEmpty()) continue;
+                errors.add(new LintError(elementId, elementName, "webhook-payload-template",
+                        "webhook payloadTemplate 引用了未知欄位 " + unknown
+                                + "：投遞時會原樣保留、不會被代換。可用欄位: "
+                                + WebhookPayloadTemplate.KNOWN_FIELDS
+                                + "。模板只查得到 webhook payload 的欄位，"
+                                + "刻意不提供流程變數（security-audit P2-1）。", "warning"));
+            }
         }
     }
 
