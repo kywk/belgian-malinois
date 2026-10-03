@@ -35,7 +35,8 @@ import static org.mockito.Mockito.when;
  * <h2>為什麼用真的 HTTP server 而不是 mock {@code RestClient}</h2>
  *
  * <p>要釘住的幾條規則都跟「請求有沒有真的出去」有關：SSRF 政策拒絕時
- * <b>不得</b>發請求、method 不合法時不得發請求、2xx 的回應 body 要寫進
+ * <b>不得</b>發請求、method 不合法時不得發請求、通過政策的主機 302 到
+ * loopback 時不得跟隨（#97）、2xx 的回應 body 要寫進
  * 流程變數、非 2xx／逾時要變 BpmnError。用 mock 的 fluent API 只能證明
  * 「有呼叫某個方法」，而 {@code HttpServer} 可以從<b>另一端</b>數請求，
  * 這是唯一能區分「送出了」與「看起來送出了」的證據。
@@ -56,7 +57,14 @@ class ExternalApiDelegateTest {
     private HttpServer server;
     private String baseUrl;
 
+    /**
+     * 302 的 Location 指向的 loopback 端點（#97 的攻擊目標）。
+     * 跟隨重導的話這裡會收到請求 —— 斷言它為零就是「沒有被當跳板」的證據。
+     */
+    private HttpServer redirectTarget;
+
     private final AtomicInteger hits = new AtomicInteger();
+    private final AtomicInteger redirectTargetHits = new AtomicInteger();
     private final AtomicReference<String> lastMethod = new AtomicReference<>();
     private final AtomicReference<String> lastBody = new AtomicReference<>();
 
@@ -65,8 +73,17 @@ class ExternalApiDelegateTest {
     @BeforeEach
     void setUp() throws IOException {
         hits.set(0);
+        redirectTargetHits.set(0);
         lastMethod.set(null);
         lastBody.set(null);
+
+        redirectTarget = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        redirectTarget.createContext("/", exchange -> {
+            redirectTargetHits.incrementAndGet();
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+        });
+        redirectTarget.start();
 
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
@@ -75,6 +92,14 @@ class ExternalApiDelegateTest {
             lastBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
 
             String path = exchange.getRequestURI().getPath();
+            if (path.contains("/redirect")) {
+                // 被允許的主機把請求重導去打 loopback 的攻擊形狀（#97）。
+                exchange.getResponseHeaders().set("Location",
+                        "http://127.0.0.1:" + redirectTarget.getAddress().getPort() + "/landed");
+                exchange.sendResponseHeaders(302, -1);
+                exchange.close();
+                return;
+            }
             if (path.contains("/slow")) {
                 try {
                     Thread.sleep(1000);
@@ -106,6 +131,7 @@ class ExternalApiDelegateTest {
     @AfterEach
     void tearDown() {
         server.stop(0);
+        redirectTarget.stop(0);
     }
 
     // ── 工具 ────────────────────────────────────────────────────────
@@ -298,6 +324,24 @@ class ExternalApiDelegateTest {
 
         assertThat(error.getErrorCode()).isEqualTo(ExternalApiDelegate.ERROR_CODE_FAILED);
         assertThat(error.getMessage()).contains("HTTP 503");
+        assertThat(hits.get()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("🔴 3xx 重導不得跟隨：被允許的主機無法用 Location 把請求帶去打 loopback")
+    void redirectIsNotFollowed() {
+        // 政策只看原始 URL 的 host。若 client 跟隨重導，allowed host 就能
+        // 302 到 http://127.0.0.1:.../ —— SSRF 閘門形同虛設（#97）。
+        when(execution.getCurrentFlowElement()).thenReturn(serviceTask(
+                field("url", baseUrl + "/redirect")));
+
+        BpmnError error = callAndCatch(delegateAllowingLocalhost(), execution);
+
+        assertThat(error.getErrorCode()).isEqualTo(ExternalApiDelegate.ERROR_CODE_FAILED);
+        assertThat(error.getMessage()).contains("HTTP 302");
+        assertThat(redirectTargetHits.get())
+                .as("跟隨重導的話 127.0.0.1 的端點會被請求 —— 那正是 SSRF 繞過")
+                .isZero();
         assertThat(hits.get()).isEqualTo(1);
     }
 

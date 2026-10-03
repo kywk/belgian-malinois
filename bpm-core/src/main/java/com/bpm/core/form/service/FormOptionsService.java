@@ -1,5 +1,6 @@
 package com.bpm.core.form.service;
 
+import com.bpm.core.http.SafeRestClients;
 import com.bpm.core.webhook.WebhookUrlPolicy;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -12,14 +13,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.io.IOException;
-import java.net.HttpURLConnection;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -44,8 +42,8 @@ import java.util.List;
  * 若順序顛倒，一條曾被允許、後來被政策擋下的 URL 仍會由快取供應內容
  * —— 閘門就形同虛設（快取不得掩蓋拒絕）。
  *
- * <p>⚠️ <b>重導不跟隨</b>（見 {@link #buildRestClient}）：政策只檢查原始
- * URL 的 host，若跟隨 3xx，一個被允許的主機可以用 {@code Location} 把
+ * <p>⚠️ <b>重導不跟隨</b>（由 {@link SafeRestClients} 集中保證）：政策只檢查
+ * 原始 URL 的 host，若跟隨 3xx，一個被允許的主機可以用 {@code Location} 把
  * 伺服器帶去打 loopback —— 閘門被繞過。3xx 因此原樣落到「非 2xx → 502」。
  *
  * <h2>回應形狀：兩種上游格式都正規化成 {@code [{label,value}]}</h2>
@@ -121,7 +119,7 @@ public class FormOptionsService {
                               ObjectMapper objectMapper,
                               @Value("${bpm.webhook.connect-timeout-ms:2000}") long connectTimeoutMs,
                               @Value("${bpm.webhook.read-timeout-ms:5000}") long readTimeoutMs) {
-        this(urlPolicy, redis, objectMapper, buildRestClient(connectTimeoutMs, readTimeoutMs));
+        this(urlPolicy, redis, objectMapper, SafeRestClients.create(connectTimeoutMs, readTimeoutMs));
     }
 
     /**
@@ -134,30 +132,6 @@ public class FormOptionsService {
         this.redis = redis;
         this.objectMapper = objectMapper;
         this.restClient = restClient;
-    }
-
-    /**
-     * 與 {@code WebhookConsumer}／{@code ExternalApiDelegate} 相同的形狀：
-     * {@code RestClient.create()} 沒有逾時，這裡明確設定。
-     *
-     * <p>⚠️ <b>這一版刻意多關掉重導跟隨</b>（既有兩份沒有）：政策只檢查
-     * 「原始 URL」的 host，而 {@code HttpURLConnection} 預設會跟隨 3xx ——
-     * 一個被允許的主機可以用 {@code Location: http://127.0.0.1:8080/...}
-     * 把伺服器帶去打 loopback，等於繞過 SSRF 閘門。關掉之後 3xx 原樣
-     * 回給呼叫端，由「非 2xx → 502」擋下（見類別註解的錯誤語意）。
-     */
-    static RestClient buildRestClient(long connectTimeoutMs, long readTimeoutMs) {
-        var requestFactory = new SimpleClientHttpRequestFactory() {
-            @Override
-            protected void prepareConnection(HttpURLConnection connection, String httpMethod)
-                    throws IOException {
-                super.prepareConnection(connection, httpMethod);
-                connection.setInstanceFollowRedirects(false);
-            }
-        };
-        requestFactory.setConnectTimeout(Duration.ofMillis(connectTimeoutMs));
-        requestFactory.setReadTimeout(Duration.ofMillis(readTimeoutMs));
-        return RestClient.builder().requestFactory(requestFactory).build();
     }
 
     /** 一個正規化後的選項；{@code value} 一律是字串（spec §8.4 的欄位契約）。 */

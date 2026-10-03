@@ -1,5 +1,6 @@
 package com.bpm.core.webhook;
 
+import com.bpm.core.http.SafeRestClients;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -7,6 +8,7 @@ import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -39,13 +41,9 @@ public class WebhookConsumer {
         this.objectMapper = objectMapper;
         this.urlPolicy = urlPolicy;
         this.hmacSecret = hmacSecret;
-        // ⚠️ 逾時不可省略（security-audit P2-1）。RestClient.create() 沒有逾時，
-        // 掛住的 endpoint 會佔住 listener 執行緒直到 TCP 超時 ——
-        // 而 concurrency 預設是 1，整條 webhook 佇列會被一個壞掉的接收端阻塞。
-        var rf = new org.springframework.http.client.SimpleClientHttpRequestFactory();
-        rf.setConnectTimeout(java.time.Duration.ofMillis(connectTimeoutMs));
-        rf.setReadTimeout(java.time.Duration.ofMillis(readTimeoutMs));
-        this.restClient = RestClient.builder().requestFactory(rf).build();
+        // 逾時與「不跟隨 3xx」都集中在 SafeRestClients（規則只有一份；
+        // 為什麼逾時不可省略、為什麼重導是 SSRF 缺口，見該類別註解）。
+        this.restClient = SafeRestClients.create(connectTimeoutMs, readTimeoutMs);
     }
 
     @RabbitListener(queues = "bpm.webhook.queue")
@@ -97,7 +95,15 @@ public class WebhookConsumer {
                     .header("X-BPM-Delivery-Id", String.valueOf(payload.get("deliveryId")))
                     .body(body);
 
-            request.retrieve().toBodilessEntity();
+            ResponseEntity<Void> response = request.retrieve().toBodilessEntity();
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                // 3xx 會直接抵達這裡（Spring 對非 GET 不跟隨重導；RestClient
+                // 預設也只對 4xx／5xx 拋例外）。若不加這道檢查，302 會被
+                // 記成 delivered —— 接收端其實什麼都沒收到。視為投遞失敗，
+                // 與 4xx／5xx 同一條路徑：重試 → DLQ。
+                throw new IllegalStateException(
+                        "接收端回應非 2xx：HTTP " + response.getStatusCode().value());
+            }
             log.info("Webhook delivered to {}: {}", url, payload.get("event"));
         } catch (Exception e) {
             log.error("Webhook delivery failed to {}: {}", url, e.getMessage());

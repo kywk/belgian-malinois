@@ -1,5 +1,6 @@
 package com.bpm.core.engine;
 
+import com.bpm.core.http.SafeRestClients;
 import com.bpm.core.webhook.WebhookUrlPolicy;
 import org.flowable.bpmn.model.ServiceTask;
 import org.flowable.engine.delegate.BpmnError;
@@ -13,12 +14,10 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
-import java.time.Duration;
 import java.util.Locale;
 
 /**
@@ -56,6 +55,11 @@ import java.util.Locale;
  * {@code BpmnError("EXTERNAL_API_BLOCKED", 原因)}，<b>不發請求</b>。
  * 少了這一步，任何能部署 BPMN 的人就能讓伺服器去打 loopback／內網／
  * 雲端 metadata（169.254.169.254）。
+ *
+ * <p>閘門只檢查原始 URL，因此 client 必須不跟隨 3xx（由
+ * {@link SafeRestClients} 集中保證）—— 否則被允許的主機可以用
+ * {@code Location} 把請求帶去打 loopback，等於繞過政策。3xx 原樣回給
+ * 這裡，落到下面的 {@code EXTERNAL_API_FAILED}。
  *
  * <h2>失敗語意：全部是可建模的 BpmnError</h2>
  *
@@ -109,7 +113,7 @@ public class ExternalApiDelegate implements JavaDelegate {
     public ExternalApiDelegate(WebhookUrlPolicy urlPolicy,
                                @Value("${bpm.webhook.connect-timeout-ms:2000}") long connectTimeoutMs,
                                @Value("${bpm.webhook.read-timeout-ms:5000}") long readTimeoutMs) {
-        this(urlPolicy, buildRestClient(connectTimeoutMs, readTimeoutMs));
+        this(urlPolicy, SafeRestClients.create(connectTimeoutMs, readTimeoutMs));
     }
 
     /**
@@ -119,17 +123,6 @@ public class ExternalApiDelegate implements JavaDelegate {
     ExternalApiDelegate(WebhookUrlPolicy urlPolicy, RestClient restClient) {
         this.urlPolicy = urlPolicy;
         this.restClient = restClient;
-    }
-
-    /**
-     * 與 {@code WebhookConsumer} 相同的形狀：{@code RestClient.create()}
-     * 沒有逾時，這裡明確設定。
-     */
-    static RestClient buildRestClient(long connectTimeoutMs, long readTimeoutMs) {
-        var requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofMillis(connectTimeoutMs));
-        requestFactory.setReadTimeout(Duration.ofMillis(readTimeoutMs));
-        return RestClient.builder().requestFactory(requestFactory).build();
     }
 
     @Override
