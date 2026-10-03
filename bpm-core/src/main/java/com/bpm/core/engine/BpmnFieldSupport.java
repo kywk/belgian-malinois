@@ -87,6 +87,23 @@ public final class BpmnFieldSupport {
     }
 
     /**
+     * 節點上是否存在指定名稱的 {@code flowable:field}。
+     *
+     * <p>與 {@link #field} 的差別是「有沒有設定」與「設定求值成什麼」：
+     * {@code field()} 在運算式求值為 {@code null} 時也回 {@code null}，
+     * 呼叫端若需要區分「沒設定這個欄位」與「設定了但求值為 null」
+     * （例如 validation 的 condition 欄位：前者略過、後者算失敗），
+     * 必須先問這裡。
+     */
+    public static boolean hasField(ServiceTask task, String name) {
+        if (task == null || name == null || name.isBlank()) return false;
+        for (FieldExtension field : task.getFieldExtensions()) {
+            if (name.equals(field.getFieldName())) return true;
+        }
+        return false;
+    }
+
+    /**
      * 讀出節點上指定名稱的 {@code flowable:field} 並解析成字串。
      *
      * <p>解析規則見類別註解。欄位本身<b>不存在</b>時回 {@code null}

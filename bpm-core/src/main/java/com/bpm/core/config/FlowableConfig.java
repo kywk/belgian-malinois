@@ -80,6 +80,7 @@ public class FlowableConfig {
             TimeoutNotifyDelegate timeoutNotifyDelegate,
             com.bpm.core.webhook.WebhookTaskListener webhookTaskListener,
             EmailNotifyDelegate emailNotifyDelegate,
+            com.bpm.core.engine.DataValidationDelegate dataValidationDelegate,
             com.bpm.core.engine.BlankAssigneeNormalizingInterceptor blankAssigneeNormalizingInterceptor) {
         return config -> {
             config.setEventListeners(List.of(processCompletedListener, unreachableTaskListener,
@@ -124,7 +125,11 @@ public class FlowableConfig {
                     // webhookTaskListener 同一條分界：只加在這份 map，
                     // 不進 BpmnLintService.EL_WHITELIST —— 它是
                     // delegateExpression 的解析對象，不是運算式可呼叫的函式。
-                    Map.entry("emailNotifyDelegate", emailNotifyDelegate)));
+                    Map.entry("emailNotifyDelegate", emailNotifyDelegate),
+                    // #48 通用資料驗證 delegate。失敗丟 BpmnError
+                    // （errorCode=DATA_VALIDATION_FAILED），由設計師用 boundary
+                    // error 接住；同樣只加在這份 map，不進 EL 白名單。
+                    Map.entry("dataValidationDelegate", dataValidationDelegate)));
         };
     }
 }
