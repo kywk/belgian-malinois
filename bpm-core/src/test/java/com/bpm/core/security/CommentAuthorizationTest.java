@@ -1,7 +1,7 @@
 package com.bpm.core.security;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.bpm.core.support.IntegrationTestBase;
 import com.bpm.core.support.TestGatewayMockMvcCustomizer;
 import org.flowable.common.engine.impl.identity.Authentication;

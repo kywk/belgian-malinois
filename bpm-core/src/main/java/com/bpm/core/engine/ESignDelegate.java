@@ -2,7 +2,7 @@ package com.bpm.core.engine;
 
 import com.bpm.core.http.SafeRestClients;
 import com.bpm.core.webhook.WebhookUrlPolicy;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.flowable.bpmn.model.ServiceTask;
 import org.flowable.engine.delegate.BpmnError;
 import org.flowable.engine.delegate.DelegateExecution;

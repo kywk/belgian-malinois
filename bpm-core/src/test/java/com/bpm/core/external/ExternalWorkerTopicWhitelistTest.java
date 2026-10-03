@@ -3,7 +3,7 @@ package com.bpm.core.external;
 import com.bpm.core.model.ExternalSystem;
 import com.bpm.core.repository.ExternalSystemRepository;
 import com.bpm.core.support.IntegrationTestBase;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.flowable.engine.ManagementService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
@@ -217,9 +217,9 @@ class ExternalWorkerTopicWhitelistTest extends IntegrationTestBase {
                 .GET().build(), HttpResponse.BodyHandlers.ofString());
     }
 
-    private List<com.fasterxml.jackson.databind.JsonNode> tasksOf(HttpResponse<String> res)
+    private List<tools.jackson.databind.JsonNode> tasksOf(HttpResponse<String> res)
             throws Exception {
-        List<com.fasterxml.jackson.databind.JsonNode> out = new ArrayList<>();
+        List<tools.jackson.databind.JsonNode> out = new ArrayList<>();
         objectMapper.readTree(res.body()).get("tasks").forEach(out::add);
         return out;
     }

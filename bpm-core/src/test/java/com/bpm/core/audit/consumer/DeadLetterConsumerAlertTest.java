@@ -7,7 +7,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dlq.DlqReplayService;
 import com.bpm.core.dto.AuditEvent;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;

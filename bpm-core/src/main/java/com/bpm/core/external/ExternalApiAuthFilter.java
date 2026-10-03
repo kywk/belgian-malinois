@@ -4,7 +4,7 @@ import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.model.ExternalSystem;
 import com.bpm.core.repository.ExternalSystemRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;

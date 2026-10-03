@@ -1,6 +1,6 @@
 package com.bpm.core.webhook;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.flowable.bpmn.model.BaseElement;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.ExtensionElement;
@@ -277,7 +277,7 @@ public class WebhookConfigResolver {
         return out;
     }
 
-    private static String text(com.fasterxml.jackson.databind.JsonNode node, String field) {
+    private static String text(tools.jackson.databind.JsonNode node, String field) {
         var v = node.get(field);
         return v == null || v.isNull() ? null : v.asText();
     }

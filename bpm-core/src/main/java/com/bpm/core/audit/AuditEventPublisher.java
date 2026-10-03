@@ -4,7 +4,7 @@ import com.bpm.core.audit.model.AuditLog;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.audit.service.AuditLogService;
 import com.bpm.core.dto.AuditEvent;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;

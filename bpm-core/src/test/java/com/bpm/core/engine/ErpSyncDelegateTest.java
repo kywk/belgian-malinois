@@ -1,7 +1,7 @@
 package com.bpm.core.engine;
 
 import com.bpm.core.webhook.WebhookUrlPolicy;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import org.flowable.bpmn.model.FieldExtension;
 import org.flowable.bpmn.model.ServiceTask;

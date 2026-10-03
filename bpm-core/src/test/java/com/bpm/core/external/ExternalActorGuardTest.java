@@ -2,7 +2,7 @@ package com.bpm.core.external;
 
 import com.bpm.core.model.ExternalSystem;
 import com.bpm.core.service.OrgService;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;

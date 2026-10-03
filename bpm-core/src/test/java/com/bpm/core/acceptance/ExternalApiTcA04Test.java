@@ -300,7 +300,7 @@ class ExternalApiTcA04Test extends IntegrationTestBase {
         String mine = mockMvc.perform(get("/api/process-instances").param("initiator", "user001"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         assertThat(mine).as("代發的單必須出現在員工的「我的申請」").contains(pid);
-        var row = new com.fasterxml.jackson.databind.ObjectMapper().readTree(mine).findParents("processInstanceId")
+        var row = new tools.jackson.databind.ObjectMapper().readTree(mine).findParents("processInstanceId")
                 .stream().filter(n -> pid.equals(n.get("processInstanceId").asText())).findFirst().orElseThrow();
         assertThat(row.get("onBehalf").asBoolean())
                 .as("而且必須標示為代發，否則員工會看到一張自己沒送過的單")

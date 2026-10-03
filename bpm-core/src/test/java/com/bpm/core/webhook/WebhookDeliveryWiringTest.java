@@ -2,7 +2,7 @@ package com.bpm.core.webhook;
 
 import com.bpm.core.support.IntegrationTestBase;
 import com.bpm.core.support.WebhookTestSink;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
@@ -178,7 +178,7 @@ class WebhookDeliveryWiringTest extends IntegrationTestBase {
 
     private Map<String, Object> body(WebhookTestSink.Received r) {
         try {
-            return objectMapper.readValue(r.body(), new com.fasterxml.jackson.core.type.TypeReference<>() {
+            return objectMapper.readValue(r.body(), new tools.jackson.core.type.TypeReference<>() {
             });
         } catch (Exception e) {
             throw new AssertionError("投遞 body 不是 JSON：" + r.body(), e);
