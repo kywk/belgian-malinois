@@ -103,20 +103,6 @@ public class MockOrgController {
         USERS.forEach((uid, u) -> DEPT_MAP.put(uid, (String) u.get("deptId")));
     }
 
-    /**
-     * 代理人 fixture（#5，2026-10-03）。
-     *
-     * <p>{@code user004} 休假時由 {@code user005} 代理。刻意選這一組：
-     * {@code acceptance-test.sh} 只用 user001～user003／mgr001／dir001／
-     * admin001，user004／user005 不在動線上，因此本 fixture 不會改變既有
-     * 驗收流程的指派結果，但讓「首關受理人代換」與「批次轉派」在 dev
-     * 可被線上實測（改動前 {@code getSubstitute} 一律回空）。
-     *
-     * <p>它與「特殊 id 故障開關」的設計原則一致：無狀態、自我限定，
-     * 只影響明文指定的那一個人。
-     */
-    private static final Map<String, String> SUBSTITUTES = Map.of("user004", "user005");
-
     @GetMapping("/users")
     public Collection<Map<String, Object>> listUsers() { return USERS.values(); }
 
@@ -161,15 +147,13 @@ public class MockOrgController {
     }
 
     /**
-     * 代理人查詢：目前只有 {@link #SUBSTITUTES} 裡的 fixture 有代理人，
-     * 其餘一律回 {@code {}}。回空不是 fail-open ——「沒有代理人」是誠實的
-     * 答案，不會導致任務被錯派；真正需要防的是「查不到卻假裝有」。
+     * 固定回 {@code {}} —— 這個 fixture 沒有設定任何代理人。
+     * 這不是 fail-open：「沒有代理人」是誠實的答案，不會導致任務被錯派。
      */
     @GetMapping("/users/{userId}/substitute")
     public Map<String, String> getSubstitute(@PathVariable String userId) {
         if (!USERS.containsKey(userId)) throw unknown("使用者", userId);
-        String substitute = SUBSTITUTES.get(userId);
-        return substitute == null ? Map.of() : Map.of("substituteId", substitute);
+        return Map.of();
     }
 
     @GetMapping("/departments/{deptId}/members")
