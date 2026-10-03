@@ -45,7 +45,12 @@ public class BpmnLintService {
             // ⚠️ 三個補件 UserTask 在本項之前寫死 ${initiator}，於是外部系統
             // 發起時 assignee 是 system:<id> —— 不是人，沒有人能簽，案件靜默卡死。
             // 規則只能有一份，所以這裡與 FlowableConfig.setBeans() 必須同步。
-            "applicantResolver");
+            "applicantResolver",
+            // 執行期動態計算審核人（#47），任何 UserTask 都可用。
+            // 三個方法都套代理人、找不到人時拋例外 —— 既有 orgService／
+            // permService／bpmQueryService 的對應方法各有最後一哩的缺口，
+            // 見 DynamicAssigneeResolver 類別註解。與 setBeans() 必須同步。
+            "dynamicAssignee");
     private static final Set<String> DEFAULT_NAMES = Set.of(
             "Task", "Task 1", "Task 2", "Task 3", "");
 
