@@ -44,7 +44,7 @@ import java.util.Objects;
  * <h2>⚠️ PUT 是整欄覆寫，而多數授權欄位的「空值」語意是「不限制」</h2>
  *
  * <p>{@code allowedProcessKeys}／{@code allowedActions}／{@code ipWhitelist}／
- * {@code allowedCandidateGroups} 全部是自由文字的欄位，PUT 沒帶就是 {@code null}，
+ * {@code allowedCandidateGroups}／{@code allowedWorkerTopics} 全部是自由文字的欄位，PUT 沒帶就是 {@code null}，
  * 而 {@code null} 在 {@link ExternalSystemPolicy} 的規則裡是
  * <b>{@code UNRESTRICTED}（不限制）</b>。也就是說
  * <b>「PUT 少帶一個欄位 = 把該項授權放寬」</b>。
@@ -77,7 +77,11 @@ public class ExternalSystemAdminController {
                     // #88 政策 B：候選群組白名單。漏列的話，擴大或縮小
                     // 「這個系統能把單子丟進哪些待辦池」都不會留下軌跡，
                     // 而那正是它屬於授權維度的理由。
-                    "allowedCandidateGroups");
+                    "allowedCandidateGroups",
+                    // #22 收尾：worker topic 白名單。漏列的話，擴大或縮小
+                    // 「這個系統能認領／查詢哪些 topic」都不會留下軌跡 ——
+                    // 那正是跨系統洩漏的授權維度。
+                    "allowedWorkerTopics");
 
     private final ExternalSystemRepository repo;
     private final AuditEventPublisher auditPublisher;
@@ -126,6 +130,7 @@ public class ExternalSystemAdminController {
                 "allowedActions", nullSafe(saved.getAllowedActions()),
                 "ipWhitelist", nullSafe(saved.getIpWhitelist()),
                 "allowedCandidateGroups", nullSafe(saved.getAllowedCandidateGroups()),
+                "allowedWorkerTopics", nullSafe(saved.getAllowedWorkerTopics()),
                 "allowOnBehalfOf", String.valueOf(saved.getAllowOnBehalfOf())));
 
         Map<String, Object> result = new HashMap<>();
@@ -179,6 +184,11 @@ public class ExternalSystemAdminController {
         // 那比放寬更糟（既有整合全部被鎖死）。
         // 真正的修法是管理頁必須讓人設定它，而那一半在 ExternalSystemAdmin.vue。
         sys.setAllowedCandidateGroups(req.getAllowedCandidateGroups());
+        // #22 收尾：worker topic 白名單。與上面兩個欄位同一個方向、同一個
+        // 整欄覆寫語意（欄位缺席 → null → 不限制），理由與 allowedCandidateGroups
+        // 完全相同：把「沒設定」誤判成「拒絕全部」會讓照 UI 正常流程建立的
+        // 系統一個 topic 都不能用，比放寬更糟。
+        sys.setAllowedWorkerTopics(req.getAllowedWorkerTopics());
         // PUT 沒帶這個欄位時關閉 —— 錯誤的方向必須是「失去能力」而非「意外取得」。
         sys.setAllowOnBehalfOf(Boolean.TRUE.equals(req.getAllowOnBehalfOf()));
         ExternalSystem saved = repo.save(sys);
@@ -373,6 +383,9 @@ public class ExternalSystemAdminController {
         // 少了這行，編輯任一系統都會把白名單從 payload 裡弄丟，
         // 而後端 PUT 是整欄覆寫 → 儲存一次就把白名單清成「不限制」。
         m.setAllowedCandidateGroups(s.getAllowedCandidateGroups());
+        // ⚠️ 同 allowedCandidateGroups：#22 收尾的 worker topic 白名單若不在
+        // 回應裡，管理頁編輯任一系統都會把它靜默清成「不限制」。
+        m.setAllowedWorkerTopics(s.getAllowedWorkerTopics());
         m.setCreatedAt(s.getCreatedAt());
         m.setLastUsedAt(s.getLastUsedAt());
         return m;
@@ -389,6 +402,7 @@ public class ExternalSystemAdminController {
         m.put("enabled", String.valueOf(s.getEnabled()));
         m.put("allowOnBehalfOf", String.valueOf(s.getAllowOnBehalfOf()));
         m.put("allowedCandidateGroups", nullSafe(s.getAllowedCandidateGroups()));
+        m.put("allowedWorkerTopics", nullSafe(s.getAllowedWorkerTopics()));
         return m;
     }
 

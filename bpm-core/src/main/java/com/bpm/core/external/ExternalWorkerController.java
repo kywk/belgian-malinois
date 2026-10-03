@@ -2,6 +2,7 @@ package com.bpm.core.external;
 
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
+import com.bpm.core.model.ExternalSystem;
 import org.flowable.common.engine.api.FlowableException;
 import org.flowable.common.engine.api.FlowableIllegalArgumentException;
 import org.flowable.common.engine.api.FlowableObjectNotFoundException;
@@ -64,10 +65,16 @@ import java.util.Map;
  * <p>Flowable 的 acquire 只按 topic ＋「尚未鎖定」挑 job（原始碼
  * {@code selectExternalWorkerJobsToExecute} 的 {@code LOCK_EXP_TIME_ is null}），
  * 沒有任何「這個 job 屬於哪個系統」的維度。所以一個尚未被認領的 job
- * 是<b>先搶先贏</b>：任何被授權 {@code external_worker} 的系統都可能認領到它。
- * 擁有權保證的是「認領之後只有認領者能完成／失敗／釋放」。
+ * 是<b>先搶先贏</b>：任何被授權 {@code external_worker} 且 topic 在白名單內的
+ * 系統都可能認領到它。擁有權保證的是「認領之後只有認領者能完成／失敗／釋放」。
  * 需要嚴格隔離時，請用系統專屬的 topic 名稱（例如 {@code erp-invoices}），
  * 而不是多個系統共用一個 topic。
+ *
+ * <p>⚠️ #22 收尾（2026-10-03 使用者裁決）在此之上加了 topic 白名單：
+ * {@link ExternalSystemPolicy#isWorkerTopicAllowed}（{@code allowedWorkerTopics}）
+ * 是 acquire 與 {@code GET /tasks} 的閘門。但欄位為空＝不限制（與
+ * {@code allowedProcessKeys} 同一條四態規則），所以<b>既有系統在管理員逐一設定
+ * 之前行為不變</b> —— 這是刻意的，理由見 V7 migration。
  *
  * <p>⚠️ {@code allowedProcessKeys} 不套用在 worker 路徑上：job 的
  * processDefinitionKey 只能認領後才知道，而 acquire API 不提供
@@ -79,7 +86,12 @@ import java.util.Map;
  *   <li><b>401</b>：缺 X-API-Key／X-System-Id，或金鑰查無系統
  *       （由 {@link ExternalApiAuthFilter} 決定，本類別不經手）。</li>
  *   <li><b>403</b>：系統停用、IP 不在白名單、allowedActions 不含
- *       {@code external_worker}，或未知的 worker 路徑（filter fail-closed）。</li>
+ *       {@code external_worker}、未知的 worker 路徑（filter fail-closed），
+ *       或 topic 不在 {@code allowedWorkerTopics} 內（acquire 與
+ *       {@code GET /tasks}；#22 收尾）。最後一項與
+ *       {@code allowedCandidateGroups} 的拒絕同一個家族：判定只看呼叫端
+ *       自己的設定，且在查任何 job 之前完成 —— 別人的 topic 存不存在
+ *       完全不在這個決定的輸入裡，所以 403 不洩漏任何東西。</li>
  *   <li><b>400</b>：payload 不合法 —— 缺 topic、lockDurationSeconds
  *       不是正整數、workerId 指名他人、variables 形狀錯或用了
  *       {@code _} 保留前綴。</li>
@@ -120,11 +132,14 @@ public class ExternalWorkerController {
 
     private final ManagementService managementService;
     private final AuditEventPublisher auditPublisher;
+    private final ExternalSystemPolicy policy;
 
     public ExternalWorkerController(ManagementService managementService,
-                                    AuditEventPublisher auditPublisher) {
+                                    AuditEventPublisher auditPublisher,
+                                    ExternalSystemPolicy policy) {
         this.managementService = managementService;
         this.auditPublisher = auditPublisher;
+        this.policy = policy;
     }
 
     // ── 1. Acquire（認領並鎖定）──────────────────────────────────────
@@ -142,12 +157,20 @@ public class ExternalWorkerController {
      * {@link AcquiredExternalWorkerJob#getVariables()}）。worker 需要輸入
      * 資料才能工作，所以認領時帶回；見類別註解「topic 是共用佇列」——
      * 需要嚴格隔離請用系統專屬 topic。
+     *
+     * <p>⚠️ topic 不在該系統的 {@code allowedWorkerTopics} 內時 <b>403</b>，
+     * 且在任何 job 查詢之前就拒絕（#22 收尾；理由見類別註解「狀態碼的分工」）。
+     * 被拒的請求零副作用：不鎖 job、不寫稽核。
      */
     @PostMapping("/tasks/acquire")
     @Transactional("primaryTransactionManager")
     public Map<String, Object> acquire(@RequestBody(required = false) Map<String, Object> body,
-                                       @RequestAttribute("externalSystemId") String systemId) {
+                                       @RequestAttribute("externalSystemId") String systemId,
+                                       @RequestAttribute("externalSystem") ExternalSystem sys) {
         String topic = requireTopic(body);
+        // 授權先於一切（#88 的「授權先決」原則）：topic 沒被授權就沒有
+        // 後續的 job 查詢 —— 不讓任何未授權的請求碰到佇列。
+        requireAllowedTopic(sys, topic);
         String workerId = effectiveWorkerId(systemId, body == null ? null : body.get("workerId"));
         Duration lockDuration = lockDuration(body == null ? null : body.get("lockDurationSeconds"));
 
@@ -186,14 +209,20 @@ public class ExternalWorkerController {
      * <p>⚠️ 回應<b>不含</b>流程變數：這個端點是佇列檢視，不是認領，
      * 而其中未鎖定的 job 可能屬於任何系統（見類別註解「topic 是共用佇列」）。
      * 變數只在 acquire 時回傳給實際認領者。
+     *
+     * <p>⚠️ topic 不在該系統的 {@code allowedWorkerTopics} 內時 <b>403</b>
+     * （#22 收尾）：連「這個 topic 有沒有未鎖定的 job」都不回答 ——
+     * 未授權的系統不該看得到別人的佇列存量。
      */
     @GetMapping("/tasks")
     public Map<String, Object> query(@RequestParam(required = false) String topic,
-                                     @RequestAttribute("externalSystemId") String systemId) {
+                                     @RequestAttribute("externalSystemId") String systemId,
+                                     @RequestAttribute("externalSystem") ExternalSystem sys) {
         if (topic == null || topic.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "缺少 topic（必須是非空白字串）");
         }
+        requireAllowedTopic(sys, topic);
         String workerId = ExternalActorIdentity.of(systemId);
 
         // 以 jobId 去重：理論上一個 job 不會同時出現在兩邊，但用 Map
@@ -405,6 +434,31 @@ public class ExternalWorkerController {
                     "缺少 topic（必須是非空白字串）");
         }
         return s;
+    }
+
+    /**
+     * topic 必須在該系統的 {@code allowedWorkerTopics} 內（#22 收尾）。
+     *
+     * <h2>為什麼是 403 而不是 404</h2>
+     *
+     * <p>判定只讀呼叫端<b>自己的設定</b>（{@link ExternalSystemPolicy}），
+     * 且在查任何 job 之前完成 —— 別人的 topic 存不存在、有沒有 job，
+     * 完全不在這個決定的輸入裡，所以 403 不洩漏任何跨系統資訊
+     * （「404 才不洩漏」的前提是查詢本身會碰到他人的資料，這裡不是）。
+     * 選 403 讓它與 {@code allowedActions}／{@code allowedCandidateGroups}
+     * 的拒絕同一個家族：都是「這個系統沒被授權」，訊息指名欄位，
+     * 呼叫端知道要去哪裡改。
+     *
+     * <p>⚠️ 白名單為空＝不限制（四態規則的唯一一份在
+     * {@link ExternalSystemPolicy}）；這裡不重寫規則，只轉譯成 HTTP。
+     */
+    private void requireAllowedTopic(ExternalSystem sys, String topic) {
+        if (!policy.isWorkerTopicAllowed(sys, topic)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "此系統未被授權使用 topic: " + topic
+                            + "。allowedWorkerTopics 必須包含這個 topic 才能認領或查詢；"
+                            + "請改用已授權的 topic，或請管理員在外部系統設定中授權它。");
+        }
     }
 
     /**

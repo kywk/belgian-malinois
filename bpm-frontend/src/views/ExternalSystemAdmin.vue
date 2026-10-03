@@ -30,6 +30,18 @@
         </template>
       </el-table-column>
       <!--
+        ⚠️ 這一欄與表單的輸入框是同一件事的兩個面（#22 收尾）。
+        沒有它，管理員看不出一個系統能被哪些 topic 的 worker 認領／查詢 ——
+        而「以為自己看得到」正是授權類缺陷發生的前提（與上面候選群組欄位
+        同一個道理）。
+      -->
+      <el-table-column label="允許 Worker Topic" min-width="180">
+        <template #default="{ row }">
+          <el-tag v-if="!row.allowedWorkerTopics" type="info" size="small">不限制</el-tag>
+          <el-tag v-for="k in parseJson(row.allowedWorkerTopics)" :key="k" size="small" style="margin:2px">{{ k }}</el-tag>
+        </template>
+      </el-table-column>
+      <!--
         ⚠️ 這一欄與表單裡的開關是同一件事的兩個面。
         沒有它，管理員只能靠「點進編輯才知道」來確認一個系統有沒有代發授權 ——
         而授權繼承的缺陷（見 resetForm 的註解）正是發生在「以為自己看得到」的
@@ -106,6 +118,23 @@
             <br />
             ⚠️ <b>留空代表「不限制」</b>（與「允許流程」同一條規則），
             也就是該系統可以指定任意群組的待辦池。
+          </div>
+        </el-form-item>
+        <!--
+          ⚠️ 與 allowedCandidateGroups 同一條規則（#22 收尾）：必須在
+          blankForm() 裡，否則 applyForm() 不會從列資料挑出它，而 submitForm()
+          送的是 {...form} —— 後端 PUT 是整欄覆寫，儲存一次就把白名單
+          靜默清成「不限制」，方向是放寬。
+        -->
+        <el-form-item label="允許 Worker Topic (JSON array)">
+          <el-input v-model="form.allowedWorkerTopics" placeholder='["erp-invoices","hr-sync"]' />
+          <div style="color:#909399;font-size:13px;line-height:1.6;margin-top:4px">
+            外部系統呼叫 <code>/api/external/worker/tasks</code>（acquire 與查詢）時，
+            topic 必須在這份清單內，否則整個請求會被 403 擋下。
+            <br />
+            ⚠️ <b>留空代表「不限制」</b>（與「允許流程」同一條規則），
+            也就是該系統可以認領任意 topic 的未鎖定任務 ——
+            需要跨系統隔離時，請明確設定這份清單。
           </div>
         </el-form-item>
         <el-form-item label="允許操作">
@@ -239,6 +268,10 @@ function blankForm() {
     // 預設必須是空字串（＝後端的 null ＝不限制），與後端
     // ExternalSystemPolicy.Kind.UNRESTRICTED 同一個方向。
     allowedCandidateGroups: '',
+    // ⚠️ #22 收尾：必須在這裡（見模板裡同一個欄位的註解）。
+    // 少了它，編輯任一系統都會讓 payload 沒有這個鍵，而後端 PUT 是整欄覆寫
+    // → 儲存一次就把 topic 白名單靜默清成「不限制」。
+    allowedWorkerTopics: '',
     ipWhitelist: '',
     callbackUrl: '',
     // R-20 的代發授權。預設必須是 false（與後端 create() 的

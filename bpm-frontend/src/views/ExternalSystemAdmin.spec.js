@@ -90,6 +90,8 @@ const erpRow = {
   lastUsedAt: '2026-09-20T00:00:00Z',
   // #88 政策 B：候選群組白名單。
   allowedCandidateGroups: '["dept001"]',
+  // #22 收尾：worker topic 白名單。
+  allowedWorkerTopics: '["demo-topic"]',
 }
 
 async function mountAdmin(rows = [erpRow]) {
@@ -412,6 +414,130 @@ describe('ExternalSystemAdmin 的候選群組白名單（#88 政策 B）', () =>
     expect(wrapper.text()).toContain('dept001')
     // 空值必須顯示成「不限制」，不能顯示成一個空欄位 ——
     // 「空白欄位」與「不限制」的差別正是授權範圍的差別。
+    expect(wrapper.text()).toContain('不限制')
+  })
+})
+
+/**
+ * #22 收尾：worker topic 白名單（{@code allowedWorkerTopics}）必須在表單裡。
+ *
+ * <h3>⚠️ 缺陷形狀與 #88 的候選群組白名單逐字相同</h3>
+ *
+ * <p>{@code applyForm()} 只從列資料挑 {@code blankForm()} 認得的鍵，而
+ * {@code submitForm()} 送的是 <code>{...form}</code>。所以若
+ * {@code allowedWorkerTopics} 不在 {@code blankForm()} 裡：
+ *
+ * <pre>
+ *   1. 編輯 erp（已設定 ["demo-topic"] 白名單）→ 只改名字 → 儲存
+ *   2. payload 沒有 allowedWorkerTopics 這個鍵
+ *   3. 後端 PUT 是整欄覆寫 → 白名單變成 null ＝「不限制」
+ *   4. 該系統從此可以認領任意 topic 的未鎖定任務（而 acquire 會帶回變數）
+ *      —— 跨系統洩漏，而畫面上完全看不出來
+ * </pre>
+ *
+ * <p>後端那一半（欄位、檢查、稽核）由
+ * {@code ExternalWorkerTopicWhitelistTest} 釘住；本檔驗的是前端有沒有送。
+ *
+ * <h3>負向控制組（2026-10-03 實測，6 條）</h3>
+ *
+ * <p>把 {@code blankForm()} 裡的 {@code allowedWorkerTopics} 拿掉：
+ * <b>3 紅 3 綠</b>。紅的是「編輯時載入表單」「只改名字不得弄掉白名單」
+ * 「建立時預設不限制」—— 這三條是這個欄位存在與否的直接證據。
+ * 綠的三條（設定新白名單、停用再啟用、列表欄）不經過 {@code blankForm()}：
+ * 前者直接對 {@code s.form} 賦值、中者送的是 {@code {...row}}、後者讀列資料，
+ * 所以它們證明不了這個欄位在表單生命週期裡 —— 但它們各自釘住了
+ * 送出、保留、顯示這三個面。
+ */
+describe('ExternalSystemAdmin 的 worker topic 白名單（#22 收尾）', () => {
+  beforeEach(() => {
+    getExternalSystems.mockClear()
+    getExternalSystems.mockResolvedValue([])
+    createExternalSystem.mockClear()
+    createExternalSystem.mockResolvedValue({ apiKey: 'sk-new', callbackSecret: 'cs-new' })
+    updateExternalSystem.mockClear()
+    updateExternalSystem.mockResolvedValue({})
+  })
+
+  it('編輯既有系統時必須把白名單載進表單', async () => {
+    const wrapper = await mountAdmin()
+    const s = state(wrapper)
+
+    s.editSystem(erpRow)
+    expect(s.form.allowedWorkerTopics,
+      '前置條件：白名單必須從列資料載入，否則後續所有斷言都是對空字串的')
+      .toBe('["demo-topic"]')
+  })
+
+  it('⚠️ 只改名字的儲存不得弄掉白名單（少帶欄位 = 靜默放寬授權）', async () => {
+    const wrapper = await mountAdmin()
+    const s = state(wrapper)
+
+    s.editSystem(erpRow)
+    s.form.systemName = 'ERP 系統（改名）'
+    await s.submitForm()
+    await flush()
+
+    const payload = updateExternalSystem.mock.calls[0][1]
+    expect(payload.allowedWorkerTopics,
+      '後端 PUT 是整欄覆寫：漏掉這個欄位等於把白名單清成「不限制」')
+      .toBe('["demo-topic"]')
+  })
+
+  it('設定新的白名單必須送得出去（後端靠它授權）', async () => {
+    const wrapper = await mountAdmin([{ ...erpRow, allowedWorkerTopics: '' }])
+    const s = state(wrapper)
+
+    s.editSystem({ ...erpRow, allowedWorkerTopics: '' })
+    s.form.allowedWorkerTopics = '["demo-topic","other-topic"]'
+    await s.submitForm()
+    await flush()
+
+    expect(updateExternalSystem.mock.calls[0][1].allowedWorkerTopics)
+      .toBe('["demo-topic","other-topic"]')
+  })
+
+  it('建立新系統時預設為「不限制」（空字串 → 後端 null → UNRESTRICTED）', async () => {
+    const wrapper = await mountAdmin()
+    const s = state(wrapper)
+
+    clickCreate(s)
+    expect(s.form.allowedWorkerTopics,
+      '預設不得是某個 topic —— 那是授權，而授權必須由人明確給')
+      .toBe('')
+
+    s.form.systemId = 'brand-new'
+    s.form.systemName = '全新系統'
+    await s.submitForm()
+    await flush()
+
+    expect(createExternalSystem.mock.calls[0][0].allowedWorkerTopics).toBe('')
+  })
+
+  it('停用後再啟用不得順手清掉白名單', async () => {
+    const wrapper = await mountAdmin([{ ...erpRow, enabled: false }])
+    const s = state(wrapper)
+
+    await s.toggleEnabled({ ...erpRow, enabled: false })
+    await flush()
+
+    const payload = updateExternalSystem.mock.calls[0][1]
+    expect(payload.enabled).toBe(true)
+    expect(payload.allowedWorkerTopics,
+      'toggleEnabled 送的是 {...row}，所以 row 有沒有帶到這個欄位是後端 GET 的責任')
+      .toBe('["demo-topic"]')
+  })
+
+  it('列表必須實際顯示「允許 Worker Topic」這一欄與「不限制」', async () => {
+    // ⚠️ 用「完整 mount」而不是 shallow（與候選群組那一條同一個理由）：
+    // shallow 之下 el-table 整個被 stub 掉，連欄位標題都不會渲染。
+    getExternalSystems.mockResolvedValue([erpRow, { ...erpRow, systemId: 'erp2', allowedWorkerTopics: null }])
+    const wrapper = mount(Admin, { global: { plugins: [ElementPlus] } })
+    await flush()
+
+    expect(wrapper.text()).toContain('允許 Worker Topic')
+    expect(wrapper.text()).toContain('demo-topic')
+    // 空值必須顯示成「不限制」：null 的語意是「可以認領任意 topic」，
+    // 顯示成空白欄位會讓管理員以為「沒有授權」—— 方向剛好相反。
     expect(wrapper.text()).toContain('不限制')
   })
 })
