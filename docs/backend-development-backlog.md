@@ -1,7 +1,7 @@
 # Greyhound BPM 平台 — 後端開發工項清單
 
 > 產出日期：2026-06-08
-> 最後更新：2026-10-03（**#70 Stage 5 完成：Boot 4.1.1＋Flowable 8.0.0 已上 main**；Wave G：#97／#44／#45／#46／#47；Wave F：待決策六項；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
+> 最後更新：2026-10-03（**#70 全部完成：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3，EOL 安全債清償**；Wave G：#97／#44／#45／#46／#47；Wave F：待決策六項；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
 > 基於規格文件 vs 實際程式碼差異分析
 >
 > 狀態：✅ 完成　🟡 部分完成（說明欄寫缺什麼）　⬜ 未開始
@@ -192,7 +192,7 @@
 - **未做線上實測**（PM 統一做）。
 | 68 | R-20 剩餘項 |**a/b/d 已於 2026-09-30 完成**（詳見各自條目）。四小項狀態：<br>**a** ✅ admin UI 開關 —— `ExternalSystemAdmin.vue` 加上 `allowOnBehalfOf` 開關與列表欄位，並修掉 `resetForm()` 的 **`Object.assign` 不刪鍵 → 授權繼承**（`applyForm()` 改成先刪鍵再賦值）。⚠️ **連帶修掉兩項原描述未提到的**：(1)「建立外部系統」按鈕原本只有 `showCreate = true`、不重設表單，於是「編輯 A → 取消 → 建立」會送出**對 A 的 PUT**（靜默的）；(2) `editSystem` 的 `Object.assign(form, row)` 讓 `id`／`apiKey`／`lastUsedAt` 一起進 payload（後端擋掉，但那是後端的防護）。⚠️ **發現並補上 `enabled`**：後端 PUT 是整欄覆寫且 `enabled` 是 NOT NULL，原來 `enabled` 是靠 `Object.assign(form, row)` **意外**帶進去的 —— 改用明確欄位清單時若漏掉，「只為了改代發授權而按儲存」會 500。<br>**b** ✅ 前端代發標示 —— 新增 `OnBehalfOfLookup` service，`/api/tasks` 與 `/api/history/tasks` 各多一個 `onBehalfOf` 欄位；`TaskInbox.vue` 標「代 user001 發起」、`DocumentDetail.vue` 在表單上方加警告條。⚠️ **授權是零新增揭露，已用測試釘住**：改動前審核人早就能從 `GET /api/process-instances/{id}/variables` 讀到 `onBehalfOf`（`requireReadAccess` 回整包流程變數），本項只是把它移到值該出現的地方。**刻意只放 `onBehalfOf`（人），不放 `initiator`（`system:<id>`）** —— 後者對「該問誰補件」毫無幫助卻多一個揭露面（誰送進來的），屬產品決定，已回報 PM。系統身分（`system:*`）在顯示端被濾掉，與 `ApplicantResolver` 同一條防線<br>**c** ✅ 已由 #83 一併完成（`ApplicantResolver` bean、3 個補件 UserTask、`UnreachableTaskListener` 告警繞過）<br>**d** ✅ lint rule h 升 error —— ⚠️ **實測確認 `seed-data.sh` 不會被擋**，但理由與 backlog 原本記的不同：**不是**「無 seed SQL 所以 `isExternalAllowed` 恆為 false」，而是**出廠兩支 BPMN 的第一關是 `${assigneeResolver.resolve(execution)}`、字串裡沒有 `initiator`**，所以規則 h 根本不觸發 —— 這在**已授權外部系統存在時也一樣**。已加兩條測試釘死：真的走 `POST /api/deployments` 部署兩支 BPMN 必須 200，以及第一關的 assignee 不得含 `initiator`。⚠️ **負向控制組實測：把 severity 改回 warning 時，「部署 200」那條仍然是綠的** —— 它證明的是「出廠 BPMN 不觸發規則 h」，不是「升級安全」，所以才需要第二條測試把原因釘死。升級的實際價值是：擋下**未來**被改成 `${initiator}` 的 BPMN（#83 的形狀）<br>✅ **2026-10-02 文件收尾完成**（`4f3447d`，merge `9bf795b`）：R-20 文件與程式碼落差全面盤點修正 10 處（spec §9.2 三處、`ExternalSystem` 模型兩欄、§11.6 代發、remediation backlog 加註、CLAUDE.md、backend-completed-items），每處附 file:line 複驗 | ~~2d~~ | ✅ |
 | 69 | 不存在的流程 key 回 500 | ✅ **2026-09-29 完成**（`0b3e7d8`）。key 為 null/空 → 400；查不到定義 → 404（並 catch `FlowableObjectNotFoundException` 補 race window）。⚠️ 範圍比原描述廣：key 缺席與空字串原本也全是 500。`ExternalApiController` 的同一個洞未修（見 #80） | ~~0.5d~~ | ✅ |
-| 70 | Spring Boot 4 + Flowable 8 升級 |Boot 3.5 已於 2026-06-30 EOL；兩者必須同步跳。計畫見 `docs/plan/2026-09-28-springboot4-upgrade.md` Stage 5～6 | 22d || 🟡 **Stage 5 完成（2026-10-03，merge `bccd72c`）**：Boot **4.1.1**＋Flowable **8.0.0**＋springdoc 3.1.1；`spring-boot-jackson2`／`spring-boot-starter-flyway` 進場、properties-migrator 驗收後移除。**驗收**：1230 全綠（冷啟動）、既有 DB 熱啟動 schema `7202→8000` 成功、acceptance 7/0、日期 ISO UTC。**實測修正**：Security 7 鏈序（閘道 filter 改排 JWT 後）、`FACTOR_BEARER` 過濾、Flowable 8 `unacquire` 語意、AMQP `max-retries`。**剩 Stage 6**（Jackson 2→3，重估 1.5–2.5d，不阻斷上線；`variable-json-mapper: jackson2` 與 `spring-boot-jackson2` 為遷移期依賴）。未做：前端瀏覽器走查 |
+| 70 | Spring Boot 4 + Flowable 8 升級 |Boot 3.5 已於 2026-06-30 EOL；兩者必須同步跳。計畫見 `docs/plan/2026-09-28-springboot4-upgrade.md` Stage 5～6 | 22d || ✅ **2026-10-03 全部完成（Stage 5 `bccd72c`、Stage 6 `54d8b52`）**。Boot **4.1.1**＋Flowable **8.0.0**＋Jackson **3**（`tools.jackson`；45 檔遷移）＋springdoc 3.1.1；`spring-boot-jackson2`／`variable-json-mapper: jackson2`／`properties-migrator` 均已退場。驗收：1230 全綠、既有 DB 熱啟動 schema `7202→8000`、acceptance 7/0、日期 ISO UTC、變數與通知正常。實測修正：Security 7 鏈序（閘道 filter 改排 JWT 後）、`FACTOR_BEARER` 過濾、Flowable 8 `unacquire` 語意、AMQP `max-retries`、`JsonNode` 兩個 API 更名。**EOL 安全債清償**。未做：前端瀏覽器走查 |
 | 71 | 讀端授權：可列任何人的案件、可讀任何案件的變數 | ✅ **2026-09-29 完成**（`17896e0`／`15f58cf`）。四個 🔴 端點（`/api/process-instances`、`/api/history/process-instances`、`/api/tasks`、`/{id}/variables`）＋ 兩個新端點 `/involved`（執行中與歷史）。共用 `ProcessAccessGuard` 與 `CandidateGroupMembership`。**剩餘項目見 #74～#78** | ~~2d~~ | ✅ |
 | 72 | `FormDataController.submittedBy` 可冒用 | ✅ **2026-09-29 完成**（`edfd118`）。`GET` 加 `requireReadAccess` ＋ 稽核旁路留痕；`PUT` 加 `getDataById` → `requireParticipant`（原本任何登入者都能改寫他人表單）；`POST`／`PUT` 的 `submittedBy` 改由 `@CallerId` 決定並明確 400。`FormService` 新增 `getDataById` | ~~0.5d~~ | ✅ |
 | 73 | 錯誤回應看不到訊息 | ✅ **2026-09-29 完成**（`2bb3430`）。`DeliberateErrorMessageAttributes` 只在「沒有任何例外傳到容器」時回傳 `jakarta.servlet.error.message` → 對意外例外結構性不可能成立，嚴格強於 `include-message=always`。⚠️ 實際範圍比「只有 ResponseStatusException」略寬（Spring 自己的 `ErrorResponse` 理由字串也在內，兩者在 `/error` 屬性上無法區分） | ~~0.5d~~ | ✅ |
@@ -318,10 +318,10 @@
 | 基礎設施 | 4 | 3 | 0 | 1 | 1d |
 | Form Service | 6 | 6 | 0 | 0 | 0d |
 | 跨服務整合 | 6 | 2 | 4 | 0 | 15d |
-| 2026-09-29 新增 | 29 | 28 | 1 | 0 | 22d |
+| 2026-09-29 新增 | 29 | 29 | 0 | 0 | 0d |
 | 2026-10-02 新增 | 2 | 2 | 0 | 0 | 0d |
 | 2026-10-03 新增 | 1 | 1 | 0 | 0 | 0d |
-| **合計** | **97** | **85** | **8** | **4** | **~51 人天** |
+| **合計** | **97** | **86** | **7** | **4** | **~29 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -555,6 +555,16 @@
 > AMQP `max-attempts:3 → max-retries:2`（維持總嘗試 3 次）。另有計畫外必要的 Testcontainers 2.0 模組更名與 springdoc 3.1.1。
 > 統計：✅ 85、🟡 8、⬜ 4；剩餘上限 ~51 人天（#70 依慣例保留原始估時為上限；**實際剩 Stage 6 約 1.5–2.5d**）。
 > ⚠️ 未做：前端瀏覽器走查（計畫驗收唯一未做項）。
+>
+> **2026-10-03（#70 Stage 6，Jackson 2→3）—— 升級全部結案（`54d8b52`）。**
+> 45 檔機械式 import 遷移（`com.fasterxml.jackson` → `tools.jackson`；annotation 不動）；
+> `JacksonAmqpConfig` 換 `JacksonJsonMessageConverter`；移除 `spring-boot-jackson2` 與
+> `flowable.variable-json-mapper: jackson2`（Flowable 改預設 Jackson 3）。
+> 驗收：**1230 全綠**（含 526 條受影響測試）、既有 DB 熱啟動、seed＋acceptance 7/0、變數與通知正常。
+> 實測：`JacksonException` 為 unchecked；Jackson 3 bare mapper 原生支援 `Instant`（Jackson 2.21 反而要 jsr310）；
+> `JsonNode.fieldNames()→propertyNames()`、`isContainerNode()→isContainer()`。
+> 統計：✅ 86、🟡 7、⬜ 4；剩餘上限 **~29 人天**。
+> **#70（Boot 3.5 EOL 安全債）正式清償。**
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是

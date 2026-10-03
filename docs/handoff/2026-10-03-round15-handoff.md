@@ -1,5 +1,8 @@
 # 接手文件 — 2026-10-03 #70 Stage 5 完成（Spring Boot 4.1.1＋Flowable 8.0.0）
 
+> ⚠️ **同日稍晚 #70 已全部結案（Stage 6 Jackson 2→3），見
+> `docs/handoff/2026-10-03-round16-handoff.md`（最新）。** 本檔內容仍然有效。
+
 **寫給下一個接手的 PM Agent。** 撰寫時間 2026-10-03（同日，接續 round14）。
 上一輪交接見 `docs/handoff/2026-10-03-round14-handoff.md`（**仍然有效**：Wave G）、
 `round13`（Wave F）、`round12`（Wave E）、`round11`（Wave D）、`round10`（Wave C）、

@@ -1,7 +1,7 @@
 # Spring Boot 4 升級計畫
 
 **建立日期**：2026-09-28
-**狀態**：Stage 0 ✅ / 1 ✅ / 2 ✅ / 3 ✅ / 4 ✅ 已完成（2026-09-28）；**Stage 5 ✅ 已完成（2026-10-03）**；Stage 6 待開工
+**狀態**：**Stage 0～6 全部 ✅ 完成（Stage 5 於 2026-10-03、Stage 6 於 2026-10-03）**；升級結案
 **前置調查**：✅ 2026-09-29 完成（見下方「前置調查結論」，該節修正了本文 4 處事實錯誤）
 **優先級**：P0（安全性阻斷項）
 **預估**：22 人日（含前置安全網，含 form-service 整併）
@@ -310,6 +310,17 @@ Testcontainers 每次都是全新 DB，因此測試<b>驗不到「既有 schema 
 - ⚠️ 日期/時間格式、null 處理的預設值有差異，**會編譯成功但執行期出錯**。這是要靠 Stage 2 的測試網擋下來的東西。
 - 最後才移除 `flowable.variable-json-mapper=jackson2`。若 BPMN 的 EL 運算式中有呼叫 `JsonNode` 方法，需逐一檢查（Flowable 官方明確警告 method signature 大量變動）—— 本專案目前 BPMN 僅使用 `orgService`/`permService`/`bpmQueryService` 三個 bean，預期無 `JsonNode` 操作。
 
+#### 實施結果（2026-10-03，merge `54d8b52`）
+
+**已上 main**：`com.fasterxml.jackson` → `tools.jackson`（**45 檔**：main 14＋test 31；`annotation.JsonProperty` 維持不動）；`JacksonAmqpConfig` 換 spring-amqp 4 的 `JacksonJsonMessageConverter`（no-arg 建構子，與舊 `Jackson2JsonMessageConverter()` 同形狀）；移除 `spring-boot-jackson2` 與 `flowable.variable-json-mapper: jackson2`（Flowable 改用預設 Jackson 3 mapper）。
+
+**實測**：
+- 編譯只需兩個 API 更名：`JsonNode.fieldNames()`→`propertyNames()`、`isContainerNode()`→`isContainer()`。
+- `JacksonException` 為 unchecked（`StreamReadException`／`JsonParseException` 是其 subtype）；全 repo 0 個 `catch (IOException)`，三個 catch 已改抓 `JacksonException`。
+- 日期：Jackson 3 bare mapper 原生支援 `Instant` → ISO-8601 UTC；**bare Jackson 2.21 反而會丟 `InvalidDefinitionException`**（jsr310 未註冊）。
+- 未知欄位／null 預設與舊一致；Jackson 2 jar 仍以 transitive 存在（springdoc／Flowable bpmn-model），被移除的是 `spring-boot-jackson2` 的自動配置。
+- **驗收**：完整套件 **1230 全綠**（含 526 條受影響測試）；**既有 dev DB 熱啟動**成功（Flowable schema 已於 Stage 5 升 8.0.0.0）；seed＋`acceptance-test` PASS 7/0；變數（`_formVersions` 等）與通知路徑正常。
+
 ## 6. 時程總表
 
 | Stage | 內容 | 人日 | 可否獨立部署 |
@@ -323,7 +334,7 @@ Testcontainers 每次都是全新 DB，因此測試<b>驗不到「既有 schema 
 | 6 | Jackson 2 → 3 | 3 | ✅（可延後） |
 | | **合計** | **22** | |
 
-Stage 0 與 1 已於 2026-09-28 完成，**剩餘 21 人日**。下一個開工點是 Stage 2（測試安全網）—— 在此之前不要動 Flowable 或 Boot 版本。
+Stage 0 與 1 已於 2026-09-28 完成；**Stage 2～6 亦已全部完成（Stage 2～4 於 2026-09-28、Stage 5～6 於 2026-10-03）——本計畫結案。**
 
 ## 7. 驗收條件
 
