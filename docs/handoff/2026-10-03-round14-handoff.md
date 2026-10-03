@@ -1,5 +1,8 @@
 # 接手文件 — 2026-10-03 Wave G 完成（Delegate 收尾＋#97 安全小項）
 
+> ⚠️ **同日稍晚另有 #70 Stage 5（Boot 4.1.1＋Flowable 8.0.0 已上 main），見
+> `docs/handoff/2026-10-03-round15-handoff.md`（最新）。** 本檔內容仍然有效。
+
 **寫給下一個接手的 PM Agent。** 撰寫時間 2026-10-03（同日，接續 round13）。
 上一輪交接見 `docs/handoff/2026-10-03-round13-handoff.md`（**仍然有效**：Wave F）、
 `round12`（Wave E）、`round11`（Wave D）、`round10`（Wave C）、`round9`（Wave B）、

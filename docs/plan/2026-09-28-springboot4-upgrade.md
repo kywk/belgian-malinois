@@ -1,7 +1,7 @@
 # Spring Boot 4 升級計畫
 
 **建立日期**：2026-09-28
-**狀態**：Stage 0 ✅ / 1 ✅ / 2 ✅ / 3 ✅ / 4 ✅ 已完成（2026-09-28）；**Stage 5 起待開工**
+**狀態**：Stage 0 ✅ / 1 ✅ / 2 ✅ / 3 ✅ / 4 ✅ 已完成（2026-09-28）；**Stage 5 ✅ 已完成（2026-10-03）**；Stage 6 待開工
 **前置調查**：✅ 2026-09-29 完成（見下方「前置調查結論」，該節修正了本文 4 處事實錯誤）
 **優先級**：P0（安全性阻斷項）
 **預估**：22 人日（含前置安全網，含 form-service 整併）
@@ -282,6 +282,21 @@ Testcontainers 每次都是全新 DB，因此測試<b>驗不到「既有 schema 
    若真的失敗：把 audit／form 的前綴改到 `bpm.datasource.audit` / `bpm.datasource.form`
    （`bpm.datasource.*` 已經是共用帳密的來源，位置上很自然），`hikari` 子節點跟著搬。
 6. 確認 Liquibase 移除不影響本專案 —— Flowable 8 把 Liquibase 從 App / CMMN / DMN / event registry 引擎移除改成手動 SQL。本專案只用 process 引擎，預期無影響，但需實測空 DB 啟動。
+
+#### 實施結果（2026-10-03，merge `bccd72c`）
+
+**已上 main**：Boot **4.1.1** ＋ Flowable **8.0.0** ＋ springdoc **3.1.1**；`spring-boot-jackson2`／`spring-boot-starter-flyway` 進場（`properties-migrator` 驗收後移除）。`flowable.variable-json-mapper: jackson2` 保留至 Stage 6。
+
+**與本文預期的差異（實測）**：
+- **7 檔／25 處編譯錯誤**（計畫預期 5 檔 10 處 import ＋ 5 個 Jackson 注入點）：import 搬遷正好 10 處但橫跨 7 檔（多 `TestGatewayMockMvcCustomizer`、`WebhookRetryDlqTest`）；**多出** Testcontainers 2.0 模組更名（pom 級）、`RabbitProperties`／`DefaultErrorAttributes` 搬家；`ErrorAttributeOptions` 未搬。
+- **Jackson 2 注入點編譯零錯誤**（靠 `spring-boot-jackson2`），執行期由全套件綠證明。
+- **AMQP retry 語意**：`max-attempts: 3` → `max-retries: 2`（維持總嘗試 3 次；Framework 語意是 1+maxRetries）。
+- 🔴 **Security 7 鏈序變動（計畫未列）**：`addFilterBefore(gatewayFilter, UsernamePasswordAuthenticationFilter.class)` 會讓閘道標頭蓋過 JWT 身分 → 改 `addFilterAfter(..., BearerTokenAuthenticationFilter.class)`（該類別已搬到 `oauth2.server.resource.web.authentication`）。兩條安全測試（`jwtIdentityWinsOverGatewayHeader`、`jwtIdentityWinsAndParametersCannotOverrideIt`）是守門人。
+- 🔴 **Security 7 `FACTOR_BEARER` authority（計畫未列）**：bearer 認證會附帶認證因子 authority，原本會被 `/api/me/permissions` 當權限碼輸出、也被 `CandidateGroupMembership` 當候選群組名 → `AuthorityResolver.isPermissionCode`（排除 `ROLE_`／`FACTOR_`）為唯一過濾點。
+- **Flowable 8 `unacquire` 語意變更**：現在會一併釋放 exclusive job 的範圍鎖（其他系統可立刻認領；Flowable 7 要等原鎖到期）。
+
+**驗收（全部通過）**：`mvn clean verify` **1230 全綠**（冷啟動）；**既有 dev DB 熱啟動** Flowable schema `7.2.0.2 → 8.0.0.0` 成功、6 秒啟動；seed＋`acceptance-test` PASS 7/0；日期 ISO 8601 UTC；新寫入稽核鏈完好（dev 既有 19 條 broken 是歷史債，非本次造成）。
+**未做**：前端瀏覽器手動走查（計畫驗收清單唯一未做項）。
 
 ### Stage 6 — Jackson 2 → 3（3 人日，可延後）
 
