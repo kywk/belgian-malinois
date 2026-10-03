@@ -259,3 +259,20 @@ bpm:
     # （ExternalSystemUrlValidator 會擋）。
     org-service-url: ${ORG_SERVICE_URL:}
     perm-service-url: ${PERM_SERVICE_URL:}
+
+# API 文件（OpenAPI／Swagger UI）在 prod 一律關閉（#65）。
+#
+# 這份文件會列出所有端點、參數與 schema —— 對攻擊者是免費的偵察資料。
+# dev/test 沒有這個區塊，維持 springdoc 的預設值 enabled: true。
+#
+# ⚠️ 這裡必須是明確的 false，不能只靠「授權層不放行」：
+# SecurityConfig 對文件路徑是 permitAll（dev/test 需要），
+# 所以停用與否完全由這兩個開關決定。兩層防護缺一不可：
+#   - 設定層（這裡）：prod 根本不註冊端點，permitAll 沒有東西可放行。
+#   - 授權層（SecurityConfig）：dev/test 的 permitAll 是文件打得開的原因。
+# 只做授權層而少了這裡，文件會在 prod 直接公開（OpenApiProdDisabledTest 守住）。
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

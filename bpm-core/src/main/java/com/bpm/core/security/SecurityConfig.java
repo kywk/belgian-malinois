@@ -157,6 +157,25 @@ public class SecurityConfig {
                     auth.requestMatchers("/actuator/health", "/actuator/health/**",
                             "/actuator/info").permitAll();
 
+                    // ── 公開：API 文件（dev/test 用） ───────────────
+                    // /swagger-ui.html 是 springdoc 的入口（會轉到
+                    // /swagger-ui/index.html），/swagger-ui/** 是它的靜態資源；
+                    // /v3/api-docs/** 是 OpenAPI JSON，/v3/api-docs.yaml 是同一份的 YAML。
+                    //
+                    // 為什麼可以 permitAll：prod 由 application.yml 的 prod 文件
+                    // 把 springdoc.api-docs 與 springdoc.swagger-ui 設為
+                    // enabled: false —— 那時<b>根本不會註冊這些端點</b>，
+                    // permitAll 沒有東西可放行。這是刻意的雙層防護：
+                    // 設定層決定 prod 不註冊，授權層只讓 dev/test 進得去。
+                    //
+                    // ⚠️ 反過來說，若 prod 的 enabled: false 被拿掉，這條規則
+                    // 會直接讓 API 文件在 prod 公開。OpenApiProdDisabledTest
+                    // 就是那個開關的守門人 —— 動這裡時請一起看它。
+                    //
+                    // ⚠️ 只放行文件本身，不連帶放寬任何業務路徑。
+                    auth.requestMatchers("/v3/api-docs/**", "/v3/api-docs.yaml",
+                            "/swagger-ui/**", "/swagger-ui.html").permitAll();
+
                     // ── 開發用 mock 組織／權限系統 ──────────────────
                     // OrgRestClient 會對「自己」發 HTTP 取組織資料，那條呼叫
                     // 沒有身分可帶（它發生在 BPMN 運算式求值中）。
