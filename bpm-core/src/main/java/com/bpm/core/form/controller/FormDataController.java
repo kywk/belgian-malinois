@@ -6,6 +6,7 @@ import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.form.model.FormData;
 import com.bpm.core.form.service.FormService;
+import com.bpm.core.form.validation.FormSchemaValidator;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.security.ProcessAccessGuard;
 import org.springframework.http.HttpStatus;
@@ -14,6 +15,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 表單資料的 CRUD。
@@ -57,16 +59,21 @@ public class FormDataController {
     private final FormService formService;
     private final AuditEventPublisher auditPublisher;
     private final ProcessAccessGuard accessGuard;
+    // #55 的 schema 驗證。規則全部收在 FormSchemaValidator，controller 只負責
+    // 把違規清單轉成 400（狀態碼與訊息形狀是 HTTP 邊界的事）。
+    private final FormSchemaValidator schemaValidator;
 
     public FormDataController(FormService formService, AuditEventPublisher auditPublisher,
                               // #71 抽出的共用授權判斷。附件、variables、表單資料
                               // 三者必須共用同一份 isParticipant：兩處各自維護時，
                               // 只要有人改了其中一處，就會出現「這個看得到、那個看不到」
                               // 的組合，而那種差異比沒有檢查更難察覺。
-                              ProcessAccessGuard accessGuard) {
+                              ProcessAccessGuard accessGuard,
+                              FormSchemaValidator schemaValidator) {
         this.formService = formService;
         this.auditPublisher = auditPublisher;
         this.accessGuard = accessGuard;
+        this.schemaValidator = schemaValidator;
     }
 
     // ── POST /api/form-data ───────────────────────────────────────
@@ -89,6 +96,22 @@ public class FormDataController {
      * 也就是說少了這道檢查，一個 {@code processInstanceId} 沒帶的請求
      * 就能讓守衛自己炸掉。請求形狀不完整是 400，不是 404，理由與
      * {@code ProcessController.startProcess} 的「缺 key」相同。
+     *
+     * <h2>#55：為什麼 schema 驗證在 submitData 之前、授權與身分之後</h2>
+     *
+     * <p>順序沿用本方法的既有原則：形狀 → 授權 → 身分 → <b>內容</b>。
+     * 「能不能寫、用誰的名義寫」比「內容對不對」更根本，所以
+     * {@code FormSchemaValidator} 放在 {@code requireParticipant} 與
+     * {@code requireSelf} 之後；而它必須在 {@code submitData} 之前 ——
+     * 驗證若在寫入之後，違規資料已經落地，「零副作用」就不可能。
+     *
+     * <p>違規一律 400 並指名欄位（沿用 #66／#72 的訊息政策：呼叫端要知道
+     * 改哪一個欄位，而不是只看到 400）。schemaJson 毀損是 500（伺服器端
+     * 資料問題，fail-closed）；查不到表單定義則略過驗證並 warn
+     * （已知缺口，理由見 {@link FormSchemaValidator} 類別註解）。
+     *
+     * <p>⚠️ {@code PUT /api/form-data/{id}} 不走這條驗證（#58 的範圍）：
+     * 目前同一筆資料「新增時驗、退回修改時不驗」是已知落差。
      */
     @PostMapping
     @Transactional("formTransactionManager")
@@ -126,6 +149,19 @@ public class FormDataController {
         // 送件人，欄位可為 null 會讓「這張表單是誰送出的」變成無解。
         String submitter = accessGuard.requireSelf(data.getSubmittedBy(), callerId, "submittedBy");
         data.setSubmittedBy(submitter);
+
+        // 內容驗證（#55）：dataJson 必須符合 formDefinitionId 指向的 schemaJson。
+        // 這是本方法唯一一個「不改任何資料、只讀」的步驟 —— 違規時在此中止，
+        // submitData 與稽核都不會執行（零副作用）。規則本身不在這裡，
+        // 見 FormSchemaValidator（規則只能有一份）。
+        List<FormSchemaValidator.Violation> violations =
+                schemaValidator.validate(data.getFormDefinitionId(), data.getDataJson());
+        if (!violations.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "表單資料不符表單定義的 schema：" + violations.stream()
+                            .map(v -> "'" + v.fieldId() + "' " + v.reason())
+                            .collect(Collectors.joining("；")));
+        }
 
         FormData saved = formService.submitData(data);
         // operatorId 用 callerId，不用 data.getSubmittedBy()：稽核要記「誰做的」，
