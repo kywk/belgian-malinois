@@ -1,5 +1,9 @@
 package com.bpm.core.notify;
 
+import org.flowable.engine.TaskService;
+import org.flowable.identitylink.api.IdentityLink;
+import org.flowable.identitylink.api.IdentityLinkType;
+import org.flowable.task.api.Task;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -60,6 +64,10 @@ import java.util.Map;
  *       選項因此沒有觸發點。替代機制是「BPMN 非中斷式 boundary timer ＋
  *       {@code timeoutNotifyDelegate}」，由 {@link TimeoutNotifyDelegate}
  *       呼叫 {@link #taskTimedOut}。名字像，機制不同，不要混淆。</li>
+ *   <li>{@code process_cancelled} —— #7 殘餘收尾：申請人撤回案件後通知
+ *       <b>現任受理人</b>。由 {@code ProcessController.cancelProcess} 呼叫
+ *       {@link #processCancelled}；收件人規則與催辦／逾時同一條
+ *       （{@link #taskRecipients}）。</li>
  * </ul>
  */
 @Component
@@ -187,6 +195,73 @@ public class NotifyPublisher {
     }
 
     /**
+     * 案件撤回（{@code process_cancelled}，#7 殘餘收尾）：申請人撤案後
+     * 通知<b>現任受理人</b>。
+     *
+     * <p>呼叫端是 {@code ProcessController.cancelProcess}。收件人必須在
+     * {@code deleteProcessInstance} <b>之前</b>收集（任務隨實例一起消失，
+     * 刪除後已無從得知受理人是誰），發送則在刪除成功之後 —— 被拒路徑
+     * （400／403／404／409）因此保證零通知。時機的完整說明見該方法。
+     *
+     * <p>收件人欄位與催辦／逾時同一組契約：{@code assignee} 優先；
+     * 候選任務沒有 assignee，放 {@code candidateUsers}，由
+     * {@code EmailConsumer.resolveRecipients} 這唯一一份規則解析。
+     * {@code applicant} 是撤回的人（署名用，放 {@code initiator}），
+     * <b>不是</b>收件人 —— 申請人自己剛撤回，不需要再收一封「案件已撤回」。
+     *
+     * <p>payload 與其他事件同一組非敏感欄位（P2-1 紅線）：只有任務／流程
+     * id、名稱、定義 key、受理人與申請人。沒有流程變數、沒有表單內容，
+     * 也<b>沒有</b>撤回原因 —— {@code reason} 是呼叫端提供的自由文字，
+     * 可能夾帶個資，不隨信外送。
+     *
+     * @param processDefinitionKey 流程定義 key（不是含版號的 id）。呼叫端
+     *        以 {@link #extractProcessKey} 從任務的 id 裁出；這裡仍走
+     *        {@code base} 同一條裁切路徑（對 key 是 idempotent），
+     *        規則不因呼叫端而異。
+     * @param candidateUsers 候選人。有 assignee 時傳空清單即可；要放什麼
+     *        由 {@link #taskRecipients} 決定。
+     */
+    public void processCancelled(String taskId, String taskName, String processInstanceId,
+                                 String processDefinitionKey, String assignee,
+                                 List<String> candidateUsers, String applicant) {
+        Map<String, Object> msg = base("process_cancelled", taskId, taskName,
+                processInstanceId, processDefinitionKey, applicant);
+        putIfPresent(msg, "assignee", assignee);
+        if (candidateUsers != null && !candidateUsers.isEmpty()) {
+            msg.put("candidateUsers", List.copyOf(candidateUsers));
+        }
+        publish(msg);
+    }
+
+    /**
+     * 一個任務的通知收件人：assignee 優先；沒有 assignee 的候選任務取
+     * 候選「人」；候選群組沒有 email，略過。
+     *
+     * <p>#7 殘餘收尾把這條規則抽成<b>共用實作</b>，撤回通知的收件人由此
+     * 決定。判定與 {@code TaskController.taskRecipients} 刻意同形
+     * （assignee 有值只送他；否則取 {@code candidate} identity link 的
+     * userId）。
+     *
+     * <p>⚠️ {@code TaskController.taskRecipients} 與
+     * {@code TimeoutNotifyDelegate.candidateUsers} 是同規則的既有副本
+     * （各自成形於不同工項）。本次的檔案邊界不含那兩個檔案，因此尚未
+     * 收斂；後續應把它們改成呼叫這裡，刪掉各自的實作，讓規則真的只有一份。
+     *
+     * @return 去重後的收件人；沒有任何可送對象時回空清單（呼叫端據此
+     *         略過該任務，不送空訊息）
+     */
+    public static List<String> taskRecipients(TaskService taskService, Task task) {
+        String assignee = task.getAssignee();
+        if (assignee != null && !assignee.isBlank()) return List.of(assignee);
+        return taskService.getIdentityLinksForTask(task.getId()).stream()
+                .filter(l -> IdentityLinkType.CANDIDATE.equals(l.getType()))
+                .map(IdentityLink::getUserId)
+                .filter(u -> u != null && !u.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    /**
      * 任務完成後對<b>申請人</b>的通知（{@code process_returned}／
      * {@code process_rejected}／{@code process_completed}）。
      *
@@ -298,8 +373,12 @@ public class NotifyPublisher {
      *
      * <p>格式是 {@code {key}:{version}:{deploymentId}}，因此取第一個冒號之前。
      * 已經是 key 的值（不含冒號）原樣回傳。
+     *
+     * <p>public 供 {@code ProcessController.cancelProcess} 使用：撤回路徑
+     * 只有任務的 {@code processDefinitionId}，而通知 payload 必須是 key
+     * （見類別註解）。裁切規則仍然只有這一份。
      */
-    static String extractProcessKey(String processDefinitionId) {
+    public static String extractProcessKey(String processDefinitionId) {
         if (processDefinitionId == null) return "";
         int idx = processDefinitionId.indexOf(':');
         return idx > 0 ? processDefinitionId.substring(0, idx) : processDefinitionId;

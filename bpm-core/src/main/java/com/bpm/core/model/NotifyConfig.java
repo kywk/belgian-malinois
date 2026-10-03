@@ -22,7 +22,7 @@ public class NotifyConfig {
     private String processDefinitionKey;
 
     @Column(nullable = false, length = 30)
-    private String eventType; // task_assigned | task_claimed | task_urged | task_timeout | process_returned | process_rejected | process_completed
+    private String eventType; // task_assigned | task_claimed | task_urged | task_timeout | process_returned | process_rejected | process_completed | process_cancelled
 
     @Column(nullable = false, length = 30)
     private String channel;
