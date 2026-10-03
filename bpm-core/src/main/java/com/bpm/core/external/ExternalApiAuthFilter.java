@@ -148,6 +148,41 @@ public class ExternalApiAuthFilter extends OncePerRequestFilter {
             return "query_status";
         }
 
+        // ── 工項 #22：External Worker Task（輪詢認領）────────────────────
+        //
+        // 整個 /api/external/worker/** 介面共用<b>一個</b> allowedActions 項目
+        // {@code external_worker}（使用者 2026-10-03 裁決）。不拆成
+        // acquire／complete／fail 三個 action 的原因：三者是同一個工作循環，
+        // 只授權其中兩個等於讓 worker 認領得到任務卻永遠交不回去。
+        //
+        // ⚠️ 白名單項目是 {@code external_worker}，與稽核 detail 的
+        // {@code external_worker_acquire} 等操作名<b>不同</b> —— 後者只描述
+        // 「做了什麼」，不是授權單位。兩者若混用，管理員會以為要填
+        // {@code external_worker_acquire} 才能呼叫，而實際授權比對是精確比對
+        // （見 ExternalSystemPolicy），填錯就是 403。
+        //
+        // 這一段只列舉實際存在的端點，未知的 worker 路徑回 null → 呼叫端
+        // 統一以 403 拒絕（fail-closed，與本方法其他分支相同）。
+        //
+        // POST /api/external/worker/tasks/acquire
+        if ("POST".equals(method) && path.equals("worker/tasks/acquire")) {
+            return "external_worker";
+        }
+
+        // GET /api/external/worker/tasks?topic=...
+        if ("GET".equals(method) && path.equals("worker/tasks")) {
+            return "external_worker";
+        }
+
+        // POST /api/external/worker/tasks/{jobId}/complete
+        // POST /api/external/worker/tasks/{jobId}/fail
+        // POST /api/external/worker/tasks/{jobId}/unacquire
+        if ("POST".equals(method) && path.startsWith("worker/tasks/")
+                && (path.endsWith("/complete") || path.endsWith("/fail")
+                        || path.endsWith("/unacquire"))) {
+            return "external_worker";
+        }
+
         return null;
     }
 

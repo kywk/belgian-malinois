@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  工項 #22 的 External Worker Task 範例（測試資源，不會被自動部署）。
+
+  重點是兩個 Flowable 專屬屬性（語法以 flowable-bpmn-converter 7.2.0 的
+  ExternalWorkerServiceTaskXMLConverter／ServiceTaskXMLConverter 位元碼為準）：
+    flowable:type="external-worker"    → 節點型別（別名 "external" 也接受）
+    flowable:topic="demo-topic"        → 佇列名稱，acquire 時以此比對
+
+  刻意帶一個 error boundary event：lint 規則 e（service-error-boundary）
+  對沒有錯誤邊界的 ServiceTask 發 warning；示範範例應是 lint 零警告的形狀。
+  BPMN error 只在使用者／外部系統呼叫 completion builder 的 bpmnError()
+  時觸發；本工項的 fail 是「技術性失敗」，走 Flowable 的重試／死信機制，
+  不會走這條邊界。
+-->
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="http://bpm.example/external-worker">
+  <process id="external-worker-demo" name="外部工作者示範" isExecutable="true">
+    <startEvent id="start" name="開始"/>
+    <sequenceFlow id="flow-start" sourceRef="start" targetRef="externalStep"/>
+
+    <serviceTask id="externalStep" name="外部系統處理"
+                 flowable:type="external-worker"
+                 flowable:topic="demo-topic"/>
+    <boundaryEvent id="externalStepError" name="外部處理錯誤" attachedToRef="externalStep">
+      <errorEventDefinition errorRef="externalWorkerError"/>
+    </boundaryEvent>
+    <sequenceFlow id="flow-done" sourceRef="externalStep" targetRef="review"/>
+    <sequenceFlow id="flow-error" sourceRef="externalStepError" targetRef="manualHandling"/>
+
+    <userTask id="review" name="人工複核"
+              flowable:assignee="mgr001" flowable:formKey="external:worker-review"/>
+    <sequenceFlow id="flow-review-end" sourceRef="review" targetRef="end"/>
+
+    <userTask id="manualHandling" name="人工接手"
+              flowable:assignee="mgr001" flowable:formKey="external:worker-error"/>
+    <sequenceFlow id="flow-manual-end" sourceRef="manualHandling" targetRef="end"/>
+
+    <endEvent id="end" name="結束"/>
+  </process>
+
+  <error id="externalWorkerError" name="外部工作者錯誤" errorCode="EXTERNAL_WORKER_FAILED"/>
+</definitions>
