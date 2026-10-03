@@ -1,7 +1,7 @@
 # Greyhound BPM 平台 — 後端開發工項清單
 
 > 產出日期：2026-06-08
-> 最後更新：2026-10-03（Wave D：#22 External Worker、#24 Signal 廣播、#20 usage-logs、小殘餘批次；Wave C：#55 Schema 驗證、#59 封存保護、#7 撤回通知、#21 UI；Wave B：#4 Call Activity、#21 Callback、#5 代理人；Wave A：#23 逾期提醒、#1 `returnTo=initiator`、#7 流程撤回、#51 parking；同日稍早：#96 完成路徑通知收斂、#51 DLQ 告警與重放、#3 催辦開放受理人、#6 HMAC fallback 移除、currentTask 補 taskId）
+> 最後更新：2026-10-03（Wave E：#43 EmailNotifyDelegate、#48 DataValidationDelegate、#49 ExternalApiDelegate、#50 JVM 記憶體；Wave D：#22 External Worker、#24 Signal 廣播、#20 usage-logs、小殘餘批次；Wave C：#55 Schema 驗證、#59 封存保護、#7 撤回通知、#21 UI；Wave B：#4 Call Activity、#21 Callback、#5 代理人；Wave A：#23 逾期提醒、#1 `returnTo=initiator`、#7 流程撤回、#51 parking；同日稍早：#96 完成路徑通知收斂、#51 DLQ 告警與重放、#3 催辦開放受理人、#6 HMAC fallback 移除、currentTask 補 taskId）
 > 基於規格文件 vs 實際程式碼差異分析
 >
 > 狀態：✅ 完成　🟡 部分完成（說明欄寫缺什麼）　⬜ 未開始
@@ -113,19 +113,19 @@
 
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
-| 43 | EmailNotifyDelegate | 流程節點中觸發 Email 通知 | 1d | ⬜ |
+| 43 | EmailNotifyDelegate | 流程節點中觸發 Email 通知 | 1d | ✅ **2026-10-03 完成**（`3dfea85`，merge `894102f`）。`flowable:field`：`to`（必填、逗號分隔、支援 `${var}`、**完整 email 地址**——與 EmailConsumer 的 userId 慣例刻意不同，javadoc 明示）、`subject`／`body`；`JavaMailSender` 直寄、FROM 同既有；**fail-open**（寄失敗不擋流程）；共用 `BpmnFieldSupport`（不依賴單例 setter 注入）。線上實測：MailHog 收到「E2E Delegate 通知」 |
 | 44 | TeamsNotifyDelegate | 流程節點中觸發 Teams 通知 | 1d | ⬜ |
 | 45 | ESignDelegate | 觸發電子簽章 + 等待 Callback 喚醒 | 3d | ⬜ |
 | 46 | ErpSyncDelegate | 同步資料到 ERP 系統 | 2d | ⬜ |
 | 47 | DynamicAssigneeDelegate | 運行時動態計算審核人 | 2d | 🟡 無 Delegate，但 `assigneeResolver`／`getManagerAtLevel` 已涵蓋部分需求 |
-| 48 | DataValidationDelegate | 流程中資料驗證邏輯 | 1d | ⬜ |
-| 49 | ExternalApiDelegate | 通用外部 API 呼叫（可配置 URL/method/payload） | 2d | ⬜ |
+| 48 | DataValidationDelegate | 流程中資料驗證邏輯 | 1d | ✅ **2026-10-03 完成**（`e24bac9`，merge `894102f`）。`requiredVariables`（存在且非空白；0／false 算有值）＋`condition`（引擎 JUEL）；失敗 `BpmnError("DATA_VALIDATION_FAILED")` 可被 boundary error 接住；**兩個欄位都沒設定也是 BpmnError**（不讓「什麼都不驗」靜默通過）。線上實測：`days=1` 通過續行；缺 `days` → log 指名擋下、走替代路徑 |
+| 49 | ExternalApiDelegate | 通用外部 API 呼叫（可配置 URL/method/payload） | 2d | ✅ **2026-10-03 完成**（`bd5478b`，merge `894102f`）。`url`／`method`（GET/POST/PUT）／`body`／`resultVariable`；🔴 **URL 先過 `WebhookUrlPolicy`**（唯一 SSRF 閘門，拒絕則 `EXTERNAL_API_BLOCKED` 且零請求）；逾時沿用 `bpm.webhook.*-timeout-ms`；非 2xx／逾時 → `EXTERNAL_API_FAILED`（可建模，訊息不含 response body）。線上實測：loopback URL 被拒且零請求、boundary 接住走替代路徑 |
 
 ### 1.10 基礎設施 / 運維
 
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
-| 50 | JVM 記憶體配置 | Dockerfile 加入 JAVA_TOOL_OPTIONS、docker-compose resource limits | 0.5d | ⬜ Dockerfile 無 `JAVA_TOOL_OPTIONS`；prod compose 只有 mssql 有記憶體上限 |
+| 50 | JVM 記憶體配置 | Dockerfile 加入 JAVA_TOOL_OPTIONS、docker-compose resource limits | 0.5d | ✅ **2026-10-03 完成**（`67e3d93`，merge `6de2f52`）。Dockerfile `ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"`（容器感知、不寫死 Xmx；OOM 交由 orchestrator 重啟）；**limits 只放 `docker-compose.prod.yml`**（bpm-core 2G／mssql 2G／rabbitmq 768M／redis 256M／nginx 128M；dev 刻意不受限，base 檔加註說明）。線上驗證：容器 log `Picked up JAVA_TOOL_OPTIONS`；`docker compose config` 三種組合通過 |
 | 51 | RabbitMQ DLQ 告警 | Dead Letter Queue 消費者 + 告警通知 | 1d | ✅ **2026-10-03 完成**（`7a1dcef`，merge `1d9841c`）。`DeadLetterConsumer` 除 ERROR log 外新增 `DLQ_MESSAGE` 稽核（operator=system；detail 只放非敏感中介資料：queue／event／messageId／payload 長度／x-death 摘要，不放 payload）＋選配 email（`bpm.dlq.alert-recipients`，預設空＝不寄）。告警三段各自 try/catch：**DLQ 無 DLX，consumer 拋例外＝無限 requeue**。新增 `POST /api/admin/dlq/replay?queue=bpm\|audit&max=`（ROLE_ADMIN）：`basicGet`＋成功才 ack，目的地取 `x-death` 最舊一筆的 exchange／routing key（含 `dlx.exchange` 防呆；缺 x-death 走 queue 對照 fallback），失敗 nack 放回並停止；`DLQ_REPLAY` 稽核 operator=呼叫者。⚠️ **待裁決的取捨**：consumer 正常返回即 ack，訊息離開佇列——「進 DLQ 即告警」與「留存待人工重放」互斥；重放目前涵蓋「consumer 停用／服務中斷期間累積」的訊息。✅ **同日 parking 收尾**（`5c7531e`，merge `dcf29d3`）：告警後把死信重發布到 `dlq.parking.bpm`／`dlq.parking.audit`（無 consumer、無 TTL）再 ack，origin 以自訂標頭 `x-bpm-origin-*` 保留（RabbitMQ 3.13 起不再維護客戶端重發布的 x-death，降為備援）；重放改讀 parking（queue 值為 `dlq.parking.*`）。線上實測：真實死信 → parking=1、dlq=0、`DLQ_MESSAGE`；replay `replayed:2`（primary＋fallback）→ 通知成功送達、webhook 再失敗自動 re-park；`DLQ_REPLAY` 稽核 `fallbackUsed:1` |
 | 52 | 多版本流程並行處理 | 確保新案用新版、舊案繼續舊版的邏輯正確 | 1d | ✅ **2026-10-02 完成**（`a80d323`，merge `f04f584`）。`MultiVersionProcessTest` 3 條（真實 DB）：v2 部署後新實例走 v2、v1 舊實例連完成後的路由都走 v1；表單版本鎖（發布 v2 後舊實例鎖 v1、同定義下新實例鎖 v2 的內建對照）；新舊並存的版本查詢與 `resourcedata`。只加測試、未發現缺陷 |
 | 53 | BPMN 環境變數替換 | 部署時依環境替換 `${ENV_*}` 變數 | 1d | ⬜ |
@@ -306,13 +306,13 @@
 | 通知服務 | 5 | 4 | 0 | 1 | 2d |
 | BPMN Lint | 5 | 4 | 1 | 0 | 1d |
 | 稽核 Log | 4 | 3 | 0 | 1 | 3d |
-| 通用 Delegate | 7 | 0 | 1 | 6 | 12d |
-| 基礎設施 | 4 | 2 | 0 | 2 | 1.5d |
+| 通用 Delegate | 7 | 3 | 1 | 3 | 8d |
+| 基礎設施 | 4 | 3 | 0 | 1 | 1d |
 | Form Service | 6 | 4 | 1 | 1 | 3d |
 | 跨服務整合 | 6 | 1 | 4 | 1 | 17d |
 | 2026-09-29 新增 | 29 | 28 | 0 | 1 | 12.5d |
 | 2026-10-02 新增 | 2 | 2 | 0 | 0 | 0d |
-| **合計** | **96** | **73** | **9** | **14** | **~59 人天** |
+| **合計** | **96** | **77** | **9** | **10** | **~54.5 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -498,6 +498,18 @@
 > usage-logs 兩筆正確；reason 1001 → 400、正常 200。`acceptance-test` PASS 7 / FAIL 0。
 > 統計：✅ 73、🟡 9、⬜ 14；剩餘上限 ~59 人天。
 > ⚠️ dev 庫新增探測殘留：`probe-22w`、`probe-24sig`；已停用外部系統 `e2e-worker`／`e2e-worker2`。
+>
+> **2026-10-03（Wave E，Delegate 擴充）—— #43＋#48＋#49＋#50 完成；後端 1100、前端 187 全綠。**
+> 兩個 agent 並行（三個 delegate 共用 `FlowableConfig` 與 `BpmnFieldSupport`，刻意合併為一線）：
+> #43／#48／#49（`3dfea85`／`e24bac9`／`bd5478b`→`894102f`）：通用 delegate 三件組＋
+> 共用 `BpmnFieldSupport`（實測 Flowable 7.2 預設 MIXED 會對單例 bean 做 per-execution
+> setter 注入 → 改讀 model，thread-safe）；#49 的 URL 一律過 `WebhookUrlPolicy`。
+> #50（`67e3d93`→`6de2f52`）：`JAVA_TOOL_OPTIONS`＋prod compose limits（dev 不受限）。
+> 線上實測：Email delegate 寄達 MailHog（完整地址）；Validation 缺 `days` 擋下走 boundary；
+> ExternalApi loopback 被拒且零請求、boundary 接住；容器 log `Picked up JAVA_TOOL_OPTIONS`。
+> `acceptance-test` PASS 7 / FAIL 0。
+> 統計：✅ 77、🟡 9、⬜ 10；剩餘上限 ~54.5 人天。
+> ⚠️ dev 庫新增探測殘留：`probe-43-49`（2 版）。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是
