@@ -108,7 +108,21 @@ public enum OperationType {
      * <b>不放變數值</b>：廣播的變數會寫進每一個被喚醒的實例，
      * 可能含業務資料，而稽核庫的讀取權與案件內容的讀取權不是同一件事。
      */
-    SIGNAL_BROADCAST;
+    SIGNAL_BROADCAST,
+    /**
+     * 異常操作模式偵測（#41）。由 {@code AnomalyDetector} 在滑動窗口內
+     * 發現「短時間大量審批」或「異常存取（多次被拒絕）」時發出
+     * （operator {@code system}／來源 {@code engine}）。
+     *
+     * <p>為什麼要有這個型別，而不是只靠 ERROR log：偵測的價值在於
+     * 「事後查得到」。log 只有有人看的時候才存在，而這個型別讓
+     * 「什麼時候、對誰、偵測到哪種模式」進入可查詢的軌跡。
+     *
+     * <p>detail 只放偵測中介資料（mode／operatorId／hitCount／threshold／
+     * window 起訖），<b>不放任何案件內容或被拒絕存取的 detail</b> ——
+     * 與 {@link #DLQ_MESSAGE} 同一條紅線。
+     */
+    ANOMALY_DETECTED;
 
     /**
      * 對應的操作<b>尚未實作</b>，因此不會有程式碼發出這些值。

@@ -1,5 +1,6 @@
 package com.bpm.core.audit.repository;
 
+import com.bpm.core.audit.anomaly.OperatorHitCount;
 import com.bpm.core.audit.model.AuditLog;
 import com.bpm.core.audit.model.OperationType;
 import org.springframework.data.domain.Page;
@@ -9,6 +10,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -47,4 +49,40 @@ public interface AuditLogRepository extends JpaRepository<AuditLog, Long> {
 
     @Query("SELECT a FROM AuditLog a WHERE a.createdAt >= :startDate AND a.createdAt <= :endDate ORDER BY a.id ASC")
     List<AuditLog> findByDateRange(@Param("startDate") Instant startDate, @Param("endDate") Instant endDate);
+
+    /**
+     * 異常偵測（#41）：窗口內每個 operator 的審批筆數。
+     *
+     * <p>聚合在 DB 端完成 —— 掃描每分鐘跑一次，不能把窗口內每一筆
+     * 審批列載進 JVM 再自己數。回傳的每個 operator 只有一列。
+     *
+     * <p>門檻<b>刻意不在 SQL 過濾</b>（沒有 HAVING）：門檻語意（{@code >=}）
+     * 是偵測器的職責，放在 Java 端讓邊界行為可以直接單元測試，
+     * 不必靠整合測試才能釘住。窗口內有活動的 operator 數量本來就少，
+     * 多回傳幾列低於門檻的成本可忽略。
+     */
+    @Query("SELECT a.operatorId AS operatorId, COUNT(a.id) AS hitCount FROM AuditLog a " +
+            "WHERE a.operationType IN :types AND a.createdAt >= :startDate AND a.createdAt <= :endDate " +
+            "AND a.operatorId IS NOT NULL " +
+            "GROUP BY a.operatorId")
+    List<OperatorHitCount> countOperatorsByOperationTypes(
+            @Param("types") Collection<OperationType> types,
+            @Param("startDate") Instant startDate,
+            @Param("endDate") Instant endDate);
+
+    /**
+     * 異常偵測（#41）：窗口內可能是「被拒絕的存取」的候選列。
+     *
+     * <p>{@code deniedPattern} 只是便宜的粗篩（detail 是 NVARCHAR(MAX)），
+     * 因為 LIKE 無法保證語意：值裡面剛好含有 {@code "denied"} 字樣的列
+     * 也會命中。真正的判定是呼叫端解析 JSON —— 這裡回傳的是<b>超集</b>。
+     */
+    @Query("SELECT a FROM AuditLog a WHERE a.operationType = :type " +
+            "AND a.createdAt >= :startDate AND a.createdAt <= :endDate " +
+            "AND a.detail LIKE :deniedPattern")
+    List<AuditLog> findDeniedAccessCandidates(
+            @Param("type") OperationType type,
+            @Param("startDate") Instant startDate,
+            @Param("endDate") Instant endDate,
+            @Param("deniedPattern") String deniedPattern);
 }
