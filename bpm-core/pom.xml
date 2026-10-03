@@ -141,6 +141,15 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Boot 4 把 MockMvc 測試支援拆到 spring-boot-webmvc-test（S5 Java 修復）。
+             @AutoConfigureMockMvc 與 MockMvcBuilderCustomizer 的新套件是
+             org.springframework.boot.webmvc.test.autoconfigure；少了這個 starter，
+             testCompile 會直接找不到套件（已由編譯錯誤證明，非預防性宣告）。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- 整合測試以 Testcontainers 起真實 MSSQL／RabbitMQ／Redis。
              不用 H2：MSSQL 的 datetimeoffset、NVARCHAR(MAX)、MERGE 與識別欄位行為都無法在 H2 上重現，
              而稽核 hash chain 與表單版本鎖定正是依賴這些行為。

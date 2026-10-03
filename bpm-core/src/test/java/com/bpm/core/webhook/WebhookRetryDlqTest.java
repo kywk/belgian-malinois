@@ -16,7 +16,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.amqp.RabbitProperties;
+import org.springframework.boot.amqp.autoconfigure.RabbitProperties;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -41,8 +41,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <h2>重試參數從 {@link RabbitProperties} 讀，不寫死</h2>
  *
  * <p>application.yml 的設定是 {@code initial-interval: 1000}、
- * {@code multiplier: 2.0}、{@code max-attempts: 3}。測試若把
- * 1000／2000／3 寫死，改設定時測試會與實作一起漂移；這裡改讀
+ * {@code multiplier: 2.0}、{@code max-retries: 2}（Spring Framework 的語意：
+ * 總嘗試 = 1 次初始 + max-retries = 3，等同升級前的 {@code max-attempts: 3}）。
+ * 測試若把 1000／2000／3 寫死，改設定時測試會與實作一起漂移；這裡改讀
  * Spring 綁定後的實際值，證明的是「執行期行為對得上執行期設定」。
  *
  * <h2>⚠️ 為什麼要暫停 dlq.bpm 的 listener</h2>
@@ -56,9 +57,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <h2>⚠️ 為什麼需要「等下一次 backoff 再加餘裕」</h2>
  *
  * <p>「只嘗試 3 次」不能只看「第 3 次之後有沒有第 4 次」的即時快照 ——
- * 若 max-attempts 被誤設成 4，第 4 次會在最後一次失敗後的下一個 backoff
- * （initial×multiplier^maxAttempts）才出現。所以斷言前要多等一個完整的
- * backoff 週期，否則「3 次」的斷言會在錯誤的設定下照樣綠。
+ * 若 max-retries 被誤設成 3（總嘗試變 4），第 4 次會在最後一次失敗後的
+ * 下一個 backoff（initial×multiplier^maxRetries）才出現。所以斷言前要多等
+ * 一個完整的 backoff 週期，否則「3 次」的斷言會在錯誤的設定下照樣綠。
  */
 class WebhookRetryDlqTest extends IntegrationTestBase {
 
@@ -119,6 +120,18 @@ class WebhookRetryDlqTest extends IntegrationTestBase {
     }
 
     /**
+     * 總嘗試次數。
+     *
+     * <p>⚠️ Spring AMQP 4 的重試底層換成 Spring Framework 的 {@code RetryPolicy}，
+     * 語意是「總嘗試 = 1 次初始 + max-retries」—— Boot 4 已移除 max-attempts。
+     * application.yml 設 {@code max-retries: 2}，因此總嘗試次數是 3，
+     * 與升級前 {@code max-attempts: 3} 的行為一致。
+     */
+    private int totalAttempts() {
+        return (int) (rabbitProperties.getListener().getSimple().getRetry().getMaxRetries() + 1);
+    }
+
+    /**
      * 停掉 dlq.bpm 的 listener 並清空佇列中既有的死信。
      *
      * <p>不清空的話，「找不到本測試的訊息」無法判讀 —— 佇列裡本來就可能有
@@ -157,11 +170,11 @@ class WebhookRetryDlqTest extends IntegrationTestBase {
         return null;
     }
 
-    /** 重試耗盡所需的時間：maxAttempts-1 個 backoff（initial×multiplier^k）之和。 */
+    /** 重試耗盡所需的時間：max-retries 個 backoff（initial×multiplier^k）之和。 */
     private long retryWindowMillis() {
         var retry = rabbitProperties.getListener().getSimple().getRetry();
         long window = 0;
-        for (int k = 0; k < retry.getMaxAttempts() - 1; k++) {
+        for (int k = 0; k < retry.getMaxRetries(); k++) {
             window += (long) (retry.getInitialInterval().toMillis() * Math.pow(retry.getMultiplier(), k));
         }
         return window;
@@ -180,13 +193,13 @@ class WebhookRetryDlqTest extends IntegrationTestBase {
         WebhookTestSink.failFirst("retry-ok", 2);
         publish("retry-ok", sinkUrl("retry-ok"), "RETRY-OK-1");
 
-        awaitAttempts("retry-ok", retry.getMaxAttempts());
+        awaitAttempts("retry-ok", totalAttempts());
         List<WebhookTestSink.Received> attempts = WebhookTestSink.receivedTo("retry-ok");
 
         assertThat(attempts)
-                .as("max-attempts=%d 代表總共 %d 次嘗試（含第一次），實測 %s",
-                        retry.getMaxAttempts(), retry.getMaxAttempts(), attempts)
-                .hasSize(retry.getMaxAttempts());
+                .as("max-retries=%d 代表總共 %d 次嘗試（1 次初始 + %d 次重試），實測 %s",
+                        retry.getMaxRetries(), totalAttempts(), retry.getMaxRetries(), attempts)
+                .hasSize(totalAttempts());
         assertThat(attempts)
                 .extracting(WebhookTestSink.Received::status)
                 .as("前兩次是 sink 注入的 500，最後一次必須成功 —— 失敗後沒有重試的話只會有一筆 500")
@@ -209,7 +222,7 @@ class WebhookRetryDlqTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("持續失敗：重試 max-attempts 次後進 dlq.bpm，且不再嘗試")
+    @DisplayName("持續失敗：重試 max-retries 次後進 dlq.bpm，且不再嘗試")
     void persistentFailureEndsInDlqAfterMaxAttempts() {
         var retry = rabbitProperties.getListener().getSimple().getRetry();
         stopDlqListenerAndDrain();
@@ -217,7 +230,7 @@ class WebhookRetryDlqTest extends IntegrationTestBase {
         WebhookTestSink.alwaysFail("retry-dlq");
         publish("retry-dlq", sinkUrl("retry-dlq"), "RETRY-DLQ-1");
 
-        awaitAttempts("retry-dlq", retry.getMaxAttempts());
+        awaitAttempts("retry-dlq", totalAttempts());
 
         Message dead = awaitDeadLetter("RETRY-DLQ-1", Duration.ofSeconds(15));
         assertThat(dead)
@@ -245,14 +258,14 @@ class WebhookRetryDlqTest extends IntegrationTestBase {
                 .containsEntry("queue", "bpm.webhook.queue")
                 .containsEntry("reason", "rejected");
 
-        // 不會有第 4 次嘗試：等下一次 backoff（initial×multiplier^maxAttempts）再加餘裕。
-        // 少了這一段，「max-attempts 被誤設成 4」時這個測試會在 size 3 的瞬間照樣綠。
+        // 不會有第 4 次嘗試：等下一次 backoff（initial×multiplier^maxRetries）再加餘裕。
+        // 少了這一段，「max-retries 被誤設成 3（總嘗試 4）」時這個測試會在 size 3 的瞬間照樣綠。
         long nextBackoff = (long) (retry.getInitialInterval().toMillis()
-                * Math.pow(retry.getMultiplier(), retry.getMaxAttempts()));
+                * Math.pow(retry.getMultiplier(), retry.getMaxRetries()));
         sleep(nextBackoff + 1000);
         assertThat(WebhookTestSink.receivedTo("retry-dlq"))
                 .as("重試耗盡後不得再嘗試（實測 %s）", WebhookTestSink.receivedTo("retry-dlq"))
-                .hasSize(retry.getMaxAttempts());
+                .hasSize(totalAttempts());
         assertThat(WebhookTestSink.receivedTo("retry-dlq"))
                 .extracting(WebhookTestSink.Received::status)
                 .containsOnly(500);
