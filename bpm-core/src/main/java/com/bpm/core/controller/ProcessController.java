@@ -7,6 +7,7 @@ import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.dto.StartProcessRequest;
+import com.bpm.core.notify.NotifyPublisher;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.security.ProcessAccessGuard;
 import com.bpm.core.service.FormVersionLocker;
@@ -96,6 +97,7 @@ public class ProcessController {
     private final ProcessAccessGuard accessGuard;
     private final ProcessInvolvementService involvementService;
     private final ApplicantIdentityLookup applicantLookup;
+    private final NotifyPublisher notifyPublisher;
 
     public ProcessController(RuntimeService runtimeService, RepositoryService repositoryService,
                              TaskService taskService, HistoryService historyService,
@@ -103,7 +105,8 @@ public class ProcessController {
                              FormVersionLocker formVersionLocker,
                              ProcessAccessGuard accessGuard,
                              ProcessInvolvementService involvementService,
-                             ApplicantIdentityLookup applicantLookup) {
+                             ApplicantIdentityLookup applicantLookup,
+                             NotifyPublisher notifyPublisher) {
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
         this.taskService = taskService;
@@ -113,6 +116,7 @@ public class ProcessController {
         this.accessGuard = accessGuard;
         this.involvementService = involvementService;
         this.applicantLookup = applicantLookup;
+        this.notifyPublisher = notifyPublisher;
     }
 
     /**
@@ -295,7 +299,7 @@ public class ProcessController {
      * 沒有任何關卡完成，所以仍在「第一關尚未處理」的範圍內。這是刻意的，
      * 不是漏洞 —— 申請人撤回時，受理人手上的任務會隨實例一起消失。
      *
-     * <h2>狀態碼一覽（所有拒絕都在刪除之前，零副作用）</h2>
+     * <h2>狀態碼一覽（所有拒絕都在刪除之前，零副作用、零通知）</h2>
      *
      * <ul>
      *   <li>未認證 → 401。</li>
@@ -306,11 +310,12 @@ public class ProcessController {
      *   <li>已有完成任務 → 409。</li>
      * </ul>
      *
-     * <p>被拒的請求<b>不得</b>寫 {@code PROCESS_CANCEL}：403／404 只留
-     * {@code DATA_ACCESS} 拒絕痕跡（{@code publishDetached}，與催辦相同理由
-     * —— 拒絕後緊接著拋例外，掛在交易上的稽核永遠不會 commit），
-     * 400／409 不留任何稽核。案件本身在 403／404／409 之後都必須仍在
-     * runtime（測試逐條驗證）。
+     * <p>被拒的請求<b>不得</b>寫 {@code PROCESS_CANCEL}，也<b>不得</b>發
+     * 撤回通知：403／404 只留 {@code DATA_ACCESS} 拒絕痕跡
+     * （{@code publishDetached}，與催辦相同理由 —— 拒絕後緊接著拋例外，
+     * 掛在交易上的稽核永遠不會 commit），400／409 不留任何稽核。
+     * 通知的收集與發送都在這些檢查之後（見下），案件本身在 403／404／409
+     * 之後都必須仍在 runtime（測試逐條驗證）。
      *
      * <h2>執行與稽核：同一個交易，fail-closed</h2>
      *
@@ -328,12 +333,30 @@ public class ProcessController {
      * <p>detail 只放 {@code reason} 與 {@code cancelledAt}：
      * 撤回原因（呼叫端提供）與發生時間。不放表單值、簽核意見或收件人。
      *
-     * <h2>⚠️ 通知不在本端點範圍（已知殘餘）</h2>
+     * <h2>撤回通知現任受理人（#7 殘餘收尾）</h2>
      *
-     * <p>撤回<b>不會</b>通知目前的受理人（沒有「案件已撤回」的信）。
-     * 受理人只會發現待辦任務消失。這是本工項明確的範圍外項目，
-     * 已回報 PM；日後若要做，應由 {@code CompletionNotifyListener} 那類
-     * 全域 listener 處理，而不是在這裡直接呼叫通知。
+     * <p>刪除成功後，對刪除前收集到的每個「有可送對象」的待處理任務發一則
+     * {@code process_cancelled}（{@link NotifyPublisher#processCancelled}）。
+     * 收件人是現任受理人：assignee 優先、候選任務送候選人
+     * （規則抽在 {@link NotifyPublisher#taskRecipients}，既有副本的收斂
+     * 見該方法）；候選群組沒有 email、無人任務沒有收件人，兩者都略過，
+     * 不送空訊息。
+     *
+     * <p><b>為什麼每任務一則</b>：平行關卡時各任務的受理人不同，一則合併信
+     * 無法回答每個人「我手上哪個任務消失了」；與催辦的每任務一則一致
+     * （{@code TaskController.urgeTask}）。
+     *
+     * <p><b>為什麼收件人在刪除前收集、發送在刪除後</b>：任務隨
+     * {@code deleteProcessInstance} 一起消失，刪除後已無從得知受理人是誰，
+     * 所以名單必須先收；發送則必須在刪除成功之後，被拒路徑
+     * （400／403／404／409）才保證零通知。
+     *
+     * <p><b>通知 fail-open、稽核 fail-closed 的已知窗口</b>：通知用
+     * {@link NotifyPublisher#publish}（吞例外），RabbitMQ 不通不影響撤回，
+     * 也不影響稽核。但稽核實際寫入在 commit（beforeCommit），若它失敗，
+     * 交易回滾、案件其實未被撤回，而通知已經送出 —— 先寫稽核也無法消除
+     * 這個窗口（稽核同樣在 commit 才落地）。接受的取捨：多一則可容忍的
+     * 噪音，勝過撤回成功卻沒有稽核。
      *
      * <h2>⚠️ 競爭窗口（已知殘餘）</h2>
      *
@@ -388,7 +411,18 @@ public class ProcessController {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "案件已進入處理，無法撤回");
         }
 
-        // ⑤ 執行：刪除執行中的實例。歷史實例保留，reason 進 DELETE_REASON_，
+        // ⑤ 通知收件人必須在刪除<b>之前</b>收集：任務隨實例一起消失，
+        //    刪除後查不到任何人。只收「有可送對象」的任務 —— 候選群組
+        //    沒有 email、無人任務沒有收件人，都不送空訊息。
+        //    收件人規則用 NotifyPublisher.taskRecipients（共用實作；
+        //    TaskController 的既有副本待收斂，見該方法）。
+        Map<Task, List<String>> deliverable = new LinkedHashMap<>();
+        for (Task t : taskService.createTaskQuery().processInstanceId(id).list()) {
+            List<String> to = NotifyPublisher.taskRecipients(taskService, t);
+            if (!to.isEmpty()) deliverable.put(t, to);
+        }
+
+        // ⑥ 執行：刪除執行中的實例。歷史實例保留，reason 進 DELETE_REASON_，
         //    外部 API 的 /status 因此照現行規則回 cancelled（§9.4）。
         try {
             runtimeService.deleteProcessInstance(id, reason);
@@ -398,7 +432,22 @@ public class ProcessController {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "案件不存在或已結束: " + id, e);
         }
 
-        // ⑥ 稽核：operator = 呼叫者（不是申請人判定值 —— 兩者在放行路徑上
+        // ⑦ 通知：每個「有待處理任務且收得到信」的受理人一則 process_cancelled
+        //    （平行關卡一案多則，理由見 javadoc）。assignee 有值時只放
+        //    assignee；候選任務才放 candidateUsers —— 與 TimeoutNotifyDelegate
+        //    的 payload 形狀一致，EmailConsumer 的解析規則只有一份。
+        //    fail-open：publish 吞例外，RabbitMQ 不通不影響撤回。
+        for (Map.Entry<Task, List<String>> entry : deliverable.entrySet()) {
+            Task t = entry.getKey();
+            String assignee = t.getAssignee();
+            List<String> candidates = (assignee == null || assignee.isBlank())
+                    ? entry.getValue() : List.of();
+            notifyPublisher.processCancelled(t.getId(), t.getName(), id,
+                    NotifyPublisher.extractProcessKey(t.getProcessDefinitionId()),
+                    assignee, candidates, applicant);
+        }
+
+        // ⑧ 稽核：operator = 呼叫者（不是申請人判定值 —— 兩者在放行路徑上
         //    必然相同，但記「真正做事的人」才是稽核的用途）。
         //    與刪除同一個交易：publish 掛 beforeCommit，寫不進去就回滾
         //    （刪除也不成立）→ 503。被拒路徑走不到這一行。

@@ -207,6 +207,35 @@ class NotifyPublisherTest {
     }
 
     @Test
+    @DisplayName("撤回：受理人放 assignee、撤回人放 initiator；候選任務放 candidateUsers")
+    void cancelledNotificationShape() {
+        publisher.processCancelled("task-1", "主管審核", "pid-1",
+                "leave-approval", "mgr001", List.of(), "user001");
+
+        assertThat(capturePayload())
+                .containsEntry("event", "process_cancelled")
+                .containsEntry("taskId", "task-1")
+                .containsEntry("taskName", "主管審核")
+                .containsEntry("processInstanceId", "pid-1")
+                .containsEntry("processDefinitionKey", "leave-approval")
+                .containsEntry("assignee", "mgr001")
+                .containsEntry("initiator", "user001")
+                .doesNotContainKey("candidateUsers")
+                // P2-1：鍵恰好是這一組 —— 沒有變數、沒有撤回原因、
+                // 沒有表單內容。reason 是自由文字，可能夾帶個資。
+                .containsOnlyKeys("event", "timestamp", "taskId", "taskName",
+                        "processInstanceId", "processDefinitionKey", "assignee", "initiator");
+
+        Mockito.clearInvocations(rabbitTemplate);
+        publisher.processCancelled("task-2", "財務審核", "pid-1",
+                "purchase-approval", null, List.of("mgr001", "dir001"), "user001");
+
+        assertThat(capturePayload())
+                .containsEntry("candidateUsers", List.of("mgr001", "dir001"))
+                .doesNotContainKey("assignee");
+    }
+
+    @Test
     @DisplayName("指派：候選任務帶 candidateUsers、有 assignee 時不帶空清單")
     void assignedNotificationShape() {
         publisher.taskAssigned("task-1", "財務審核", null,
@@ -240,6 +269,11 @@ class NotifyPublisherTest {
 
         assertThatCode(() -> publisher.taskCompleted("pid-1", "leave-approval:1:1",
                 "task-1", "主管審核", Map.of("approved", true), true, "user001"))
+                .doesNotThrowAnyException();
+
+        assertThatCode(() -> publisher.processCancelled("task-1", "主管審核", "pid-1",
+                "leave-approval", "mgr001", List.of(), "user001"))
+                .as("撤回通知失敗同樣不得影響撤回交易")
                 .doesNotThrowAnyException();
     }
 }

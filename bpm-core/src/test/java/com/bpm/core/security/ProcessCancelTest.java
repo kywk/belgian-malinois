@@ -51,11 +51,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * —— 代發案件取 {@code onBehalfOf}、系統案件回 null（不開放）。
  * 見 {@code ProcessController.cancelProcess} 的 javadoc。
  *
- * <h2>⚠️ 通知不在本端點範圍</h2>
+ * <h2>撤回通知（#7 殘餘收尾後）</h2>
  *
- * <p>撤回不會通知目前受理人（沒有「案件已撤回」的信）—— 這是本工項
- * 明確的範圍外殘餘，不是本測試漏驗：沒有可斷言的行為，硬寫一條
- * 「什麼都沒送」只會把「尚未實作」變成看起來已驗證的假象。
+ * <p>撤回會通知現任受理人（{@code process_cancelled}）—— 行為、payload
+ * 與「被拒零通知」由 {@code ProcessCancelNotifyTest} 驗證。本檔專注在
+ * 授權、狀態分流與稽核，不重複通知斷言；改動前此處記載的
+ * 「通知不在本端點範圍」已不成立。
  *
  * <h2>負向控制組（2026-10-03 實測）</h2>
  *
@@ -75,9 +76,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * </ol>
  *
  * <p><b>這兩組控制組證明不了什麼</b>：401、稽核 fail-closed（503）、
- * 撤回不發通知、TOCTOU 競爭窗口，以及外部 API {@code /status} 的
- * {@code cancelled} 對映，都不在本測試的斷言範圍內 —— 它們是
- * javadoc 已記載的殘餘與既有行為，不是這裡「綠燈」所保證的事。
+ * 撤回通知（現由 {@code ProcessCancelNotifyTest} 覆蓋）、TOCTOU 競爭窗口，
+ * 以及外部 API {@code /status} 的 {@code cancelled} 對映，都不在本測試的
+ * 斷言範圍內 —— 它們是 javadoc 已記載的殘餘與既有行為，不是這裡
+ * 「綠燈」所保證的事。
  */
 class ProcessCancelTest extends IntegrationTestBase {
 

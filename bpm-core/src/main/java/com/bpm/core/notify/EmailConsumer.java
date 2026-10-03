@@ -103,6 +103,16 @@ public class EmailConsumer {
                 subject = "【BPM】任務已逾時：" + taskName;
                 body = "您好，\n\n任務「" + taskName + "」已逾時，請盡快登入 BPM 平台處理。";
             }
+            // #7 殘餘收尾：撤回。收件人是現任受理人（assignee 優先）或候選人。
+            // ⚠️ 文案是對「受理人」說的，不是對申請人：申請人自己剛按下撤回，
+            // 再寄一封「您的申請已被撤回」給他沒有意義；受理人需要知道的是
+            // 「這張單沒了、不用再處理」。initiator 是撤回的申請人（署名用）。
+            case "process_cancelled" -> {
+                String who = initiator.isBlank() ? "申請人" : "申請人「" + initiator + "」";
+                subject = "【BPM】案件已被撤回：" + taskName;
+                body = "您好，\n\n" + who + "已撤回案件，任務「" + taskName
+                        + "」已不存在，您不需要再處理。";
+            }
             case "process_returned" -> {
                 subject = "【BPM】您的申請已被退回";
                 body = "您好，\n\n您的申請「" + taskName + "」已被退回，請修改後重新提交。";
