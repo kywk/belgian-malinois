@@ -23,12 +23,14 @@ package com.bpm.core.webhook;
  * 寫出去的名字 Flowable 不認得，設定會<b>安靜地</b>失效。
  * 全小寫的 {@code webhook}／{@code webhooks} 是這條鏈路上最不容易出錯的形狀。
  *
- * @param event  事件名：{@code create}／{@code complete}／{@code timeout}／
- *               {@code reject}／{@code all}。見 {@link WebhookTaskListener#matches}
- * @param url    投遞位址。<b>必須</b>過 {@link WebhookUrlPolicy} 才會被投遞
- * @param method {@code POST} 或 {@code PUT}；其他值一律當 POST
+ * @param event          事件名：{@code create}／{@code complete}／{@code timeout}／
+ *                       {@code reject}／{@code all}。見 {@link WebhookTaskListener#matches}
+ * @param url            投遞位址。<b>必須</b>過 {@link WebhookUrlPolicy} 才會被投遞
+ * @param method         {@code POST} 或 {@code PUT}；其他值一律當 POST
+ * @param payloadTemplate 自訂 body 模板（#28），可為 null（未設定＝用預設 JSON body）。
+ *                        語法與紅線見 {@link WebhookPayloadTemplate}
  */
-public record WebhookConfig(String event, String url, String method) {
+public record WebhookConfig(String event, String url, String method, String payloadTemplate) {
 
     /** 外層容器的 element 名。 */
     public static final String ELEMENT = "webhooks";
@@ -36,10 +38,11 @@ public record WebhookConfig(String event, String url, String method) {
     /** 每一筆設定的 element 名。 */
     public static final String CHILD = "webhook";
 
-    /** 屬性名。三個都是無前置的，因此讀取時 namespace 必須傳 null。 */
+    /** 屬性名。四個都是無前置的，因此讀取時 namespace 必須傳 null。 */
     public static final String ATTR_EVENT = "event";
     public static final String ATTR_URL = "url";
     public static final String ATTR_METHOD = "method";
+    public static final String ATTR_PAYLOAD_TEMPLATE = "payloadTemplate";
 
     /** 未指定 method 時的預設值，與前端 {@code METHODS} 的第一項一致。 */
     public static final String DEFAULT_METHOD = "POST";
@@ -58,6 +61,17 @@ public record WebhookConfig(String event, String url, String method) {
     public static final String DEFAULT_PROCESS_EVENT = "process.completed";
 
     /**
+     * 既有 3 參數建構子（#28 之前的形式）：{@code payloadTemplate} 為 null。
+     *
+     * <p>保留它是刻意的：record 的 canonical constructor 是 4 參數，但「有沒有
+     * 模板」與「這一筆設定成不成立」無關 —— 既有的呼叫端（測試、未來的程式碼）
+     * 不該因為多了一個選配欄位而全部被迫改寫。
+     */
+    public WebhookConfig(String event, String url, String method) {
+        this(event, url, method, null);
+    }
+
+    /**
      * 整理成一筆可用的設定。
      *
      * <p>URL 空白 → 回 {@code null}（代表「這一筆不成立」）。
@@ -67,7 +81,7 @@ public record WebhookConfig(String event, String url, String method) {
      * 規則只能有一份）。這裡只做「有沒有填」這種無歧義的整理。
      */
     static WebhookConfig of(String event, String url, String method) {
-        return of(event, url, method, DEFAULT_EVENT);
+        return of(event, url, method, null, DEFAULT_EVENT);
     }
 
     /**
@@ -79,9 +93,22 @@ public record WebhookConfig(String event, String url, String method) {
      * 不是重複；把節點層的預設直接改成 {@code process.completed} 會弄壞節點層。
      */
     static WebhookConfig of(String event, String url, String method, String defaultEvent) {
+        return of(event, url, method, null, defaultEvent);
+    }
+
+    /**
+     * 完整形式：{@code payloadTemplate} 空白 → null（＝沒有模板，用預設 body）。
+     *
+     * <p>非空白的模板<b>不 trim</b>：它是使用者要送出的 body 內容，前後空白
+     * 在 JSON 裡無害、但也不該由我們擅自改寫（稽核上「存進去什麼就送什麼」）。
+     * 空白字串則無歧義地視為未設定 —— 前端清空 textarea 後寫出的是空屬性。
+     */
+    static WebhookConfig of(String event, String url, String method,
+                            String payloadTemplate, String defaultEvent) {
         if (url == null || url.isBlank()) return null;
         String e = (event == null || event.isBlank()) ? defaultEvent : event.trim();
         String m = (method == null || method.isBlank()) ? DEFAULT_METHOD : method.trim();
-        return new WebhookConfig(e, url.trim(), m);
+        String t = (payloadTemplate == null || payloadTemplate.isBlank()) ? null : payloadTemplate;
+        return new WebhookConfig(e, url.trim(), m, t);
     }
 }

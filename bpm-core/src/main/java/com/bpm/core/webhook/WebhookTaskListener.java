@@ -87,6 +87,14 @@ public class WebhookTaskListener implements TaskListener {
 
         for (WebhookConfig config : matching) {
             Map<String, Object> payload = buildPayload(task, event);
+            // ── 自訂 body（#28）────────────────────────────────────────
+            // 在加入 __webhookUrl／__webhookMethod <b>之前</b>渲染：模板只能
+            // 引用預設 payload 的欄位，契約欄位（__*）不是資料的一部分。
+            // 沒有模板時完全不動 payload —— 既有路徑逐欄不變。
+            if (config.payloadTemplate() != null) {
+                payload.put(WebhookPayloadTemplate.BODY_KEY,
+                        WebhookPayloadTemplate.render(config.payloadTemplate(), payload));
+            }
             // ⚠️ 這兩個欄位是 WebhookConsumer 與本 listener 之間唯一的契約。
             // 欄位名不可改：consumer 用 payload.remove("__webhookUrl") 讀，
             // 改名等於把整條鏈路再斷一次（而斷掉之後不會有任何錯誤）。

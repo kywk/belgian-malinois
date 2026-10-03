@@ -224,6 +224,7 @@ public class WebhookConfigResolver {
                         hook.getAttributeValue(null, WebhookConfig.ATTR_EVENT),
                         hook.getAttributeValue(null, WebhookConfig.ATTR_URL),
                         hook.getAttributeValue(null, WebhookConfig.ATTR_METHOD),
+                        hook.getAttributeValue(null, WebhookConfig.ATTR_PAYLOAD_TEMPLATE),
                         defaultEvent);
                 if (cfg == null) {
                     log.warn("元素 {} 有 {} 元素但沒有 url 屬性，忽略該筆設定",
@@ -261,6 +262,10 @@ public class WebhookConfigResolver {
                         text(node, WebhookConfig.ATTR_EVENT),
                         text(node, WebhookConfig.ATTR_URL),
                         text(node, WebhookConfig.ATTR_METHOD),
+                        // 舊格式也對稱地讀 payloadTemplate：這個欄位是 #28 才加的，
+                        // 舊前端不會寫它，但手改／匯入的檔案可能有 —— 讀它成本為零，
+                        // 漏讀的代價則是「設定看起來存在、投遞時靜默被忽略」。
+                        text(node, WebhookConfig.ATTR_PAYLOAD_TEMPLATE),
                         defaultEvent);
                 if (cfg == null) {
                     log.warn("元素 {} 的舊格式 webhook 設定缺少 url，忽略該筆", element.getId());

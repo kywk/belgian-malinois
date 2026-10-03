@@ -20,6 +20,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.util.HexFormat;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -102,6 +107,13 @@ class ProcessWebhookWiringTest extends IntegrationTestBase {
                 + "\" method=\"" + method + "\"/>";
     }
 
+    /** 帶 {@code payloadTemplate} 的流程層 webhook（#28）；引號必須 XML 轉義。 */
+    private String webhookWithTemplate(String event, String url, String method, String template) {
+        return "<flowable:webhook event=\"" + event + "\" url=\"" + url
+                + "\" method=\"" + method + "\" payloadTemplate=\""
+                + template.replace("&", "&amp;").replace("\"", "&quot;") + "\"/>";
+    }
+
     private String legacyDoc(String name) {
         return "<documentation>" + WebhookConfigResolver.LEGACY_DOC_PREFIX
                 + "[{\"event\":\"process.completed\",\"url\":\"" + sinkUrl(name)
@@ -144,6 +156,19 @@ class ProcessWebhookWiringTest extends IntegrationTestBase {
             });
         } catch (Exception e) {
             throw new AssertionError("投遞 body 不是 JSON：" + r.body(), e);
+        }
+    }
+
+    /** application-test.yml / application.yml 的 hmac-secret。 */
+    private static final String HMAC_SECRET = "bpm-webhook-secret";
+
+    private String expectedHmac(String body) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(HMAC_SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            return "sha256=" + HexFormat.of().formatHex(mac.doFinal(body.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
         }
     }
 
@@ -208,6 +233,32 @@ class ProcessWebhookWiringTest extends IntegrationTestBase {
             awaitDelivery(() -> !WebhookTestSink.receivedTo("p3").isEmpty(), "all 設定的投遞");
             assertThat(WebhookTestSink.receivedTo("p3").get(0).method())
                     .as("設 PUT 就必須真的用 PUT").isEqualTo("PUT");
+        }
+
+        @Test
+        @DisplayName("payloadTemplate：結案的自訂 body 被投遞，簽章對它有效（#28）")
+        void processTemplateIsDelivered() {
+            // 流程層與節點層共用同一份渲染與 consumer 邏輯；這一條證明
+            // 流程層的 payloadTemplate 也真的走到了 HTTP（不是只有節點層生效）。
+            String template = "{\"done\":\"{{result}}\",\"bk\":\"{{businessKey}}\","
+                    + "\"pid\":\"{{processInstanceId}}\"}";
+            String key = deployProcess("pw-template",
+                    webhooksElement(webhookWithTemplate(
+                            "process.completed", sinkUrl("p6"), "POST", template)));
+
+            var pi = runtimeService.startProcessInstanceByKey(key, "PW-6", Map.of("approved", true));
+            Task task = taskService.createTaskQuery().processInstanceId(pi.getId()).singleResult();
+            assertThat(task).as("流程必須建立任務").isNotNull();
+            taskService.complete(task.getId(), Map.of("approved", true));
+
+            awaitDelivery(() -> !WebhookTestSink.receivedTo("p6").isEmpty(), "流程層自訂 body 的投遞");
+            WebhookTestSink.Received r = WebhookTestSink.receivedTo("p6").get(0);
+
+            assertThat(r.body()).isEqualTo("{\"done\":\"approved\",\"bk\":\"PW-6\",\"pid\":\""
+                    + pi.getId() + "\"}");
+            assertThat(r.signature())
+                    .as("簽章必須對自訂 body 計算")
+                    .isEqualTo(expectedHmac(r.body()));
         }
     }
 

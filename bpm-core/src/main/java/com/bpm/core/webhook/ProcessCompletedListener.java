@@ -173,12 +173,24 @@ public class ProcessCompletedListener implements FlowableEventListener {
             // 什麼結果」並自行查詢。
 
             for (WebhookConfig config : matching) {
+                // ⚠️ 每一筆設定各自一份 map。改動前是所有設定共用同一份、
+                // 迴圈裡覆寫 __ 欄位；一旦加了 __webhookBody，共用的形狀會讓
+                // 「上一筆有模板、這一筆沒有」的設定繼承到上一筆的自訂 body ——
+                // 送出一個不屬於自己的 body，而且不會有任何錯誤。
+                Map<String, Object> message = new HashMap<>(payload);
+                // ── 自訂 body（#28）────────────────────────────────────
+                // 在加入 __webhookUrl／__webhookMethod 之前渲染：模板只引用
+                // 預設 payload 的欄位（P2-1 紅線，見 WebhookPayloadTemplate）。
+                if (config.payloadTemplate() != null) {
+                    message.put(WebhookPayloadTemplate.BODY_KEY,
+                            WebhookPayloadTemplate.render(config.payloadTemplate(), message));
+                }
                 // ⚠️ 這兩個欄位是 WebhookConsumer 與本 listener 之間唯一的契約。
                 // 欄位名不可改：consumer 用 payload.remove("__webhookUrl") 讀，
                 // 改名等於把整條鏈路再斷一次（而斷掉之後不會有任何錯誤）。
-                payload.put("__webhookUrl", config.url());
-                payload.put("__webhookMethod", config.method());
-                rabbitTemplate.convertAndSend("bpm.exchange", "bpm.webhook." + processDefKey, payload);
+                message.put("__webhookUrl", config.url());
+                message.put("__webhookMethod", config.method());
+                rabbitTemplate.convertAndSend("bpm.exchange", "bpm.webhook." + processDefKey, message);
                 log.info("流程 {} 的結案事件已排入投遞佇列：{} {}",
                         processDefKey, config.method(), config.url());
             }
