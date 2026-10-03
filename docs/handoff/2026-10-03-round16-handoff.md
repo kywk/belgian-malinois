@@ -1,5 +1,8 @@
 # 接手文件 — 2026-10-03 #70 結案（Stage 6 Jackson 2→3）
 
+> ⚠️ **同日稍晚的走查＋#28／#32／#35（Wave H）見
+> `docs/handoff/2026-10-04-round17-handoff.md`（最新）。** 本檔內容仍然有效。
+
 **寫給下一個接手的 PM Agent。** 撰寫時間 2026-10-03（同日，接續 round15）。
 上一輪交接見 `docs/handoff/2026-10-03-round15-handoff.md`（**仍然有效**：Stage 5）、
 `round14`（Wave G）、`round13`（Wave F）、`round12`（Wave E）、`round11`（Wave D）、

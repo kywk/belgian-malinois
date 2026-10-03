@@ -1,7 +1,7 @@
 # Greyhound BPM 平台 — 後端開發工項清單
 
 > 產出日期：2026-06-08
-> 最後更新：2026-10-03（**#70 全部完成：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3，EOL 安全債清償**；Wave G：#97／#44／#45／#46／#47；Wave F：待決策六項；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
+> 最後更新：2026-10-04（**走查＋#28／#32／#35 完成；前端 DynamicForm 鏈斷裂修復**；#70 全部完成：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3，EOL 安全債清償；Wave G：#97／#44／#45／#46／#47；Wave F：待決策六項；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
 > 基於規格文件 vs 實際程式碼差異分析
 >
 > 狀態：✅ 完成　🟡 部分完成（說明欄寫缺什麼）　⬜ 未開始
@@ -78,7 +78,7 @@
 | 25 | Webhook Payload 完整化 | 依規格補齊所有事件欄位（task.created、completed、rejected、timeout、process.completed） | 3d | ✅ **2026-10-02 完成**（`fcfb951`／`792e2db`，merge `4af4e53`）。依使用者裁決沿用 P2-1 紅線：**不送** `variables`／`comment`／`operatorName`／候選人；補 `task.timeout` 的 `assignee`／`dueDate`／`overdueHours`（整點小時無條件捨去、下限 0、`dueDate=null` → `null`）。spec §11.4 欄位表改以實作為準。⚠️ **重大上游事實**：Flowable 7.2.0 **不發 timeout task event**（`BaseTaskListener` 只有 create／assignment／complete／delete／all；整個 flowable-engine 無 `timeout` 字面值，2026-10-02 以 `javap -p -c` 驗證）→ `event="timeout"` 目前永遠不投遞；payload 已依合約墊好，替代機制已裁決：設計器 2026-10-02 移除 `timeout` 選項（`d53d668`，merge `34c6756`），後端保留相容 |
 | 26 | HMAC 簽章實作 | webhook payload HMAC-SHA256 簽章 | 1d | ✅ **2026-10-02 收尾**（測試 `e3eb4cc`，merge `6c19e2a`）。簽章走 `X-BPM-Signature` 標頭、對實際 body 計算；`WebhookSignatureHeadersTest` 釘住重放標頭（`X-BPM-Timestamp`＝body `deliveryTimestamp`、`X-BPM-Delivery-Id` 為 UUID 且兩筆不重複、body 不得含 `hmacSignature`）。另補 prod 啟動防護（`d34c3c6`，merge `0aa4d50`）：prod 未設或沿用預設 `bpm-webhook-secret` → 拒絕啟動。2026-10-02 裁決：移除 `WebhookConsumer` 的 `@Value` fallback（保留 base dev 預設）。✅ **2026-10-03 已實作**（`d2836d9`，merge `283ca3d`）：`@Value("${bpm.webhook.hmac-secret}")` 無預設，屬性缺席即啟動失敗（fail-fast）；dev 預設只在 base yml；`WebhookHmacSecretValidatorTest` 的「三處同步」斷言改為「兩處」（yml／validator 常數），新增 `WebhookConsumerHmacSecretRequiredTest` 3 條（缺席啟動失敗／提供即啟動／annotation 無 `:` 預設） |
 | 27 | Webhook 重試機制 | 失敗指數退避重試（1s→2s→4s，max 3次）、DLQ | 2d | ✅ **2026-10-02 收尾**（測試 `e3eb4cc`，merge `6c19e2a`）。`WebhookRetryDlqTest` 以 `WebhookTestSink` 失敗注入證明：暫態失敗 2 次後成功（間隔對得上執行期 `RabbitProperties`）、持續失敗恰 3 次後進 `dlq.bpm`（帶 `x-death: bpm.webhook.queue/rejected`）、SSRF 拒絕 log ERROR 且**不重試不進 DLQ**。⚠️ 實際語意是 `max-attempts=3`＝共 3 次嘗試（2 個 backoff：1s、2s）；原描述「1s→2s→4s」不精確，已按實測記錄 |
-| 28 | payloadTemplate 自訂 Payload | 允許外部系統客製 webhook payload 結構 | 2d | ⬜ |
+| 28 | payloadTemplate 自訂 Payload | 允許外部系統客製 webhook payload 結構 | 2d | ✅ 2026-10-04：`{{field}}` 模板（JSON 轉義、未知原樣保留＋lint warning `webhook-payload-template`）渲染進 `__webhookBody`、consumer 以最終 body 簽章；**P2-1 紅線：僅預設非敏感欄位、碰不到流程變數**；前端設計器欄位＋moddle 屬性。merge `1cb471c` |
 
 ### 1.6 通知服務
 
@@ -87,7 +87,7 @@
 | 29 | NotifyConfig CRUD API | 流程定義的通知渠道配置 | 2d | ✅ `/api/admin/notify-configs` |
 | 30 | NotifyTemplate CRUD API | 通知模板管理、變數替換引擎 | 2d | ✅ `/api/admin/notify-templates`，`${var}` 替換 |
 | 31 | Email 通知完整實作 | 模板渲染 + 發送（spring-boot-starter-mail 已引入） | 2d | ✅ 收件人仍寫死為 `userId@company.com` |
-| 32 | Teams 通知整合 | Microsoft Teams webhook 推送 | 2d | ⬜ |
+| 32 | Teams 通知整合 | Microsoft Teams webhook 推送 | 2d | ✅ 2026-10-04：`NotifyConfig.channel=teams`＋`webhookUrl`（V8 migration；create/update 過 `WebhookUrlPolicy`；讀取端 `***` 遮蔽、`***` round-trip 保留原值）；consumer 依 channel 路由（email／teams 並存、失敗語意各自）。merge `2a55384`＋`ef765dc` |
 | 33 | 通知觸發事件完整化 | 任務指派、認領、加簽、催辦、退回、拒絕、完成、超時預警 | 3d | ✅ **2026-10-02 完成**（`6d37d43`／`fdab9ce`，merge `26417bb`）。新增唯一發送端 `NotifyPublisher`：退回（`approved=false` 且非拒絕）／拒絕（`rejected=true`）／結案（核准且流程結束，避免與拒絕信矛盾）／認領（收件人＝其他候選人）／加簽（standalone task 不經 BPMN listener，由建立端呼叫、事件沿用 `task_assigned`）／催辦。通知吞例外不影響簽核；P2-1 紅線守住。線上實測：退回／拒絕／核准／催辦信件都在 MailHog；認領信亦在 acceptance 流程中出現。⚠️ 超時預警不做（Flowable 7.2.0 不發 timeout 事件）；external API 的完成路徑仍不通知（見殘餘）→ ✅ **2026-10-03 #96 已收斂**（外部完成也發通知） |
 
 ### 1.7 BPMN Lint 驗證（Service 已建，規則需補齊）
@@ -95,7 +95,7 @@
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
 | 34 | formKey 存在性驗證 | 呼叫 form-service 確認 formKey 對應表單存在 | 1d | ✅ 併入後直接呼叫 `FormService` |
-| 35 | EL 函數白名單驗證 | 僅允許 orgService/permService/bpmQueryService 的合法方法 | 1d | 🟡 bean 層白名單＋執行期 `setBeans()`；未逐一檢查方法 |
+| 35 | EL 函數白名單驗證 | 僅允許 orgService/permService/bpmQueryService 的合法方法 | 1d | ✅ 2026-10-04：`el-method-whitelist` 逐方法 error（六 bean 白名單＋排除清單）；反射防漂移測試（新增 public 方法必須歸屬）；P1-7 兩 stub 部署期擋下。merge `c1f52d5` |
 | 36 | 外部系統流程 Lint | 檢查允許外部發起的流程第一個 UserTask 不使用 initiator EL | 1d | ✅ **2026-10-02 追認**。rule h 已於 #68d（2026-09-30）由 warning 升為 **error**（`BpmnLintService.java:327-333`），本列描述為當時殘留；部署會被擋下。無新程式改動 |
 | 37 | ExclusiveGateway default flow 驗證 | 確保每個 Gateway 都有 default sequence flow | 0.5d | ✅ 只要求「每條出線都有條件」的閘道 |
 | 38 | Service Task 錯誤邊界事件驗證 | 確保 Service Task 都有 Error Boundary Event | 0.5d | ✅ warning |
@@ -321,7 +321,7 @@
 | 2026-09-29 新增 | 29 | 29 | 0 | 0 | 0d |
 | 2026-10-02 新增 | 2 | 2 | 0 | 0 | 0d |
 | 2026-10-03 新增 | 1 | 1 | 0 | 0 | 0d |
-| **合計** | **97** | **86** | **7** | **4** | **~29 人天** |
+| **合計** | **97** | **89** | **6** | **2** | **~24 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -565,6 +565,16 @@
 > `JsonNode.fieldNames()→propertyNames()`、`isContainerNode()→isContainer()`。
 > 統計：✅ 86、🟡 7、⬜ 4；剩餘上限 **~29 人天**。
 > **#70（Boot 3.5 EOL 安全債）正式清償。**
+>
+> **2026-10-04（走查＋#28／#32／#35）—— 前端瀏覽器走查完成、三工項完成。**
+> 走查（headless Chrome＋CDP，4 身分 × 10 路線）：日期顯示、Dashboard 逾期計算、稽核／通知路徑全正常，
+> 零 API／JS error；走查抓到 **#56 回歸**——`DynamicForm` 的提示 div 插入 v-else-if 鏈中間導致斷鏈
+> （select 等欄位多顯示「不支援的欄位類型」），已修 `dd4c12f`＋2 條回歸測試（負控 1 紅）。
+> #28 payloadTemplate（P2-1：只碰預設非敏感欄位）、#32 Teams 通知（V8 migration＋URL 遮蔽）、
+> #35 EL 逐方法白名單（P1-7 兩 stub 部署期擋下）。
+> 驗收：**1297 全綠**（+67）、既有 dev DB 熱啟動套用 V8、seed＋acceptance 7/0；
+> 線上實測：`orgService.nope` 部署 400／`getDeptId` 200、webhookUrl 讀取端全遮蔽。
+> 統計：✅ 89、🟡 6、⬜ 2；剩餘上限 **~24 人天**。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是

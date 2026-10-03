@@ -121,7 +121,7 @@ BPM Core → 外部系統:          非同步 Webhook（節點事件通知）
 ```
 // 組織相關
 ${orgService.getDirectManager(initiator)}
-${orgService.getAuthorizedManager(initiator, amount)}
+${orgService.getAuthorizedManager(initiator, amount)}   // ⚠️ 未實作（P1-7 stub）：#35 起 lint 部署期擋下，實作後才移入白名單
 ${orgService.getManagerChain(initiator, 3)}
 ${orgService.getDeptGroup(initiator)}
 
@@ -311,7 +311,7 @@ public class OrgService {
     // 以下方法供 Flowable EL 表達式使用，內部呼叫外圍 API + Redis 快取
 
     String getDirectManager(String userId)
-    String getAuthorizedManager(String userId, BigDecimal amount)
+    String getAuthorizedManager(String userId, BigDecimal amount)  // ⚠️ P1-7 stub：未實作，lint 擋下（見 §4.1）
     String resolveEffective(String userId)       // 考慮代理人
     String getDeptGroup(String userId)
     List<String> getManagerChain(String userId, int levels)
@@ -386,7 +386,7 @@ public class BpmPermissionService {
     List<String> getUsersByPermission(String permCode)
     List<String> getUsersByPermissionAndDept(String permCode, String deptId)
     boolean hasPermission(String userId, String permCode)
-    List<String> getUsersByPermissionAndCondition(String permCode, Map<String, Object> attrs)
+    List<String> getUsersByPermissionAndCondition(String permCode, Map<String, Object> attrs)  // ⚠️ P1-7 stub：未實作，lint 擋下（見 §4.1）
     String getFirstAvailableUser(String permCode)
     void invalidateCache(String userId)
 }
@@ -1203,7 +1203,7 @@ Payload 範例（同意）—— 刻意**不含** `operatorName`／`comment`（P
 `variables` 範圍規則：
 - 節點事件（task.*）：**不送 `variables`**，只送該事件的基本欄位（見「各事件額外欄位」表）。表單欄位 id 就是流程變數名（§8.5），外送變數等於把該關卡表單的全部內容（可能含薪資、身分證號）原封不動送到外部 URL，而且沒有任何白名單（security-audit P2-1）。需要明細的接收端應回頭呼叫 API（該路徑有授權）。
 - 流程結案事件（process.completed）：**不送流程變數**，只送 `result` 與 `businessKey`（後者已在共用欄位）。表單欄位 id 就是流程變數名（§8.5），外送全部變數等於把薪資、身分證號等表單內容原封不動送到外部 URL，而且沒有任何白名單（security-audit P2-1）。需要明細的接收端應回頭呼叫 API（該路徑有授權）。
-- 若外部系統需要特定變數，透過 `payloadTemplate` 自訂 payload 結構
+- 若外部系統需要不同的 payload 結構，可用 `payloadTemplate` 自訂（`{{field}}` 佔位）。**模板只能引用預設 payload 的既有欄位**（event／taskId／processInstanceId 等非敏感欄位），**不能引用流程變數** —— 與上面「不送 variables」是同一條 P2-1 紅線；未知佔位符原樣保留，lint 於部署期 warning 提示。
 
 ### 11.5 待辦清單查詢（三種來源合併）
 
@@ -1415,6 +1415,7 @@ public class NotifyConfig {
     private String processDefinitionKey;  // 流程定義 key
     private String eventType;             // task_assigned | task_timeout | ...
     private String channel;               // email | teams | line_works | system_webhook
+    private String webhookUrl;            // #32：channel=teams 時的 Incoming Webhook URL（必填、過 WebhookUrlPolicy；讀取端以 *** 遮蔽）
     private String templateId;            // 通知模板 ID
     private Boolean enabled;
 }
