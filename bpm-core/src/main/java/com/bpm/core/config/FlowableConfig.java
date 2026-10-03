@@ -82,6 +82,7 @@ public class FlowableConfig {
             EmailNotifyDelegate emailNotifyDelegate,
             com.bpm.core.engine.DataValidationDelegate dataValidationDelegate,
             com.bpm.core.engine.ExternalApiDelegate externalApiDelegate,
+            com.bpm.core.engine.ErpSyncDelegate erpSyncDelegate,
             com.bpm.core.engine.BlankAssigneeNormalizingInterceptor blankAssigneeNormalizingInterceptor) {
         return config -> {
             config.setEventListeners(List.of(processCompletedListener, unreachableTaskListener,
@@ -134,7 +135,11 @@ public class FlowableConfig {
                     // #49 通用外部 API delegate。🔴 它的 url 來自 BPMN，
                     // 因此 WebhookUrlPolicy（唯一的 SSRF 閘門）是它的安全相依。
                     // 同樣只加在這份 map，不進 EL 白名單。
-                    Map.entry("externalApiDelegate", externalApiDelegate)));
+                    Map.entry("externalApiDelegate", externalApiDelegate),
+                    // #46 ERP 同步 delegate。與 #49 同一條安全相依
+                    // （WebhookUrlPolicy＋SafeRestClients），錯誤碼是
+                    // ERP_SYNC_*；同樣只加在這份 map，不進 EL 白名單。
+                    Map.entry("erpSyncDelegate", erpSyncDelegate)));
         };
     }
 }
