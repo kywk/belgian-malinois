@@ -2,15 +2,20 @@ package com.bpm.core.external;
 
 import org.springframework.transaction.annotation.Transactional;
 import com.bpm.core.security.CallerId;
+import com.bpm.core.audit.model.AuditLog;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.audit.AuditEventPublisher;
+import com.bpm.core.audit.service.AuditLogService;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.model.ExternalSystem;
 import com.bpm.core.repository.ExternalSystemRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -76,11 +81,14 @@ public class ExternalSystemAdminController {
 
     private final ExternalSystemRepository repo;
     private final AuditEventPublisher auditPublisher;
+    private final AuditLogService auditLogService;
 
     public ExternalSystemAdminController(ExternalSystemRepository repo,
-                                         AuditEventPublisher auditPublisher) {
+                                         AuditEventPublisher auditPublisher,
+                                         AuditLogService auditLogService) {
         this.repo = repo;
         this.auditPublisher = auditPublisher;
+        this.auditLogService = auditLogService;
     }
 
     @PostMapping
@@ -251,11 +259,72 @@ public class ExternalSystemAdminController {
         return Map.of("systemId", systemId, "callbackSecret", plainSecret);
     }
 
+    /**
+     * 該外部系統的呼叫紀錄（工項 #20，分頁）。
+     *
+     * <h2>範圍：{@code operatorId = system:<systemId>} 的 {@code EXTERNAL_API_CALL}</h2>
+     *
+     * <p>外部系統的每一次呼叫都由伺服器鑄造的身分 {@code system:<systemId>}
+     * 寫成 {@code EXTERNAL_API_CALL}（見 {@link ExternalActorIdentity}），
+     * 所以「這個系統做過什麼」＝這兩個條件的交集。刻意<b>不</b>收
+     * {@code CONFIG_CHANGE}：那些紀錄的 operatorId 是管理員，內容是
+     * 「有人改了這個系統的授權」，屬於系統的<b>設定史</b>而不是它的<b>使用史</b>
+     * —— 事故調查時兩者回答的是不同問題。
+     *
+     * <p>被拒絕的呼叫（{@code ExternalApiAuthFilter} 的 401／403）也在這個交集裡：
+     * 它們以請求標頭的 {@code X-System-Id} 歸戶，所以「金鑰輪換後舊金鑰還在打」
+     * 這類訊號看得出來。代價是未認證的呼叫端也能用別人的 systemId 產生紀錄
+     * —— 這是既有稽核寫入路徑的性質，查詢結果不宜當成「對方確實持有金鑰」的證據。
+     *
+     * <h2>查詢規則與 {@code /api/audit-logs} 是同一份</h2>
+     *
+     * <p>直接走 {@link AuditLogService#search}／同一個 repository 查詢，只是把
+     * {@code operatorId} 與 {@code operationType} 固定住。沒有第二份查詢、
+     * 沒有第二種排序或日期語意 —— 分頁與日期參數的行為與
+     * {@code AuditLogController.search} 逐字相同（日期為 ISO-8601 Instant）。
+     *
+     * <h2>已停用的系統仍可查歷史</h2>
+     *
+     * <p>{@code DELETE} 是停用而非刪除，而停用後最需要的就是「它以前做了什麼」
+     * —— 事故調查通常發生在停用之後。所以這裡只驗系統存在（404 僅限未知的
+     * systemId），不檢查 {@code enabled}。
+     *
+     * <p>查詢本身寫一筆 {@code DATA_ACCESS}（比照 {@code AuditLogController}）：
+     * 回傳的 detail 可能含流程變數，翻閱它與翻閱稽核庫是同一種敏感行為。
+     */
     @GetMapping("/{systemId}/usage-logs")
-    public Map<String, String> usageLogs(@PathVariable String systemId) {
-        // Placeholder: 稽核查詢已併入 bpm-core（2026-04-24），改指向本服務的 /api/audit-logs。
-        // 真正的實作見 docs/backend-development-backlog.md 外部系統 usage logs 項目。
-        return Map.of("message", "Query /api/audit-logs with operatorSource=external_api and systemId=" + systemId);
+    public Page<AuditLog> usageLogs(
+            @PathVariable String systemId,
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @CallerId String requesterId) {
+
+        find(systemId); // 未知系統 → 404；已停用系統仍可查（見上方說明）。
+
+        Instant start = startDate != null ? Instant.parse(startDate) : null;
+        Instant end = endDate != null ? Instant.parse(endDate) : null;
+
+        Page<AuditLog> result = auditLogService.search(null,
+                ExternalActorIdentity.of(systemId), OperationType.EXTERNAL_API_CALL,
+                start, end, PageRequest.of(page, size));
+
+        // 查稽核本身也要留紀錄（稽核稽核者，P2-4）。比照 AuditLogController.search
+        // 只記查詢條件與命中筆數，不記回傳內容。
+        Map<String, Object> access = new LinkedHashMap<>();
+        access.put("action", "usage-logs");
+        access.put("systemId", systemId);
+        access.put("startDate", nullSafe(startDate));
+        access.put("endDate", nullSafe(endDate));
+        access.put("page", page);
+        access.put("size", size);
+        access.put("totalHits", result.getTotalElements());
+        auditPublisher.publish(new AuditEvent(OperationType.DATA_ACCESS.name(),
+                requesterId != null && !requesterId.isBlank() ? requesterId : "unknown",
+                null, null, access));
+
+        return result;
     }
 
     private ExternalSystem find(String systemId) {
