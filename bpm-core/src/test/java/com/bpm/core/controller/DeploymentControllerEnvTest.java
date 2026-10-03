@@ -152,6 +152,12 @@ class DeploymentControllerEnvTest {
                 StandardCharsets.UTF_8))
                 .as("#61 的 commit 保存原始 XML —— 環境差異不進版控")
                 .isEqualTo(RAW_XML);
+        try (Git git = Git.open(tmp.resolve("repo").toFile())) {
+            RevCommit head = git.log().call().iterator().next();
+            assertThat(head.getFullMessage())
+                    .as("commit message 的 xmlSha256 必須是原始 XML 的指紋，不是 resolved 的")
+                    .contains("xmlSha256: " + sha256(RAW_XML));
+        }
 
         ArgumentCaptor<AuditEvent> audit = ArgumentCaptor.forClass(AuditEvent.class);
         verify(auditPublisher).publish(audit.capture());
