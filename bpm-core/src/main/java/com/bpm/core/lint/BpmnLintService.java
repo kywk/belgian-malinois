@@ -610,6 +610,7 @@ public class BpmnLintService {
         while (matcher.find()) {
             String name = matcher.group(1);
             if (PLATFORM_VARIABLES.contains(name) || declaredVariables.containsKey(name)) continue;
+            if (isEnvPlaceholderName(name)) continue;
             errors.add(new LintError(elementId, elementName, "undeclared-variable",
                     "運算式參照了未宣告的流程變數 '" + name + "'。"
                             + "若這是字面值（例如部門代碼），請直接填寫不要包 ${}；"
@@ -617,6 +618,43 @@ public class BpmnLintService {
                             + "（平台變數: " + PLATFORM_VARIABLES + "）", "error"));
         }
     }
+
+    /**
+     * 這個裸變數名是不是部署期的環境變數佔位符（backlog #53，spec §12.3）。
+     *
+     * <h2>為什麼規則 i 必須豁免它</h2>
+     *
+     * <p>{@code ${ENV_FINANCE_GROUP}} 的形狀與未宣告的流程變數
+     * （{@code ${dept}}）一模一樣：都是 {@code \$\{(\w+)\}}。但語意完全不同 ——
+     * 它不是要在執行期求值的變數，而是<b>部署時會被替換成字面值</b>的佔位符
+     * （{@code BpmnEnvSubstitutor}）。不豁免的話，spec §12.3 的標準寫法
+     * 根本部署不了。
+     *
+     * <h2>⚠️ 豁免邊界必須與 BpmnEnvSubstitutor.PLACEHOLDER 逐字相同</h2>
+     *
+     * <p>這裡刻意用與替換端相同的 {@code ENV_[A-Z0-9_]+}，不是「以 ENV_ 開頭」：
+     * <ul>
+     *   <li>{@code ${ENV_}}（空名）、{@code ${env_x}}（小寫）：替換端不認，
+     *       維持 {@code undeclared-variable} 錯誤。放行等於部署一份執行期
+     *       求值 {@code ${ENV_}} 的 BPMN，錯誤延後到第一個送件的人。</li>
+     *   <li>{@code ${ENV_X.foo}}：有點的形狀是 EL 呼叫（替換端 pattern 要求
+     *       名稱後直接是 {@code }}），由 bean 白名單規則處理，不受本豁免影響。</li>
+     * </ul>
+     *
+     * <p>替換失敗（值未設定）在部署端是 400；設計器 lint 不檢查值是否存在
+     * —— lint 是<b>環境無關</b>的（同一份 XML 要能通過所有環境的 lint），
+     * 值的存在與否只有部署到某個環境時才成立。這是兩個檢查的分工，不是遺漏。
+     */
+    static boolean isEnvPlaceholderName(String name) {
+        return ENV_PLACEHOLDER_NAME.matcher(name).matches();
+    }
+
+    /**
+     * 環境變數佔位符的名稱（不含 {@code ${}}）：
+     * {@code ENV_[A-Z0-9_]+}。與 {@code BpmnEnvSubstitutor.PLACEHOLDER} 同步。
+     */
+    static final java.util.regex.Pattern ENV_PLACEHOLDER_NAME =
+            java.util.regex.Pattern.compile("ENV_[A-Z0-9_]+");
 
     /**
      * 純變數參照（整個運算式就是 {@code ${name}}，前後沒有多餘字元）。
