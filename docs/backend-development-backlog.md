@@ -1,7 +1,7 @@
 # Greyhound BPM 平台 — 後端開發工項清單
 
 > 產出日期：2026-06-08
-> 最後更新：2026-10-03（Wave C：#55 表單 Schema 驗證、#59 封存保護、#7 撤回通知、#21 管理頁輪換 UI；Wave B：#4 Call Activity、#21 Callback、#5 代理人；Wave A：#23 逾期提醒、#1 `returnTo=initiator`、#7 流程撤回、#51 parking；同日稍早：#96 完成路徑通知收斂、#51 DLQ 告警與重放、#3 催辦開放受理人、#6 HMAC fallback 移除、currentTask 補 taskId）
+> 最後更新：2026-10-03（Wave D：#22 External Worker、#24 Signal 廣播、#20 usage-logs、小殘餘批次；Wave C：#55 Schema 驗證、#59 封存保護、#7 撤回通知、#21 UI；Wave B：#4 Call Activity、#21 Callback、#5 代理人；Wave A：#23 逾期提醒、#1 `returnTo=initiator`、#7 流程撤回、#51 parking；同日稍早：#96 完成路徑通知收斂、#51 DLQ 告警與重放、#3 催辦開放受理人、#6 HMAC fallback 移除、currentTask 補 taskId）
 > 基於規格文件 vs 實際程式碼差異分析
 >
 > 狀態：✅ 完成　🟡 部分完成（說明欄寫缺什麼）　⬜ 未開始
@@ -37,7 +37,7 @@
 | 4 | 加簽 - Call Activity | 預定義加簽子流程模板整合、前端 Call Activity 節點配置 | 3d | ✅ **2026-10-03 完成**（`2c1e628`，merge `5f4ca50`）。後端：出廠模板 `countersign-review`（單一 UserTask、受理人 `${countersignAssignee}`、任務名稱可用 `countersignTaskName` 動態覆寫；in `countersignAssignee`／`countersignTaskName`，out 由父流程以 `flowable:out source="approved"` 取回）；`V6__seed_countersign_review_variable_specs.sql` 宣告規格（否則 lint `undeclared-variable` 擋部署）；`seed-data.sh` 部署模板。前端：`CallActivityProps.js`（calledElement 下拉來自 `GET /api/process-definitions?latestVersion=true`＋inheritVariables；載入失敗降級手輸）＋`flowableModdle` 補 CallActivity/In/Out 型別（修「開啟再存檔會刪光 flowable:in/out」）。線上實測：父 Call Activity → 子任務（動態名稱、assignee）→ 完成 → 父續行完成、out 映射 `legalApproved=true`、子實例 key `countersign-review`。⚠️ 已知：模板 `optional-assignee` warning 是刻意取捨；前端 hook 接線未以 renderer 測（只測 vnode 產生器與存檔路徑）；`seed-data.sh` 既有兩行用 `deploymentName` 參數（controller 讀 `name`）靠原檔名部署——未動 |
 | 5 | 代理人機制 | `orgService.resolveEffective()` 考慮代理人、自動轉派 | 2d | ✅ **2026-10-03 完成**（`2e91a1b`，merge `c78a275`）。新任務：`InitialAssigneeResolver` 解析出真人後一律過 `effectiveAssignee`（外部 `firstTaskAssignee` 也走同一份，修掉 `ExternalApiController` 事後 `setAssignee` 把代換蓋回去的覆寫）；候選群組與鏈頂 null 不代換；加簽／reassign／delegate 是明確選擇不代換。既有任務：`POST /api/admin/tasks/forward-substitutes`（ROLE_ADMIN）批次（100/批）轉派、`TASK_SUBSTITUTE_FORWARD` 總結稽核、逐任務通知新受理人；離職者跳過、組織故障 503 整批回滾。線上實測：firstTaskAssignee=user004 → 任務在 user005 信箱；reassign 不代換；批次 forwarded=1、第二次 0、通知 +1、稽核齊全。⚠️ 已知：`resolveEffective` 只解一層；端點無總量上限（記憶體由 chunk 控住） |
 | 6 | 催辦功能 | 催辦 API、觸發通知、防頻繁催辦限制 | 1d | ✅ **2026-10-02 完成**（`6d37d43`＋前端 `a6703ee`，merge `26417bb`）。`POST /api/tasks/urge?processInstanceId=`：授權僅申請人（非參與者 404／參與者非申請人 403）、Redis `SetIfAbsent` 30 分鐘冷卻（案件為 key、fail-open；產品參數待確認）、收件人＝目前待處理任務的 assignee（候選任務送候選人、群組無 email → 409）。線上實測：200 `{cooldownMinutes:30, recipients:[mgr001]}`／第二次 429／主管 403／未知案件 404，MailHog 收到「催辦提醒」信。⚠️ 成功催辦寫 `TASK_URGE` 稽核（收尾 `0958d3e`）。2026-10-02 裁決：system 案件開放 `bpm:external:revision` 受理人催辦。✅ **2026-10-03 已實作**（`643d37c`，merge `fd54160`）：`ApplicantResolver.resolveApplicant` 抽出三段共用規則（`resolve(execution)` 保留短路讀取），`urgeTask` 以同一規則判定——系統案件受理人 200、自然人案件受理人仍 403（不得放寬）；查無受理人＝沿用 403／404 分流、權限中心故障＝503，被拒零副作用。線上實測：dir001 200（recipients `[mgr001]`、TASK_URGE、MailHog 催辦信）／mgr001 403／user002 404／重複 429；自然人案件＋dir001 → 404 且零稽核 |
-| 7 | 流程撤回（申請人撤案） | 撤回 API、判斷是否可撤回（第一節點尚未處理） | 2d | ✅ **2026-10-03 完成**（`f9cf773`，merge `24a7f87`）：`POST /api/process-instances/{id}/cancel`；申請人限定（`ApplicantIdentityLookup`，onBehalfOf 可；系統案件不開放）、參與者非申請人 403／非參與者 404、已有完成任務 409、已結束／重複 404；`deleteProcessInstance`＋`PROCESS_CANCEL` 稽核（fail-closed）。線上實測：撤回 200＋runtime 消失、403／404／409 全對。✅ **同日收尾**（`6caeb41`，merge `68d046e`）：撤回成功對現任受理人發 `process_cancelled`（收件人刪除前收集、刪除後發送；每任務一則；fail-open）。線上實測：撤回 → 受理人收到「案件已被撤回」＋`PROCESS_CANCEL` 稽核。⚠️ 殘餘：`reason` 無長度上限（超長會 500 且零副作用） |
+| 7 | 流程撤回（申請人撤案） | 撤回 API、判斷是否可撤回（第一節點尚未處理） | 2d | ✅ **2026-10-03 完成**（`f9cf773`，merge `24a7f87`）：`POST /api/process-instances/{id}/cancel`；申請人限定（`ApplicantIdentityLookup`，onBehalfOf 可；系統案件不開放）、參與者非申請人 403／非參與者 404、已有完成任務 409、已結束／重複 404；`deleteProcessInstance`＋`PROCESS_CANCEL` 稽核（fail-closed）。線上實測：撤回 200＋runtime 消失、403／404／409 全對。✅ **同日收尾**（`6caeb41`，merge `68d046e`）：撤回成功對現任受理人發 `process_cancelled`（收件人刪除前收集、刪除後發送；每任務一則；fail-open）。線上實測：撤回 → 受理人收到「案件已被撤回」＋`PROCESS_CANCEL` 稽核。✅ **再收尾**（`6dfefcc`）：`reason` 上限 1000 字元（超過 400；線上實測 1001 → 400、正常 → 200） |
 
 ### 1.2 OrgService / PermService 整合（目前為 Mock）
 
@@ -60,16 +60,16 @@
 | 17 | 外部系統操作節點 | PUT /api/external/tasks/{taskId} 完整邏輯 | 1d | ✅ 檢查 action 與案件歸屬 |
 | 18 | 外部系統查詢流程狀態 | status API、businessKey 查詢 | 1d | ✅ 只能查到自己系統的案件 |
 | 19 | API Key 輪替 | rotate-key API、舊 Key 立即失效 | 1d | ✅ 會記稽核 |
-| 20 | 外部系統使用紀錄 | usage-logs API | 1d | 🟡 `usage-logs` 只是 placeholder，請改查 `/api/audit-logs` |
+| 20 | 外部系統使用紀錄 | usage-logs API | 1d | ✅ **2026-10-03 完成**（`b6672c3`，merge `915f02c`）。`GET /api/admin/external-systems/{systemId}/usage-logs` 接上真實稽核查詢（重用 `AuditLogService.search`，operatorId=`system:<id>`＋`EXTERNAL_API_CALL`），分頁／日期語意與 `/api/audit-logs` 逐字相同；含被拒絕呼叫（401／403 也歸戶）；停用後仍可查歷史；查詢本身留 `DATA_ACCESS`。線上實測：acquire／complete 兩筆正確顯示、跨系統隔離 |
 
 ### 1.4 非同步流程 / Callback
 
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
-| 21 | Callback 接收端 | HMAC Token 驗證、冪等檢查（Redis SetIfAbsent）、Message Correlation | 3d | ✅ **2026-10-03 完成**（`9032365`，merge `f3aed18`）。使用者裁決 per-system callback secret：`ExternalSystem.callbackSecret`（可還原儲存——HMAC 驗簽需要原始密鑰，非雜湊；V5 migration）＋建立時回傳一次＋`rotate-callback-secret`。端點 `POST /api/callback/{type}`：`X-System-Id`＋`X-Callback-Signature`（對原始 body）＋`X-Callback-Timestamp`（±5 分鐘）、`allowedActions` 含 `callback`（空＝不限制）、Redis 冪等（fail-closed 503；交易未 commit 釋放鍵）、correlation 用 `messageEventReceived`（Flowable 7 無 `createMessageCorrelationBuilder`）。線上實測：正確簽章 200 喚醒、duplicate 200、壞簽章 401、缺 deliveryId 400、輪換後舊 401 新 200。⚠️ 已知：secret 明文存 DB（無 KMS；防護靠 READ_ONLY／遮蔽／只回一次／稽核雜湊前綴）；硬殺 crash 窗口（鍵留 24h TTL）。✅ **同日收尾**（`6f5067d`，merge `a8e9a3a`）：管理頁新增「回呼密鑰」狀態欄與輪換按鈕（明文僅顯示一次、關閉即清）；建立系統回傳的明文仍只顯示 API Key（既有缺口，列後續） |
-| 22 | External Worker Task 支援 | 輪詢認領機制 | 3d | ⬜ |
+| 21 | Callback 接收端 | HMAC Token 驗證、冪等檢查（Redis SetIfAbsent）、Message Correlation | 3d | ✅ **2026-10-03 完成**（`9032365`，merge `f3aed18`）。使用者裁決 per-system callback secret：`ExternalSystem.callbackSecret`（可還原儲存——HMAC 驗簽需要原始密鑰，非雜湊；V5 migration）＋建立時回傳一次＋`rotate-callback-secret`。端點 `POST /api/callback/{type}`：`X-System-Id`＋`X-Callback-Signature`（對原始 body）＋`X-Callback-Timestamp`（±5 分鐘）、`allowedActions` 含 `callback`（空＝不限制）、Redis 冪等（fail-closed 503；交易未 commit 釋放鍵）、correlation 用 `messageEventReceived`（Flowable 7 無 `createMessageCorrelationBuilder`）。線上實測：正確簽章 200 喚醒、duplicate 200、壞簽章 401、缺 deliveryId 400、輪換後舊 401 新 200。⚠️ 已知：secret 明文存 DB（無 KMS；防護靠 READ_ONLY／遮蔽／只回一次／稽核雜湊前綴）；硬殺 crash 窗口（鍵留 24h TTL）。✅ **同日收尾**（`6f5067d`，merge `a8e9a3a`）：管理頁新增「回呼密鑰」狀態欄與輪換按鈕（明文僅顯示一次、關閉即清）。✅ **再收尾**（`19d37f2`）：建立系統時同一對話框同時顯示 `apiKey` 與 `callbackSecret` 明文（僅顯示一次） |
+| 22 | External Worker Task 支援 | 輪詢認領機制 | 3d | ✅ **2026-10-03 完成**（`0d8a3c9`，merge `7c216f5`）。BPMN `flowable:type="external-worker"`＋`flowable:topic`（jar 位元碼確認）；`/api/external/worker/**`：acquire／查詢／complete／fail／unacquire，包 Flowable `ManagementService` external worker API；workerId 一律伺服器鑄造 `system:<id>`（偽造 400）；他人 job 與不存在共用 404；`allowedActions` 新增 `external_worker`（filter 只加映射）。線上實測：acquire→complete→流程續行、別系統 complete 404。⚠️ 已知：跨系統共享 topic 先搶先贏（建議系統專屬 topic）；acquire 回傳流程變數（共用 topic 時可見）；fail 依 Flowable 預設 3→2→1→0 進死信 |
 | 23 | Timer Event 超時處理 | 超時自動觸發、超時預警通知 | 2d | ✅ **2026-10-03 完成**（`2f8756e`，merge `4d6a6fd`）。政策（使用者裁決）：**只提醒現任受理人、不自動動作**。機制：BPMN **非中斷式** boundary timer（`cancelActivity="false"`）＋ `timeoutNotifyDelegate`（`JavaDelegate`）→ `NotifyPublisher.taskTimedOut` 事件 `task_timeout` → EmailConsumer。⚠️ 實測推翻「current activity 是 boundary」的假設：delegate 掛在 boundary 後 serviceTask 時 current activity 是 serviceTask，改由 incoming flow 反推；中斷式接法明確擋下（同 command 任務列未 flush，靠查不到任務擋不住）。線上實測：5 秒 timer → 恰 1 封「任務已逾時」；任務保留、流程仍在跑。webhook `timeout` 選項維持移除、payload 休眠（不同機制） |
-| 24 | Signal Event 廣播 | 一對多喚醒流程 | 1d | ⬜ |
+| 24 | Signal Event 廣播 | 一對多喚醒流程 | 1d | ✅ **2026-10-03 完成**（`fa8bf07`，merge `90ea773`）。`POST /api/admin/signals/{signalName}/broadcast`（ROLE_ADMIN）：廣播前查等待訂閱數（0 → 404，與 callback 一致）、`runtimeService.signalEventReceived(name, vars)`；`SIGNAL_BROADCAST` 稽核（detail 只記變數個數）。線上實測：2 個等待實例一次全醒、第二次 404、稽核齊全。⚠️ 已知：process-scoped signal 會被計數但全域廣播跳過（Flowable 語意，測試釘住）；count 與廣播間有競態窗口 |
 
 ### 1.5 Webhook 觸發（Listener 已建，Payload 需完善）
 
@@ -141,7 +141,7 @@
 | 56 | 動態選項（API 載入） | 下拉選單 options 支援從外部 API 動態取得 | 2d | ⬜ |
 | 57 | 檔案上傳支援 | 檔案上傳元件對應的 storage + API | 3d | ✅ `AttachmentController`：路徑圍堵、物件層授權、稽核人員唯讀調閱 |
 | 58 | 表單資料更新 | 退回修改時 PUT form-data 的版本控制邏輯 | 1d | 🟡 `PUT /api/form-data/{id}` 可用；缺版本控制與本人／退回狀態檢查 |
-| 59 | 封存/刪除保護完善 | archived 狀態完整測試、流程中使用的表單不可封存 | 1d | ✅ **2026-10-03 完成**（`77f71c7`，merge `0eaa500`）。`archive`：被**執行中**流程使用的表單 → 409（訊息指名第一個使用中案件；以 FormData 的 `formDefinitionId` 判定，不用 `_formVersions`——那是「流程定義引用」不是「已填寫」）；`delete`：draft 有任何 FormData → 409。跨交易唯讀查 runtime（同型先例 `FormDataController.submit`）。線上實測：使用中 409、未使用 create→publish→archive 200。⚠️ 已知：`bpm_form_data.form_definition_id` 無 index（新查法全表掃描，建議另開小項）；「啟動但未送表單」不算使用中（版本鎖定仍可運作） |
+| 59 | 封存/刪除保護完善 | archived 狀態完整測試、流程中使用的表單不可封存 | 1d | ✅ **2026-10-03 完成**（`77f71c7`，merge `0eaa500`）。`archive`：被**執行中**流程使用的表單 → 409（訊息指名第一個使用中案件；以 FormData 的 `formDefinitionId` 判定，不用 `_formVersions`——那是「流程定義引用」不是「已填寫」）；`delete`：draft 有任何 FormData → 409。跨交易唯讀查 runtime（同型先例 `FormDataController.submit`）。線上實測：使用中 409、未使用 create→publish→archive 200。⚠️ 已知：「啟動但未送表單」不算使用中（版本鎖定仍可運作）。✅ **同日補 index**（`7343eb9`）：`V6__form_data_form_definition_id_index.sql`（幂等；測試查 `sys.indexes` 釘住） |
 
 ---
 
@@ -300,8 +300,8 @@
 |------|--------|----|----|----|---------|
 | 流程引擎核心 | 7 | 7 | 0 | 0 | 0d |
 | Org/Perm 正式整合 | 5 | 3 | 2 | 0 | 5d |
-| 外部系統接入 | 8 | 7 | 1 | 0 | 1d |
-| 非同步/Callback | 4 | 2 | 0 | 2 | 4d |
+| 外部系統接入 | 8 | 8 | 0 | 0 | 0d |
+| 非同步/Callback | 4 | 4 | 0 | 0 | 0d |
 | Webhook | 4 | 3 | 0 | 1 | 2d |
 | 通知服務 | 5 | 4 | 0 | 1 | 2d |
 | BPMN Lint | 5 | 4 | 1 | 0 | 1d |
@@ -312,7 +312,7 @@
 | 跨服務整合 | 6 | 1 | 4 | 1 | 17d |
 | 2026-09-29 新增 | 29 | 28 | 0 | 1 | 12.5d |
 | 2026-10-02 新增 | 2 | 2 | 0 | 0 | 0d |
-| **合計** | **96** | **70** | **10** | **16** | **~64 人天** |
+| **合計** | **96** | **73** | **9** | **14** | **~59 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -484,6 +484,20 @@
 > `acceptance-test` PASS 7 / FAIL 0。
 > 統計：✅ 70、🟡 10、⬜ 16；剩餘上限 ~64 人天。
 > ⚠️ dev 庫新增殘留：已封存表單 `e2e-archive-probe`；其餘同前。
+>
+> **2026-10-03（Wave D，非同步收尾）—— #22＋#24＋#20＋小殘餘完成；後端 1044、前端 187 全綠。**
+> 四個獨立 worktree 並行，全部 merge 進 main：
+> #22 External Worker（`0d8a3c9`→`7c216f5`）：`flowable:type="external-worker"`＋
+> `/api/external/worker/**`（acquire／查詢／complete／fail／unacquire），
+> workerId 伺服器鑄造、allowedActions `external_worker`。
+> #24 Signal 廣播（`fa8bf07`→`90ea773`）：管理員 API 一對多喚醒＋`SIGNAL_BROADCAST` 稽核。
+> #20 usage-logs（`b6672c3`→`915f02c`）：接上真實稽核查詢（operatorId=`system:<id>`）。
+> 小殘餘（`7343eb9`／`19d37f2`／`b98bd94`／`6dfefcc`→`2c24417`）：form index V6、
+> 建立時顯示 callbackSecret、收件人規則收斂為唯一一份、撤回 reason 上限 1000。
+> 線上實測：worker acquire→complete→流程續行、別系統 404；2 實例 signal 一次全醒、第二次 404；
+> usage-logs 兩筆正確；reason 1001 → 400、正常 200。`acceptance-test` PASS 7 / FAIL 0。
+> 統計：✅ 73、🟡 9、⬜ 14；剩餘上限 ~59 人天。
+> ⚠️ dev 庫新增探測殘留：`probe-22w`、`probe-24sig`；已停用外部系統 `e2e-worker`／`e2e-worker2`。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是
