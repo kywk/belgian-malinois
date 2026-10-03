@@ -6,6 +6,8 @@ import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.lint.BpmnLintService;
+import com.bpm.core.service.DeploymentGitCommitter;
+import com.bpm.core.service.DeploymentGitException;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.repository.Deployment;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,6 +19,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @RestController
@@ -30,14 +33,17 @@ public class DeploymentController {
     private final RepositoryService repositoryService;
     private final BpmnLintService lintService;
     private final AuditEventPublisher auditPublisher;
+    private final DeploymentGitCommitter gitCommitter;
     private final Path bpmnDir;
 
     public DeploymentController(RepositoryService repositoryService, BpmnLintService lintService,
                                 AuditEventPublisher auditPublisher,
+                                DeploymentGitCommitter gitCommitter,
                                 @Value("${bpm.bpmn-definitions-dir:./bpmn-definitions}") String bpmnDir) {
         this.repositoryService = repositoryService;
         this.lintService = lintService;
         this.auditPublisher = auditPublisher;
+        this.gitCommitter = gitCommitter;
         // normalize + toAbsolutePath 一次做掉。少了這一步，下面的 startsWith
         // 圍堵檢查會對「合法」名稱誤判：bpmnDir 若是相對路徑 "./bpmn-definitions"，
         // 而 resolve(...).normalize() 會把 "./" 消掉變成 "bpmn-definitions/x"，
@@ -80,6 +86,29 @@ public class DeploymentController {
         }
     }
 
+    /**
+     * 部署 BPMN：lint → 寫檔 → Git commit（啟用時）→ Flowable deploy → 稽核。
+     *
+     * <h2>⚠️ 順序是刻意的（fail-closed）</h2>
+     *
+     * <p>Git commit（{@code bpm.bpmn.git.enabled=true} 時）排在 Flowable deploy
+     * <b>之前</b>，且 commit 失敗就回 503、完全不呼叫
+     * {@code repositoryService.createDeployment()}。
+     *
+     * <p>為什麼是這個方向：engine deploy 是對外生效點 —— 一旦成功，之後啟動的
+     * 案件就照新版本走。寧可「檔案與版控已更新、但沒有上線」（重送即可；
+     * 內容未變時不會多一筆 commit，只會把引擎部署補完成），也不要
+     * 「已上線、但版控沒有那一版」（事後無從 diff、無從回復，等於版控說了謊）。
+     *
+     * <p>啟用時 commit 在 DB 交易之內、但檔案系統不參與交易：若 commit 之後
+     * engine deploy 才失敗，DB 交易會回滾，檔案與 git commit 仍留著。
+     * 這是刻意選的一邊，理由同上 —— 多一筆未上線的版控紀錄可以靠重送收斂，
+     * 少一筆上線紀錄無法補救。
+     *
+     * <p>{@code bpm.bpmn.git.enabled=false}（預設）時整段跳過，部署行為與加入
+     * 版控前相同：不多做任何 I/O，稽核欄位集合不變（唯一差異是 detail 的 key
+     * 順序改為固定的插入序；原本的 {@code Map.of} 順序本來就隨 JVM 執行而異）。
+     */
     @PostMapping
     @Transactional("primaryTransactionManager")
     public Object deploy(@RequestParam("file") MultipartFile file,
@@ -110,12 +139,6 @@ public class DeploymentController {
         Files.createDirectories(bpmnDir);
         Files.writeString(target, xml);
 
-        // 3. Deploy to Flowable
-        Deployment deployment = repositoryService.createDeployment()
-                .name(deployName)
-                .addString(deployName != null ? deployName : "process.bpmn20.xml", xml)
-                .deploy();
-
         // ⚠️ operatorId 原本寫死 null（security-audit P2-4）。
         //
         // 部署 BPMN 是這個平台上最有後果的單一操作：它決定所有後續案件的
@@ -124,15 +147,47 @@ public class DeploymentController {
         //
         // 而且部署是覆寫式的：新版本一上線，之後啟動的案件全部照新規則走。
         // 這正是最需要問責的地方。
+        String operator = operatorId != null && !operatorId.isBlank() ? operatorId : "unknown";
+
+        // 部署內容的指紋。讓稽核紀錄能獨立驗證「當時上線的是哪一份」，
+        // 同時放進 commit message —— 版控與稽核各自可查，兩邊對得起來。
+        String xmlSha256 = sha256(xml);
+
+        // 3. Git commit（#61，僅在 bpm.bpmn.git.enabled=true 時）
+        String gitCommitId = null;
+        if (gitCommitter.isEnabled()) {
+            try {
+                gitCommitId = gitCommitter.commitFile(target,
+                        "deploy: " + safeName + " by " + operator + "\n\nxmlSha256: " + xmlSha256,
+                        operator);
+            } catch (DeploymentGitException e) {
+                // fail-closed：版控寫不進去就不部署（見方法 javadoc）。
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "Git commit 失敗，部署已中止: " + e.getMessage(), e);
+            }
+        }
+
+        // 4. Deploy to Flowable
+        Deployment deployment = repositoryService.createDeployment()
+                .name(deployName)
+                .addString(deployName != null ? deployName : "process.bpmn20.xml", xml)
+                .deploy();
+
+        // 5. Audit
+        var auditDetail = new LinkedHashMap<String, Object>();
+        auditDetail.put("deploymentId", deployment.getId());
+        auditDetail.put("name", deployment.getName());
+        // 部署的內容摘要：事後可據此確認當時上線的是哪一份 XML，
+        // 而不必依賴 deploymentId 仍存在。
+        auditDetail.put("xmlSha256", xmlSha256);
+        auditDetail.put("xmlBytes", xml.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+        // 有 commit 時記 short id，讓「這筆稽核」可以直接對到 Git 歷史。
+        // 內容未變（回 null）或未啟用時不記 —— 不製造一個指向不存在 commit 的欄位。
+        if (gitCommitId != null) {
+            auditDetail.put("gitCommit", gitCommitId.substring(0, 7));
+        }
         auditPublisher.publish(new AuditEvent(OperationType.BPMN_DEPLOY.name(),
-                operatorId != null && !operatorId.isBlank() ? operatorId : "unknown",
-                null, null,
-                Map.of("deploymentId", deployment.getId(),
-                        "name", deployment.getName(),
-                        // 部署的內容摘要：事後可據此確認當時上線的是哪一份 XML，
-                        // 而不必依賴 deploymentId 仍存在。
-                        "xmlSha256", sha256(xml),
-                        "xmlBytes", xml.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)));
+                operator, null, null, auditDetail));
 
         return Map.of("deploymentId", deployment.getId(), "name", deployment.getName(),
                 "lint", lintResult);

@@ -31,6 +31,12 @@
              3.1.1 是 3.x 最新版，其 parent POM 就是 spring-boot-starter-parent 4.1.0，
              與本專案的 4.1.1 同線。 -->
         <springdoc.version>3.1.1</springdoc.version>
+        <!-- BPMN 部署的 Git 版控（#61）。7.8.0 是 JGit 最新版（Java 17+，Boot 4 可用）。
+             用 JGit 而不是 exec `git`：prod 映像只保證有 JRE，不保證有 git binary，
+             而「部署流程取決於容器裡剛好裝了什麼」是部署環境的隱性依賴。
+             走 library 也讓 commit 失敗是 Java 例外，可以 fail-closed（503）處理，
+             不必解析 CLI 的 exit code 與輸出。 -->
+        <jgit.version>7.8.0.202609011348-r</jgit.version>
     </properties>
 
     <dependencies>
@@ -106,6 +112,13 @@
             <groupId>org.flowable</groupId>
             <artifactId>flowable-bpmn-layout</artifactId>
             <version>${flowable.version}</version>
+        </dependency>
+        <!-- BPMN 版控（#61）。spec §技術棧：「BPMN XML 版控於 Git（bpmn-definitions/）」。
+             目前只有寫檔＋稽核 SHA-256，Git commit 由 DeploymentGitCommitter 補上。 -->
+        <dependency>
+            <groupId>org.eclipse.jgit</groupId>
+            <artifactId>org.eclipse.jgit</artifactId>
+            <version>${jgit.version}</version>
         </dependency>
         <!-- Flyway 接手應用表的 schema（Flowable 的 ACT_*／FLW_* 仍由 flowable.database-schema-update 管理）。
              Boot 4 起 Flyway 自動配置移入 spring-boot-starter-flyway（S5-0e），
