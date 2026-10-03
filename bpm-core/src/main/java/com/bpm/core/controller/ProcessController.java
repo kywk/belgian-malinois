@@ -7,6 +7,10 @@ import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.audit.model.OperationType;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.dto.StartProcessRequest;
+import com.bpm.core.form.model.FormData;
+import com.bpm.core.form.model.FormDefinition;
+import com.bpm.core.form.service.FormService;
+import com.bpm.core.form.validation.FormSchemaValidator;
 import com.bpm.core.notify.NotifyPublisher;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.security.ProcessAccessGuard;
@@ -19,12 +23,20 @@ import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/process-instances")
@@ -106,6 +118,12 @@ public class ProcessController {
      */
     private static final int MAX_CANCEL_REASON_LENGTH = 1000;
 
+    private static final Logger log = LoggerFactory.getLogger(ProcessController.class);
+
+    /** {@code formData.dataJson} 的型別：JSON 物件 → 流程變數 map（#60）。 */
+    private static final TypeReference<Map<String, Object>> FORM_DATA_TYPE =
+            new TypeReference<>() {};
+
     private final RuntimeService runtimeService;
     private final RepositoryService repositoryService;
     private final TaskService taskService;
@@ -116,6 +134,12 @@ public class ProcessController {
     private final ProcessInvolvementService involvementService;
     private final ApplicantIdentityLookup applicantLookup;
     private final NotifyPublisher notifyPublisher;
+    // #60：表單資料隨啟動落地。FormService 是唯一的表單寫入入口；
+    // FormSchemaValidator 是唯一的 schema 規則（與 FormDataController.submit
+    // 同一份，不在此重寫「哪些欄位必填、型別是什麼」）。
+    private final FormService formService;
+    private final FormSchemaValidator schemaValidator;
+    private final ObjectMapper objectMapper;
 
     public ProcessController(RuntimeService runtimeService, RepositoryService repositoryService,
                              TaskService taskService, HistoryService historyService,
@@ -124,7 +148,10 @@ public class ProcessController {
                              ProcessAccessGuard accessGuard,
                              ProcessInvolvementService involvementService,
                              ApplicantIdentityLookup applicantLookup,
-                             NotifyPublisher notifyPublisher) {
+                             NotifyPublisher notifyPublisher,
+                             FormService formService,
+                             FormSchemaValidator schemaValidator,
+                             ObjectMapper objectMapper) {
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
         this.taskService = taskService;
@@ -135,6 +162,9 @@ public class ProcessController {
         this.involvementService = involvementService;
         this.applicantLookup = applicantLookup;
         this.notifyPublisher = notifyPublisher;
+        this.formService = formService;
+        this.schemaValidator = schemaValidator;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -172,6 +202,54 @@ public class ProcessController {
      * 預先檢查與實際啟動之間定義<b>真的可能</b>被刪（管理員停用流程的
      * 動作與使用者的啟動請求同時發生）。那是預先檢查無法消除的
      * 競爭窗口，沒有這一層它就會變回 500。
+     *
+     * <h2>#60：表單資料與流程啟動的跨 DB 原子性</h2>
+     *
+     * <p>「送單」對使用者是一個動作，但它橫跨兩個資料庫：流程實例在
+     * {@code bpm_core_db}（Flowable）、表單資料在 {@code bpm_form_db}。
+     * 兩者各自有 transaction manager（{@code primaryTransactionManager}／
+     * {@code formTransactionManager}），<b>沒有 XA</b>。在單一請求內
+     * 讓兩者同生共死，靠的是下面這個順序與一個補償：
+     *
+     * <ol>
+     *   <li><b>所有驗證都在任何寫入之前。</b>形狀、schema、受保護變數、
+     *       與 {@code variables} 的重疊，全部在啟動之前完成 —— 400 的
+     *       零副作用不是靠回滾，而是根本沒有東西需要回滾。</li>
+     *   <li><b>表單寫入放在最後。</b>其後只剩回應組裝與主交易 commit，
+     *       因此「主交易失敗」的窗口被壓到最小。</li>
+     *   <li><b>表單寫入失敗 → 往外丟。</b>{@code formService.submitData}
+     *       自己的 form 交易會回捲；例外離開本方法後主交易也回捲 ——
+     *       案件不存在，兩邊一致。</li>
+     *   <li><b>表單寫入成功、主交易 commit 才失敗 → 補償刪除。</b>
+     *       這是沒有 XA 時唯一無法靠順序消除的窗口。做法是在主交易註冊
+     *       {@code afterCompletion}：只有 {@code STATUS_ROLLED_BACK} 時
+     *       才以新的 form 交易刪掉那一列。⚠️ 補償是 <b>best-effort</b>：
+     *       刪除失敗只記 ERROR、無法讓任何東西回滾（form 早已 commit），
+     *       留下的是「有表單、沒有案件」的孤兒列，可由日誌追查。</li>
+     * </ol>
+     *
+     * <p>⚠️ <b>刻意不用 XA</b>：三資料庫的分散式交易會把 commit 變成兩階段、
+     * 需要 DTC 與跨服務協調，而本專案的規模與部署形態（單體 + 多 DataSource）
+     * 不值得那個代價（同 ADR-001 的裁決）。這裡選的是「順序 + 補償」，
+     * 並接受一個已知的觀測窗口：稽核寫入掛在主交易的 {@code beforeCommit}，
+     * 若它成功而 commit 本身失敗，會留下「多一筆稽核、少一個案件」的紀錄
+     * —— 與 {@link AuditEventPublisher} 記載的取捨相同（多記可反查，
+     * 漏記無從發現）。
+     *
+     * <h2>#60：formData 的欄位語意</h2>
+     *
+     * <ul>
+     *   <li>{@code formDefinitionId} 先當定義 id 查、查不到再當 formKey 查
+     *       最新 published（前端只知道 BPMN 的 formKey），見
+     *       {@link FormService#findDefinitionByIdOrKey}。</li>
+     *   <li>{@code dataJson} 的規則不在此重寫：{@link FormSchemaValidator}
+     *       是唯一一份，與 {@code FormDataController.submit} 共用。</li>
+     *   <li><b>與 {@code variables} 重疊 → 400</b>：同一欄位兩處都給時
+     *       靜默選一邊，呼叫端會以為另一邊生效了。</li>
+     *   <li><b>推導出的變數逐 key 過 {@link #isProtectedVariable}</b>：
+     *       schema 驗證在「查不到定義」時會略過（#55 已知缺口），
+     *       這道檢查是那個缺口下仍必須存在的第二層。</li>
+     * </ul>
      */
     @PostMapping
     @Transactional("primaryTransactionManager")
@@ -216,6 +294,61 @@ public class ProcessController {
                             "不允許以流程變數指定受保護的變數: " + name
                                     + "（initiator 由登入身分決定；_ 前綴為伺服器內部狀態）");
                 });
+
+        // ── #60：formData 的形狀、驗證與變數推導（全部在任何寫入之前）────
+        // 解析後的定義 id 要留給最後的 submitData，因此宣告在區塊之外。
+        String formDefinitionId = null;
+        if (req.formData() != null) {
+            StartProcessRequest.FormDataPayload formData = req.formData();
+            if (formData.formDefinitionId() == null || formData.formDefinitionId().isBlank()
+                    || formData.dataJson() == null || formData.dataJson().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "formData 需要 formDefinitionId 與 dataJson 兩個非空欄位："
+                                + "前者識別表單定義，後者是 JSON 物件字串。");
+            }
+
+            // 前端只知道 BPMN 的 formKey；FormData.formDefinitionId 存的是定義 id。
+            // 解析不到時沿用原值，讓 FormSchemaValidator 走既有的「查不到 → 略過」
+            // 路徑（#55 已知缺口），而不是在這裡另外發明一種 404。
+            FormDefinition def = formService.findDefinitionByIdOrKey(formData.formDefinitionId());
+            formDefinitionId = def != null ? def.getId() : formData.formDefinitionId();
+
+            // 內容驗證：與 FormDataController.submit 同一份規則、同一種訊息形狀。
+            // 違規在此中止 —— 流程與表單都不會動（零副作用）。
+            List<FormSchemaValidator.Violation> violations =
+                    schemaValidator.validate(formDefinitionId, formData.dataJson());
+            if (!violations.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "表單資料不符表單定義的 schema：" + violations.stream()
+                                .map(v -> "'" + v.fieldId() + "' " + v.reason())
+                                .collect(Collectors.joining("；")));
+            }
+
+            Map<String, Object> derived = parseFormDataJson(formData.dataJson());
+
+            // 同一欄位不可兩處都給：靜默選一邊會讓呼叫端以為另一邊生效。
+            for (String name : derived.keySet()) {
+                if (vars.containsKey(name)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "變數 '" + name + "' 同時出現在 variables 與 formData。"
+                                    + "同一個欄位只能提供一處，避免兩邊值不同時的靜默分歧。");
+                }
+            }
+
+            // 推導出的變數與 variables 一樣會進引擎，必須過同一條保護名單。
+            // 尤其 formDefinitionId 查不到定義時 schema 驗證會略過（#55），
+            // 這一層是那個缺口下的實際防線（initiator／onBehalfOf／_ 前綴）。
+            derived.keySet().stream()
+                    .filter(ProcessController::isProtectedVariable)
+                    .findFirst()
+                    .ifPresent(name -> {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "不允許以表單欄位指定受保護的變數: " + name
+                                        + "（initiator 由登入身分決定；_ 前綴為伺服器內部狀態）");
+                    });
+
+            vars.putAll(derived);
+        }
 
         // 存在性檢查放在所有 400 之後：請求形狀不對與資源不存在是兩件事，
         // 先把形狀講清楚，呼叫端才知道要改 payload 還是改流程選擇。
@@ -269,7 +402,68 @@ public class ProcessController {
                     "assignee", currentTask.getAssignee() != null ? currentTask.getAssignee() : ""));
             result.put("currentTaskCount", currentTasks.size());
         }
+
+        // ── #60：表單寫入放在最後（跨 DB 原子性見本方法 javadoc）────────
+        // 任務查詢與回應組裝都在上面完成，其後只剩這裡的寫入與 return，
+        // 「表單已 commit、案件卻回滾」的窗口因此只剩主交易 commit 本身。
+        if (formDefinitionId != null) {
+            FormData formData = new FormData();
+            formData.setProcessInstanceId(pi.getProcessInstanceId());
+            formData.setFormDefinitionId(formDefinitionId);
+            formData.setDataJson(req.formData().dataJson());
+            formData.setSubmittedBy(callerId);
+            FormData saved = formService.submitData(formData);
+
+            // 主交易 commit 失敗時補償刪除（form 交易已 commit，回滾不了它）。
+            // 註冊需要進行中的交易同步；本方法有 @Transactional，必定成立。
+            registerFormDataCompensation(saved.getId());
+
+            result.put("formDataId", saved.getId());
+        }
         return result;
+    }
+
+    /**
+     * {@code formData.dataJson} → 流程變數 map（#60）。
+     *
+     * <p>先經過 {@link FormSchemaValidator#validate} 才呼叫這裡，正常情況
+     * 必定是合法 JSON 物件；但仍明確擋下例外 —— validator 在查不到定義時
+     * 會略過驗證（#55 已知缺口），那條路徑的資料形狀沒有保證。違規一律 400：
+     * dataJson 的形狀是呼叫端的輸入問題，不是伺服器故障。
+     */
+    private Map<String, Object> parseFormDataJson(String dataJson) {
+        try {
+            return objectMapper.readValue(dataJson, FORM_DATA_TYPE);
+        } catch (JacksonException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "formData.dataJson 必須是 JSON 物件（{...}）：" + e.getOriginalMessage());
+        }
+    }
+
+    /**
+     * 註冊「主交易回滾 → 刪除剛寫入的表單資料」的補償（#60）。
+     *
+     * <p>表單交易先 commit，主交易（案件）後 commit；兩者沒有 XA，
+     * 因此主交易 rollback 時 form 列已經落地，只能補償刪除。
+     * 只有 {@code STATUS_ROLLED_BACK} 才動作 —— commit 成功時什麼都不做。
+     *
+     * <p>⚠️ 補償失敗只記 ERROR：此時沒有進行中的交易可以回滾，也無法把
+     * 失敗轉成對呼叫端的回應（主交易已經失敗）。留下的是「有表單、
+     * 沒有案件」的孤兒列，可由日誌追查 —— 這是沒有 XA 時接受的取捨。
+     */
+    private void registerFormDataCompensation(String formDataId) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status != TransactionSynchronization.STATUS_ROLLED_BACK) return;
+                try {
+                    formService.deleteDataById(formDataId);
+                } catch (Exception e) {
+                    log.error("主交易回滾後的 form-data 補償刪除失敗（formDataId={}）："
+                            + "表單資料已落地但案件不存在，需人工清理。", formDataId, e);
+                }
+            }
+        });
     }
 
     /**

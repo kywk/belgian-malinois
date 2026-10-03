@@ -24,16 +24,46 @@ import java.util.Map;
  * （record 拿到的是已反序列化的值，無法知道欄位是否「送成 null」），
  * 但對呼叫端的契約相同。
  *
+ * <h2>#60：{@code formData} —— 隨啟動一起送出的表單資料</h2>
+ *
+ * <p>啟動流程與表單資料是兩個資料庫（{@code bpm_core_db}／{@code bpm_form_db}），
+ * 但產品上「送單」是一個動作。呼叫端因此可以在同一個請求裡帶上表單內容，
+ * 由 {@code ProcessController} 依序完成 schema 驗證、變數推導、流程啟動與
+ * 表單落地（跨 DB 原子性見該方法的 javadoc）。
+ *
+ * <p>欄位刻意<b>可選</b>：只帶 {@code variables} 的既有呼叫端（外部系統、
+ * 既有測試、舊版前端）不受影響，行為與 #60 之前完全相同。
+ *
+ * <p>{@code formDefinitionId} 的語意沿用 {@code FormData.formDefinitionId}，
+ * 但多了一層解析：先當定義 id（UUID）查，查不到再當 formKey 查最新
+ * published 版本 —— 前端只知道 BPMN 裡的 formKey，而
+ * {@code FormSchemaValidator} 需要的是定義 id（見 ProcessController）。
+ *
  * @param processDefinitionKey 要啟動的流程 key
  * @param businessKey          業務單號（可為 null）
  * @param initiator            <b>不可由呼叫端指定</b>（#66）。刻意保留，只用來拒絕。
  * @param variables            業務變數。不得包含受保護的變數
  *                            （{@code initiator}／{@code effectiveInitiator}／
  *                            {@code onBehalfOf}／{@code _} 前綴），否則回 400。
+ * @param formData             隨啟動送出的表單資料（可為 null）。欄位名不得與
+ *                            {@code variables} 重疊，推導出的變數同樣套用保護名單。
  */
 public record StartProcessRequest(
         String processDefinitionKey,
         String businessKey,
         String initiator,
-        Map<String, Object> variables
-) {}
+        Map<String, Object> variables,
+        FormDataPayload formData
+) {
+
+    /**
+     * 啟動流程時一併落地的表單資料。
+     *
+     * @param formDefinitionId 表單定義的 id，或 BPMN 使用的 formKey（由 server 解析）
+     * @param dataJson         表單填寫內容（JSON 物件字串；欄位 id == 流程變數名，spec §8.5）
+     */
+    public record FormDataPayload(
+            String formDefinitionId,
+            String dataJson
+    ) {}
+}
