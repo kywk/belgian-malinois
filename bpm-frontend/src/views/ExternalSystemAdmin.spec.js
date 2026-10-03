@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 
 /**
  * #68a：外部系統管理頁的 {@code allowOnBehalfOf} 開關與 resetForm() 的授權繼承。
@@ -61,10 +61,11 @@ vi.mock('../services/externalApi.js', () => ({
   updateExternalSystem: vi.fn(async () => ({})),
   deleteExternalSystem: vi.fn(async () => ({})),
   rotateKey: vi.fn(async () => ({ apiKey: 'sk-rotated' })),
+  rotateCallbackSecret: vi.fn(async () => ({ callbackSecret: 'cs-rotated' })),
 }))
 
 const Admin = (await import('./ExternalSystemAdmin.vue')).default
-const { getExternalSystems, createExternalSystem, updateExternalSystem } =
+const { getExternalSystems, createExternalSystem, updateExternalSystem, rotateCallbackSecret } =
   await import('../services/externalApi.js')
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
@@ -75,6 +76,9 @@ const erpRow = {
   systemId: 'erp',
   systemName: 'ERP 系統',
   apiKey: '***',
+  // #21：GET 對已設定的回呼密鑰一律回傳 ***（未設定是 null），
+  // 明文只在建立／輪換的回應出現一次。
+  callbackSecret: '***',
   contactEmail: 'erp@example.com',
   allowedProcessKeys: '["leave-approval"]',
   allowedActions: '["start_process"]',
@@ -235,7 +239,7 @@ describe('ExternalSystemAdmin 的代發授權開關（#68a）', () => {
     expect(payload.allowOnBehalfOf).toBe(true)
   })
 
-  it('payload 不得夾帶唯讀欄位（id / apiKey / lastUsedAt）', async () => {
+  it('payload 不得夾帶唯讀欄位（id / apiKey / callbackSecret / lastUsedAt）', async () => {
     // 改動前 editSystem() 是 Object.assign(form, row)，整列都進了表單，
     // 於是 submit 會把 id 與 apiKey 一起送出去。後端擋掉它（READ_ONLY），
     // 但那是後端的防護，不是前端該做的事 —— 而且 apiKey 欄位若哪天改成
@@ -250,6 +254,9 @@ describe('ExternalSystemAdmin 的代發授權開關（#68a）', () => {
     const payload = updateExternalSystem.mock.calls[0][1]
     expect(payload).not.toHaveProperty('id')
     expect(payload).not.toHaveProperty('apiKey')
+    // #21：row 現在帶著 callbackSecret（***），但它是 READ_ONLY 的狀態欄位，
+    // 不該被當成可寫入值送回後端（送 *** 覆蓋是這個欄位最糟的失敗形狀）。
+    expect(payload).not.toHaveProperty('callbackSecret')
     expect(payload).not.toHaveProperty('lastUsedAt')
     expect(payload).not.toHaveProperty('createdAt')
     expect(payload.systemName).toBe('ERP 系統')
@@ -406,5 +413,231 @@ describe('ExternalSystemAdmin 的候選群組白名單（#88 政策 B）', () =>
     // 空值必須顯示成「不限制」，不能顯示成一個空欄位 ——
     // 「空白欄位」與「不限制」的差別正是授權範圍的差別。
     expect(wrapper.text()).toContain('不限制')
+  })
+})
+
+/**
+ * #21：外部系統管理頁的回呼密鑰輪換 UI。
+ *
+ * <h3>缺陷形狀：能力存在、入口不存在</h3>
+ *
+ * <p>後端早已完成（建立回傳明文一次、{@code rotate-callback-secret} 回傳新明文
+ * 一次、列表／詳情的 {@code callbackSecret} 是 {@code ***} 或 {@code null}），
+ * 但管理頁沒有入口。V5 migration 之後既有系統的 callbackSecret 是 null
+ * （＝不能回呼），管理員在畫面上既看不出來，也沒有辦法補發 ——
+ * 該系統的回呼永遠 401，而唯一能做的事（rotate）不在 UI 上。
+ * 這與 #6 的催辦同一個形狀：畫面看起來沒事，實際能力不存在。
+ *
+ * <h3>兩件必須釘住的事</h3>
+ *
+ * <ol>
+ *   <li><b>端點與 id 正確</b>：輪換是破壞性的（舊密鑰立刻失效），
+ *       打錯 id 會讓另一個系統的回呼中斷。端點路徑由
+ *       {@code services/externalApi.spec.js} 釘住（本檔 mock 掉 service，
+ *       所以路徑寫錯時本檔不會紅 —— 這是刻意的分工）。</li>
+ *   <li><b>明文只呈現一次</b>：後端只在 rotate 的回應裡給明文，
+ *       列表／詳情永遠是 {@code ***}；前端若把明文留在狀態裡，就多了一個
+ *       「重新打開對話框就看得到」的曝露面。關閉對話框即清掉。</li>
+ * </ol>
+ *
+ * <h3>⚠️ 失敗的錯誤訊息由 http.js 攔截器負責（view 不重複 toast）</h3>
+ *
+ * <p>與 {@code MyApplications.vue} 的催辦同一條規則（見該檔的註解）：
+ * 4xx／5xx 的提示集中在 {@code services/http.js}，後端 message 會原樣出現
+ * （{@code http.spec.js} 的「優先顯示後端給的 message」）。本檔 mock 掉了
+ * service，所以失敗那條驗的是「不顯示明文、不顯示成功、view 不重複顯示錯誤、
+ * 不產生未處理的 rejection」，而不是訊息內容本身。
+ *
+ * <h3>⚠️ 這裡用「完整 mount」＋真的點按鈕</h3>
+ *
+ * <p>與前兩組不同：本組要驗的正是「畫面上有沒有那一欄、那一顆按鈕，
+ * 以及對話框裡有沒有真的渲染出明文」。{@code shallow} 之下 el-table 的 slot
+ * 不渲染，按鈕與對話框內容都不存在 —— 那會讓斷言變成對空字串的空斷言。
+ * {@code ElMessageBox.confirm} 以 spy 取代（真的對話框在 jsdom 裡沒有人按）。
+ *
+ * <h3>負向控制組（實測：把實作改壞再跑本檔）</h3>
+ *
+ * <ul>
+ *   <li>service 的端點改成 {@code rotate-key}：{@code externalApi.spec.js}
+ *       紅 1 條（路徑那條），本檔 24 條全綠 —— 端點防線刻意放在 service 層，
+ *       本檔 mock 掉 service 所以看不到，這是分工不是漏洞。</li>
+ *   <li>拿掉對話框輸入框的 {@code :model-value="newCallbackSecret"}：
+ *       本檔紅 1 條（「明文真的渲染在對話框裡」，{@code input.value} 是空的），
+ *       其餘 23 條綠 —— 只有 state 有值不算交付。</li>
+ *   <li>拿掉對話框的 {@code @closed="clearCallbackSecret"}：本檔紅 1 條
+ *       （「明文不得留在元件裡」），其餘 23 條綠。</li>
+ *   <li>拿掉列表的「回呼密鑰」欄：本檔紅 2 條（狀態顯示、以及 rotate 後
+ *       狀態更新那條的前置條件），其餘 22 條綠。</li>
+ * </ul>
+ */
+describe('ExternalSystemAdmin 的回呼密鑰輪換（#21）', () => {
+  beforeEach(() => {
+    getExternalSystems.mockClear()
+    getExternalSystems.mockResolvedValue([])
+    rotateCallbackSecret.mockClear()
+    rotateCallbackSecret.mockResolvedValue({ systemId: 'erp', callbackSecret: 'cs-rotated-1' })
+    // ElMessage 渲染在 document.body 上（完整 mount 的 wrapper 之外），
+    // 不清掉會讓下一條的斷言看到上一條的訊息。
+    document.body.innerHTML = ''
+  })
+
+  /** 完整 mount：el-table 的 slot 與 el-dialog 的內容才真的會渲染。 */
+  async function mountFull(rows = [erpRow]) {
+    getExternalSystems.mockResolvedValue(rows)
+    const wrapper = mount(Admin, { global: { plugins: [ElementPlus] } })
+    await flush()
+    return wrapper
+  }
+
+  const rotateButton = (wrapper) => {
+    const btn = wrapper.findAll('button').find((b) => b.text().includes('輪換回呼密鑰'))
+    expect(btn, '畫面上必須有「輪換回呼密鑰」按鈕（否則後面的斷言是空的）').toBeTruthy()
+    return btn
+  }
+
+  const callbackDialog = (wrapper) =>
+    wrapper.findAllComponents({ name: 'ElDialog' })
+      .find((d) => d.props('title') === '回呼密鑰')
+
+  // ── 狀態顯示：已設定（***）／未設定（null）──────────────────────
+
+  it('列表必須顯示「回呼密鑰：已設定／未設定」', async () => {
+    const wrapper = await mountFull([
+      { ...erpRow, callbackSecret: '***' },
+      // V5 migration 之後的既有系統：null = 尚未設定 = 不能回呼。
+      { ...erpRow, systemId: 'legacy', callbackSecret: null },
+    ])
+
+    expect(wrapper.text()).toContain('回呼密鑰')
+    expect(wrapper.text(), '已設定的密鑰在列表是 ***，必須翻成人看得懂的狀態').toContain('已設定')
+    expect(wrapper.text(), 'null 必須顯示成未設定，不能顯示成空白欄位').toContain('未設定')
+  })
+
+  // ── 輪換：端點、id、確認框 ─────────────────────────────────────
+
+  it('按下輪換並確認後，以該列的 systemId 呼叫 rotate-callback-secret', async () => {
+    const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    const wrapper = await mountFull()
+
+    await rotateButton(wrapper).trigger('click')
+    await flush()
+
+    expect(confirmSpy, '輪換會讓舊密鑰立刻失效，必須先確認').toHaveBeenCalledTimes(1)
+    expect(rotateCallbackSecret).toHaveBeenCalledTimes(1)
+    expect(rotateCallbackSecret).toHaveBeenCalledWith('erp')
+  })
+
+  it('取消確認時不得呼叫端點、不得打開明文對話框', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockRejectedValue('cancel')
+    const wrapper = await mountFull()
+
+    await rotateButton(wrapper).trigger('click')
+    await flush()
+
+    expect(rotateCallbackSecret).not.toHaveBeenCalled()
+    expect(state(wrapper).showCallbackSecret).toBe(false)
+  })
+
+  // ── 成功：明文只呈現一次 ───────────────────────────────────────
+
+  it('輪換成功：明文真的渲染在對話框裡，並提醒「僅顯示一次」', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    rotateCallbackSecret.mockResolvedValue({ systemId: 'erp', callbackSecret: 'cs-rotated-1' })
+    const wrapper = await mountFull()
+
+    await rotateButton(wrapper).trigger('click')
+    await flush()
+    await flush()
+
+    const s = state(wrapper)
+    expect(s.showCallbackSecret).toBe(true)
+    expect(s.newCallbackSecret).toBe('cs-rotated-1')
+
+    // ⚠️ 明文在 <input> 的 value 裡，不在 textContent 裡 ——
+    // 只斷 wrapper.text() 會是一條永遠不會紅的空斷言。
+    const dialog = callbackDialog(wrapper)
+    expect(dialog, '必須存在「回呼密鑰」對話框').toBeTruthy()
+    const input = dialog.find('input')
+    expect(input.exists(), '明文必須真的渲染出來（只有 state 有值不算交付）').toBe(true)
+    expect(input.element.value).toBe('cs-rotated-1')
+    expect(dialog.text(), '必須明確提醒只顯示一次、要立刻保存').toContain('僅顯示一次')
+  })
+
+  it('輪換成功後狀態欄必須跟著更新（legacy 由未設定變已設定）', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    // 第一次 GET：legacy 尚未設定；rotate 後重載：已設定。
+    getExternalSystems
+      .mockResolvedValueOnce([{ ...erpRow, systemId: 'legacy', callbackSecret: null }])
+      .mockResolvedValueOnce([{ ...erpRow, systemId: 'legacy', callbackSecret: '***' }])
+    const wrapper = mount(Admin, { global: { plugins: [ElementPlus] } })
+    await flush()
+
+    expect(wrapper.text(), '前置條件：rotate 前必須顯示未設定').toContain('未設定')
+
+    await rotateButton(wrapper).trigger('click')
+    await flush()
+    await flush()
+
+    expect(getExternalSystems, 'rotate 後必須重載列表（狀態欄來自列表資料）')
+      .toHaveBeenCalledTimes(2)
+    expect(wrapper.text(), 'rotate 後仍顯示未設定＝畫面說的和事實不同').toContain('已設定')
+    expect(wrapper.text()).not.toContain('未設定')
+  })
+
+  it('關閉對話框後明文從元件狀態消失（僅顯示一次的另一半）', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    const wrapper = await mountFull()
+
+    await rotateButton(wrapper).trigger('click')
+    await flush()
+    await flush()
+
+    const s = state(wrapper)
+    expect(s.newCallbackSecret).toBe('cs-rotated-1')
+
+    // 模擬使用者關掉對話框。jsdom 不會跑 CSS transition，所以不觸發真的
+    // 關閉動畫，直接對對話框元件發出 el-dialog 的 closed 事件 ——
+    // 那正是元件接的 @closed。
+    s.showCallbackSecret = false
+    await wrapper.vm.$nextTick()
+    await callbackDialog(wrapper).vm.$emit('closed')
+
+    expect(s.newCallbackSecret, '明文不得留在元件裡等下一次被打開').toBe('')
+    expect(callbackDialog(wrapper).find('input').element.value).toBe('')
+  })
+
+  it('明文不得進入建立／編輯表單狀態', async () => {
+    const wrapper = await mountFull()
+    const s = state(wrapper)
+
+    s.editSystem(erpRow)
+    // form 只認 blankForm() 的欄位；callbackSecret 是唯讀的狀態欄位。
+    expect(s.form.callbackSecret).toBeUndefined()
+  })
+
+  // ── 失敗：不假裝成功 ──────────────────────────────────────────
+
+  it('輪換失敗：不得顯示明文、不得顯示成功，錯誤由 http 攔截器負責', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    const successSpy = vi.spyOn(ElMessage, 'success')
+    const errorSpy = vi.spyOn(ElMessage, 'error')
+    rotateCallbackSecret.mockRejectedValue({
+      response: { status: 500, data: { message: '伺服器錯誤' } },
+    })
+    const wrapper = await mountFull()
+
+    await rotateButton(wrapper).trigger('click')
+    await flush()
+    await flush()
+
+    const s = state(wrapper)
+    expect(rotateCallbackSecret).toHaveBeenCalledWith('erp')
+    expect(s.showCallbackSecret, '失敗時不得打開一次性明文對話框').toBe(false)
+    expect(s.newCallbackSecret).toBe('')
+    expect(successSpy, '失敗不得顯示成功（假成功是本專案最優先消滅的形狀）')
+      .not.toHaveBeenCalled()
+    // 錯誤訊息由 services/http.js 的攔截器顯示；view 若再顯示一次會變成
+    // 兩個 toast（與 MyApplications.vue 的催辦同一條規則）。
+    expect(errorSpy).not.toHaveBeenCalled()
   })
 })

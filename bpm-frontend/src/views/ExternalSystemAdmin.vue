@@ -42,15 +42,29 @@
           </el-tag>
         </template>
       </el-table-column>
+      <!--
+        #21：回呼密鑰的「有／沒有」必須看得見。
+        後端列表／詳情把已設定的密鑰遮蔽成 ***、未設定保持 null ——
+        管理員要能一眼看出哪些系統還不能回呼（V5 migration 後的既有系統
+        預設是 null），而不是逐一 rotate 才發現。
+      -->
+      <el-table-column label="回呼密鑰" width="100">
+        <template #default="{ row }">
+          <el-tag :type="row.callbackSecret ? 'success' : 'info'" size="small">
+            {{ row.callbackSecret ? '已設定' : '未設定' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="最後使用" width="180">
         <template #default="{ row }">{{ fmt(row.lastUsedAt) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="240">
+      <el-table-column label="操作" width="360">
         <template #default="{ row }">
           <el-button size="small" @click="editSystem(row)">編輯</el-button>
           <el-button size="small" :type="row.enabled ? 'danger' : 'success'"
             @click="toggleEnabled(row)">{{ row.enabled ? '停用' : '啟用' }}</el-button>
           <el-button size="small" type="warning" @click="handleRotate(row)">輪換 Key</el-button>
+          <el-button size="small" type="warning" @click="handleRotateCallbackSecret(row)">輪換回呼密鑰</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -141,6 +155,27 @@
         </template>
       </el-input>
     </el-dialog>
+
+    <!--
+      #21 Callback Secret Display Dialog。
+      ⚠️ 與 API Key 分開一個對話框是刻意的：兩把密鑰的失效後果不同
+      （Key 失效 → 所有 API 401；回呼密鑰失效 → 回呼 401），
+      訊息也要分別說清楚。@closed 清掉狀態讓「僅顯示一次」名副其實 ——
+      關掉之後元件不再持有明文（後端也不會再回傳同一把）。
+    -->
+    <el-dialog v-model="showCallbackSecret" title="回呼密鑰" width="500px"
+      :close-on-click-modal="false" @closed="clearCallbackSecret">
+      <el-alert type="warning" title="此密鑰僅顯示一次，請立即複製保存" show-icon :closable="false" style="margin-bottom:12px" />
+      <el-input :model-value="newCallbackSecret" readonly>
+        <template #append>
+          <el-button @click="copyCallbackSecret">複製</el-button>
+        </template>
+      </el-input>
+      <div style="color:#909399;font-size:13px;line-height:1.6;margin-top:8px">
+        外部系統回呼時必須以這把密鑰計算 <code>X-Callback-Signature</code>。
+        舊密鑰已立即失效，尚未換用的系統會收到 401。
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -148,12 +183,14 @@
 import { ref, reactive, onMounted } from 'vue'
 import { formatDateTime } from '../utils/datetime.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getExternalSystems, createExternalSystem, updateExternalSystem, deleteExternalSystem, rotateKey } from '../services/externalApi.js'
+import { getExternalSystems, createExternalSystem, updateExternalSystem, deleteExternalSystem, rotateKey, rotateCallbackSecret } from '../services/externalApi.js'
 
 const systems = ref([])
 const showCreate = ref(false)
 const showKey = ref(false)
 const newApiKey = ref('')
+const showCallbackSecret = ref(false)
+const newCallbackSecret = ref('')
 const editingId = ref(null)
 const actions = ref([])
 
@@ -301,6 +338,59 @@ async function handleRotate(row) {
 function copyKey() {
   navigator.clipboard.writeText(newApiKey.value)
   ElMessage.success('已複製')
+}
+
+/**
+ * 輪換回呼密鑰（#21）。
+ *
+ * <p>與 {@link handleRotate} 同一套模式，但失敗路徑不同：這裡用 try/catch
+ * 吞掉 API 的 rejection。錯誤提示由 {@code services/http.js} 的攔截器
+ * 統一顯示（後端訊息會原樣出現在 toast），view 若再顯示一次會變成兩個 toast
+ * —— 與 {@code MyApplications.vue} 的催辦同一條規則。吞掉的另一個目的是
+ * 不產生 unhandled rejection。
+ *
+ * <p>失敗時<b>絕不</b>把 {@code result.callbackSecret} 以外的東西當成明文：
+ * 只有 await 成功才打開對話框。後端回傳的明文只存在 {@link newCallbackSecret}
+ * 直到對話框關閉（見模板的 @closed）。
+ */
+async function handleRotateCallbackSecret(row) {
+  try {
+    await ElMessageBox.confirm(
+      '舊回呼密鑰將立即失效，該系統必須改用新密鑰簽章才能回呼。確定要輪換？',
+      '輪換回呼密鑰', { type: 'warning' })
+  } catch {
+    return // 使用者取消；ElMessageBox 以 reject 表示取消，不是失敗
+  }
+
+  try {
+    const result = await rotateCallbackSecret(row.systemId)
+    newCallbackSecret.value = result.callbackSecret
+    showCallbackSecret.value = true
+  } catch {
+    /* 錯誤提示由 http 攔截器負責；明文與成功提示都不出現 */
+    return
+  }
+
+  // 狀態欄必須跟著變：legacy 系統（null）rotate 後是「已設定」，
+  // 不重載的話畫面會停在舊狀態 —— 那正是「畫面說的和事實不同」的形狀。
+  // 重載失敗不影響已完成的輪換（明文已在對話框裡），錯誤由攔截器提示。
+  await load().catch(() => {})
+}
+
+function copyCallbackSecret() {
+  navigator.clipboard.writeText(newCallbackSecret.value)
+  ElMessage.success('已複製')
+}
+
+/**
+ * 對話框關閉後清掉明文 —— 這是「僅顯示一次」的一半。
+ *
+ * <p>後端只在輪換當下回傳明文（列表／詳情永遠是 *** 或 null），所以元件
+ * 留著它沒有任何用處，只多一個「被重新打開就看到」的機會。清掉之後
+ * 要再看到明文只能再輪換一次（舊密鑰也一併失效）。
+ */
+function clearCallbackSecret() {
+  newCallbackSecret.value = ''
 }
 
 onMounted(load)
