@@ -69,6 +69,20 @@ bpm:
   # —— 那是 repo 根底下的<b>未追蹤</b>目錄，跑一次測試就會留下檔案。
   # 與 upload.dir 同樣指到 target/。
   bpmn-definitions-dir: ./target/test-bpmn-definitions
+  audit:
+    anomaly:
+      # ⚠️ 測試 profile 關掉背景排程掃描。
+      #
+      # 整合測試共用同一組容器與同一個 audit DB，而 Spring context 會快取、
+      # 排程器在整個 JVM 生命週期內都活著。若沿用 production 的
+      # enabled=true，別測試類別留下的資料可能在排程觸發時超過門檻，
+      # 對共享的稽核表寫入 ANOMALY_DETECTED —— 對「精確斷言稽核內容」
+      # 的測試就是隨機紅燈。
+      #
+      # 偵測邏輯本身由 AnomalyDetectorTest（單元）與
+      # AnomalyDetectionIntegrationTest（真 DB，手動呼叫 scanAt）驗證；
+      # 排程註冊本身由該整合測試斷言 ScheduledAnnotationBeanPostProcessor 存在。
+      enabled: false
   external:
     # ⚠️ org/perm 的 URL 刻意<b>不在這裡</b>設定。
     #

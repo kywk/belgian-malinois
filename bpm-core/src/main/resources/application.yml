@@ -185,6 +185,38 @@ bpm:
     # 而 @RequestBody String 會把整份內容讀進記憶體（security-audit P2-5）。
     # 真實的流程定義是幾十 KB 量級，2 MB 已遠高於實際需求。
     max-xml-bytes: 2097152
+  audit:
+    # 異常操作模式偵測（#41）。預設開啟但門檻保守，避免 dev／驗收的
+    # 正常操作被誤報 —— 會一直誤報的告警最後只會被忽略。
+    anomaly:
+      # 總開關。false 時排程仍會觸發，但 scan() 立即返回、不查稽核 DB。
+      enabled: true
+      # 掃描頻率與首次掃描延遲。fixedDelay＝上一輪結束後再等 60 秒，
+      # 因此慢查詢不會讓兩輪重疊。首跑延遲 60 秒是給啟動初始化（Flyway／
+      # Flowable）的緩衝，不要在應用最忙的一刻去查稽核 DB。
+      scan-interval: 60s
+      initial-delay: 60s
+      # 同一（模式＋operatorId）的告警冷卻。沒有它，窗口內同一個命中
+      # 會被每分鐘重複告警約 10 次（窗口 10 分鐘）。冷卻狀態存記憶體，
+      # 重啟遺失（最壞情況：同一個異常再告一次）。
+      cooldown: 30m
+      # 告警信收件人（逗號分隔）。預設空＝不寄信，只留 ERROR log 與
+      # ANOMALY_DETECTED 稽核。留空是安全的預設：沒有明確指定時，
+      # 系統不會把任何偵測資訊寄到任何地方。prod 由
+      # BPM_AUDIT_ANOMALY_ALERT_RECIPIENTS 注入。
+      alert-recipients: ${BPM_AUDIT_ANOMALY_ALERT_RECIPIENTS:}
+      # 模式一：同一人 10 分鐘內完成 50 筆審批（TASK_APPROVE／TASK_REJECT）。
+      # 門檻語意是「達到就算異常」（>=），等號落在異常側。
+      mass-approval:
+        enabled: true
+        threshold: 50
+        window: 10m
+      # 模式二：同一人 10 分鐘內 20 次 DATA_ACCESS {denied:true}。
+      # 一次 404 是走錯門；連續數十次是探測無權案件的指紋。
+      denied-access:
+        enabled: true
+        threshold: 20
+        window: 10m
   dlq:
     # DLQ 告警信收件人（逗號分隔）。預設空＝不寄信，只留 ERROR log 與
     # DLQ_MESSAGE 稽核（#51）。留空是安全的預設：沒有明確指定時，
