@@ -5,6 +5,7 @@ import com.bpm.core.form.repository.FormDataRepository;
 import com.bpm.core.support.IntegrationTestBase;
 import com.bpm.core.support.TestGatewayMockMvcCustomizer;
 import org.flowable.engine.RuntimeService;
+import org.flowable.engine.TaskService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -60,6 +61,9 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
 
     @Autowired
     private RuntimeService runtimeService;
+
+    @Autowired
+    private TaskService taskService;
 
     @Autowired
     private FormDataRepository dataRepo;
@@ -295,18 +299,23 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("#72：目前持有該案件任務的人（簽核人）可以改寫表單資料")
-    void currentApproverIsAParticipantAndMayUpdate() throws Exception {
-        // 這一條守住守衛的「可用性」那一半：只會擋人會把功能壞掉。
-        // leave-approval 的第一關指派給 initiator 的直屬主管（user001 → mgr001）。
+    @DisplayName("#72＋#58：簽核人是參與者、但不是送件人 → 404，且資料真的沒被改動")
+    void currentApproverIsNotTheSubmitterAndMayNotUpdate() throws Exception {
+        // ⚠️ #58（2026-10-03 裁決）收窄了這裡的政策：改動前「參與者即可改」，
+        // 於是簽核人能改寫申請人填的薪資數字。現在只有該列的送件人能改，
+        // 參與者身分不再是充分條件 —— 這一條因此從 200 改釘 404。
         String pid = startCase("user001");
         String recordId = submitFormData(pid, "user001", "");
 
         var res = put("/api/form-data/" + recordId, "mgr001",
                 "{\"dataJson\":\"" + TAMPERED.replace("\"", "\\\"") + "\"}");
 
-        assertThat(res.statusCode()).isEqualTo(200);
-        assertThat(dataJsonOf(recordId)).isEqualTo(TAMPERED);
+        assertThat(res.statusCode())
+                .as("mgr001 目前持有 managerReview，是參與者；但送件人是 user001")
+                .isEqualTo(404);
+        assertThat(dataJsonOf(recordId))
+                .as("被拒的寫入不得有任何後果")
+                .isEqualTo(ORIGINAL);
     }
 
     @Test
@@ -438,20 +447,27 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("#72：PUT 省略 submittedBy → 200，且稽核 operatorId 是登入者")
+    @DisplayName("#72＋#58：退回狀態下送件人修改 → 200，稽核 operatorId 是登入者")
     void updateOperatorIsTheAuthenticatedCaller() throws Exception {
         String pid = startCase("user001");
         String recordId = submitFormData(pid, "user001", "");
+        // #58：修改必須在退回（補件）狀態。主管退回 → 補件任務指派給 user001。
+        var mgrTask = taskService.createTaskQuery().processInstanceId(pid).singleResult();
+        taskService.complete(mgrTask.getId(), Map.of("approved", false, "rejected", false));
 
         var res = put("/api/form-data/" + recordId, "user001",
                 "{\"dataJson\":\"" + TAMPERED.replace("\"", "\\\"") + "\"}");
 
         assertThat(res.statusCode()).isEqualTo(200);
-        assertThat(awaitFormOperator("FORM_UPDATE", recordId))
+        // #58 版本化：回傳的是新列，不是被改寫的舊列。
+        String newId = field(res.body(), "id");
+        assertThat(newId).isNotEqualTo(recordId);
+        assertThat(awaitFormOperator("FORM_UPDATE", newId))
                 .as("改動前：operatorId 是 body 的 submittedBy")
                 .isEqualTo("user001");
-        // submittedBy 刻意不覆寫：submittedAt 是 updatable = false，
-        // 覆寫後會出現「送件人是 mgr001、送件時間是 user001 送出時」的矛盾資料。
+        // submittedBy 刻意不覆寫：舊列原封不動，新列沿用同一位送件人。
+        assertThat(dataJsonOf(recordId)).as("原始送件必須保留").isEqualTo(ORIGINAL);
         assertThat(dataRepo.findById(recordId).orElseThrow().getSubmittedBy()).isEqualTo("user001");
+        assertThat(dataRepo.findById(newId).orElseThrow().getSubmittedBy()).isEqualTo("user001");
     }
 }

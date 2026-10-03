@@ -7,8 +7,10 @@ import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.form.model.FormData;
 import com.bpm.core.form.service.FormService;
 import com.bpm.core.form.validation.FormSchemaValidator;
+import com.bpm.core.notify.NotifyPublisher;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.security.ProcessAccessGuard;
+import org.flowable.engine.TaskService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -45,7 +47,8 @@ import java.util.stream.Collectors;
  * <ol>
  *   <li><b>讀：</b>{@link ProcessAccessGuard#requireReadAccess} ——
  *       參與者，或持有 {@code audit:log:read} 的稽核人員，且旁路必留痕。</li>
- *   <li><b>寫：</b>{@link ProcessAccessGuard#requireParticipant} ——
+ *   <li><b>寫：</b>{@link ProcessAccessGuard#requireParticipant} ＋ #58 的
+ *       <b>送件人</b>與<b>退回狀態</b>兩道閘門（見 {@link #update}）——
  *       <b>刻意沒有稽核旁路</b>：稽核人員的職責是查閱，不是替案件補件
  *       或改寫別人填的薪資數字。理由與 {@code AttachmentController.upload} 相同。</li>
  *   <li><b>身分：</b>{@code submittedBy} 一律由 {@code @CallerId} 決定；
@@ -62,6 +65,9 @@ public class FormDataController {
     // #55 的 schema 驗證。規則全部收在 FormSchemaValidator，controller 只負責
     // 把違規清單轉成 400（狀態碼與訊息形狀是 HTTP 邊界的事）。
     private final FormSchemaValidator schemaValidator;
+    // #58 的退回狀態判定：查「現任任務」。任務查詢不經過 accessGuard ——
+    // 它不是物件層授權（那個仍在 ProcessAccessGuard），而是本端點的狀態前提。
+    private final TaskService taskService;
 
     public FormDataController(FormService formService, AuditEventPublisher auditPublisher,
                               // #71 抽出的共用授權判斷。附件、variables、表單資料
@@ -69,11 +75,13 @@ public class FormDataController {
                               // 只要有人改了其中一處，就會出現「這個看得到、那個看不到」
                               // 的組合，而那種差異比沒有檢查更難察覺。
                               ProcessAccessGuard accessGuard,
-                              FormSchemaValidator schemaValidator) {
+                              FormSchemaValidator schemaValidator,
+                              TaskService taskService) {
         this.formService = formService;
         this.auditPublisher = auditPublisher;
         this.accessGuard = accessGuard;
         this.schemaValidator = schemaValidator;
+        this.taskService = taskService;
     }
 
     // ── POST /api/form-data ───────────────────────────────────────
@@ -110,8 +118,9 @@ public class FormDataController {
      * 資料問題，fail-closed）；查不到表單定義則略過驗證並 warn
      * （已知缺口，理由見 {@link FormSchemaValidator} 類別註解）。
      *
-     * <p>⚠️ {@code PUT /api/form-data/{id}} 不走這條驗證（#58 的範圍）：
-     * 目前同一筆資料「新增時驗、退回修改時不驗」是已知落差。
+     * <p>⚠️ {@code PUT /api/form-data/{id}} 不走這條驗證：#58 處理了
+     * 授權、退回狀態與版本化，<b>仍未</b>納入 schema 驗證 ——
+     * 「新增時驗、退回修改時不驗」是仍然存在的已知落差。
      */
     @PostMapping
     @Transactional("formTransactionManager")
@@ -221,7 +230,7 @@ public class FormDataController {
     // ── PUT /api/form-data/{id} ───────────────────────────────────
 
     /**
-     * 修改一筆表單資料。
+     * 修改一筆表單資料 —— 只有該列的送件人、在退回（補件）狀態下、以新增版本的方式。
      *
      * <h2>改動前：任何登入者都能改任何人的表單資料</h2>
      *
@@ -230,26 +239,53 @@ public class FormDataController {
      * 實測：以 user001 的身分 PUT user002 案件的表單回 200，
      * 之後 user002 讀到的就是被改掉的內容 —— 也就是薪資欄位可以由無關的人改寫。
      *
-     * <h2>為什麼先 {@code getDataById} 再守衛，而不是讓 service 內部順手檢查</h2>
+     * <h2>#72 只做到「參與者」，#58 補上「送件人」與「退回狀態」</h2>
      *
-     * <p>守衛需要 {@code processInstanceId}，而它只存在於 DB（路徑參數沒有）。
-     * 授權判斷留在 controller：service 被 HTTP 與非 HTTP 路徑共用，
-     * 只有 controller 知道「呼叫者是誰」。形狀與
-     * {@code FormDefinitionController.delete} 相同。
+     * <p>{@code requireParticipant} 擋下的是無關的人，但簽核人、加簽人
+     * 也都是參與者 —— 他們能改寫申請人填的薪資數字。而 #72 的
+     * {@code requireSelf} 只比對 <b>body 的 {@code submittedBy}</b>（可省略），
+     * 根本沒有看這筆資料實際的 {@code existing.getSubmittedBy()}：
+     * 非送件人的參與者只要省略 body 的欄位就能通過。
      *
-     * <h2>兩種拒絕都是 404，且無法互相分辨</h2>
+     * <h2>#58 的三道閘門（順序：授權 → 身分 → 狀態）</h2>
      *
-     * <p>「記錄不存在」與「記錄存在但不屬於你」回同一個狀態碼，呼叫端
-     * 因此無法拿 PUT 當成枚舉管道探測其他人的表單資料是否存在。
+     * <ol>
+     *   <li><b>送件人（404）。</b>{@code existing.getSubmittedBy()} 必須等於
+     *       caller。非送件人即使參與者也是 404，與「記錄不存在」不可分辨
+     *       —— 呼叫端不能拿 PUT 當枚舉管道。被拒絕的嘗試留一筆 detached
+     *       稽核（與 {@link ProcessAccessGuard#denyNonParticipant} 同一政策）。</li>
+     *   <li><b>身分欄位（400）。</b>body 的 {@code submittedBy} 若帶了
+     *       與自己不符的值，維持 #72 的明確 400（不靜默忽略）。</li>
+     *   <li><b>退回狀態（409）。</b>現任 runtime 任務中必須存在一個指派給
+     *       caller、且 {@link NotifyPublisher#isRevisionTask 判定為補件}的任務。
+     *       補件任務的判定只有一份（與 {@code TaskController} 的
+     *       {@code TASK_RESUBMIT}、通知端共用），這裡不重寫「name contains 補件」。</li>
+     * </ol>
      *
-     * <h2>⚠️ 為什麼 submittedBy 只當拒絕閘門，不寫回這筆資料</h2>
+     * <h2>⚠️ 為什麼非退回狀態是 409 而不是 403／404</h2>
      *
-     * <p>{@code FormService.updateData} 只搬 {@code dataJson}
-     * （其餘欄位不動）—— 這是刻意保留的：{@code submittedAt} 是
-     * {@code updatable = false}，若把 {@code submittedBy} 覆寫成「最後修改的人」，
-     * 就會出現「送件人是 mgr001、送件時間卻是 user001 送出時」這種
-     * 兩欄互相矛盾的資料。修改者由 {@code FORM_UPDATE} 的稽核 operatorId 記錄，
-     * 這才是它該待的地方。
+     * <p>呼叫者已經通過送件人檢查 ——「你是這筆資料的主人，但案件現在不是
+     * 退回狀態」是<b>狀態衝突</b>，不是權限問題。回 404 會讓「案件已結束」
+     * 與「不是你的」塌成同一個回應，而這兩種情況該做的事正好相反。
+     *
+     * <h2>⚠️ 為什麼狀態判定看 runtime 任務，而不是看變數或 BPMN 定義</h2>
+     *
+     * <p>「退回」在 BPMN 裡不是一個變數值，而是流程停在補件關卡這件事本身。
+     * 讀 {@code approved=false} 會把「曾被退回、但已重送回主管」誤判成可改；
+     * 掃 BPMN 定義則會把「流程定義裡有補件節點」誤判成「現在正在補件」。
+     * 現任任務是唯一同時反映「當下」與「誰該動」的來源。
+     *
+     * <p>已知限制：{@code taskAssignee(caller)} 只看<b>直接指派</b>。
+     * 若自訂流程把補件關卡設成候選群組（沒有 assignee），這裡會回 409；
+     * 目前兩支內建 BPMN 的補件任務都是 {@code applicantResolver} 直接指派，
+     * 不受影響。
+     *
+     * <h2>版本化：不覆寫原列，新增一列（見 {@code FormService.updateData}）</h2>
+     *
+     * <p>舊列保留、新列生效；可追溯性由 {@code FORM_UPDATE} 稽核的
+     * {@code formDataId}（新列）與 {@code supersededFormDataId}（被取代的舊列）
+     * 串起來。{@code submittedBy} 一律沿用舊列，body 只當拒絕閘門
+     * —— 修改者由稽核的 operatorId 記錄，不會把「送件人」改寫成「最後修改的人」。
      */
     @PutMapping("/{id}")
     @Transactional("formTransactionManager")
@@ -264,19 +300,57 @@ public class FormDataController {
         // 不可分辨，理由見類別註解）。
         FormData existing = formService.getDataById(id);
 
+        // #58 第一道：只有該列的送件人。非送件人（即使參與者）→ 404，
+        // 與「記錄不存在」不可分辨。
+        if (!callerId.equals(existing.getSubmittedBy())) {
+            auditPublisher.publishDetached(new AuditEvent(OperationType.DATA_ACCESS.name(), callerId,
+                    existing.getProcessInstanceId(), null,
+                    Map.of("denied", true, "reason", "not the submitter",
+                            "formDataId", id)));
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        }
+
         // 寫入端<b>沒有</b>稽核旁路：requireParticipant 沒有 audit:log:read 分支，
         // 持有稽核權限的人仍然改不了別人的表單（見 AttachmentAuthorizationTest
         // 的 auditorCannotUpload —— 旁路是唯讀的）。
+        // 送件人本來就是參與者（POST 的規則）；這裡保留為第二層，
+        // 讓歷史／人工寫入的資料列（送件人不是參與者）仍然 fail-closed。
         accessGuard.requireParticipant(existing.getProcessInstanceId(), callerId);
 
         // 冒用 → 400。放棄這裡的回傳值是刻意的：它只當拒絕閘門使用，
-        // 理由見上面「為什麼 submittedBy 只當拒絕閘門」。
+        // 真正的送件人欄位以 existing 為準（見下方版本化）。
         accessGuard.requireSelf(data.getSubmittedBy(), callerId, "submittedBy");
 
+        // #58 第二道：案件必須停在指派給 caller 的補件關卡。
+        requireRevisionTask(existing.getProcessInstanceId(), callerId);
+
         FormData saved = formService.updateData(id, data);
+        // formDataId 是新列（實際生效的版本），supersededFormDataId 是被取代的
+        // 舊列。只記其中一個會讓版本鏈斷掉 —— 事後調查就無法從稽核走到
+        // 「改動前是什麼」。
         auditPublisher.publish(new AuditEvent(OperationType.FORM_UPDATE.name(), callerId,
                 saved.getProcessInstanceId(), null,
-                Map.of("formDataId", id)));
+                Map.of("formDataId", saved.getId(),
+                        "supersededFormDataId", id)));
         return saved;
+    }
+
+    /**
+     * 案件目前是否停在指派給 {@code callerId} 的補件關卡；不是 → 409。
+     *
+     * <p>「補件」的判定只有一份：{@link NotifyPublisher#isRevisionTask}。
+     * 這裡查的是 runtime 的現任任務，不是歷史任務 —— 歷史任務代表
+     * 「曾經退回過」，而重送之後它就不再是「現在可以改」的理由。
+     */
+    private void requireRevisionTask(String processInstanceId, String callerId) {
+        boolean onRevisionTask = taskService.createTaskQuery()
+                .processInstanceId(processInstanceId)
+                .taskAssignee(callerId)
+                .list().stream()
+                .anyMatch(t -> NotifyPublisher.isRevisionTask(t.getName()));
+        if (!onRevisionTask) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "案件目前不在退回補件狀態（或補件任務不在你手上），不可修改表單資料。");
+        }
     }
 }
