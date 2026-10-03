@@ -146,14 +146,36 @@
       </template>
     </el-dialog>
 
-    <!-- API Key Display Dialog -->
-    <el-dialog v-model="showKey" title="API Key" width="500px" :close-on-click-modal="false">
-      <el-alert type="warning" title="此 Key 僅顯示一次，請立即複製" show-icon :closable="false" style="margin-bottom:12px" />
+    <!--
+      建立／輪換 API Key 的一次性明文對話框。
+      #21 遺留：建立外部系統時，後端在建立回應裡同時回傳 apiKey 與
+      callbackSecret 兩把明文（列表／詳情永遠是遮蔽值）。這個對話框是
+      它們唯一的曝光面 —— 只顯示 apiKey 的話，新系統的管理員拿不到回呼
+      密鑰，該系統的回呼永遠 401，而唯一的補救（輪換回呼密鑰）是一顆
+      破壞性按鈕。與「回呼密鑰」輪換對話框同一條「僅顯示一次」規則：
+      @closed 清掉 callbackSecret 的明文，元件不再持有它。
+      （輪換 API Key 時 callbackSecret 是空的，v-if 不會渲染那一塊。）
+    -->
+    <el-dialog v-model="showKey" title="密鑰資訊" width="500px"
+      :close-on-click-modal="false" @closed="clearCallbackSecret">
+      <el-alert type="warning" title="以下密鑰僅顯示一次，請立即複製保存" show-icon :closable="false" style="margin-bottom:12px" />
+      <div style="color:#909399;font-size:13px;margin-bottom:4px">API Key</div>
       <el-input :model-value="newApiKey" readonly>
         <template #append>
           <el-button @click="copyKey">複製</el-button>
         </template>
       </el-input>
+      <template v-if="newCallbackSecret">
+        <div style="color:#909399;font-size:13px;margin:12px 0 4px">回呼密鑰</div>
+        <el-input :model-value="newCallbackSecret" readonly>
+          <template #append>
+            <el-button @click="copyCallbackSecret">複製</el-button>
+          </template>
+        </el-input>
+        <div style="color:#909399;font-size:13px;line-height:1.6;margin-top:8px">
+          外部系統回呼時必須以這把密鑰計算 <code>X-Callback-Signature</code>。
+        </div>
+      </template>
     </el-dialog>
 
     <!--
@@ -307,6 +329,11 @@ async function submitForm() {
   } else {
     const result = await createExternalSystem(data)
     newApiKey.value = result.apiKey
+    // #21 遺留：建立回應同時帶回 callbackSecret 的明文（僅此一次）。
+    // 不顯示它，新系統就沒有可用的回呼密鑰，而補救只能按輪換 ——
+    // 那是破壞性操作，不該是新系統的預設路徑。
+    // `|| ''` 讓狀態保持字串（後端若沒帶欄位，v-if 不渲染那一塊）。
+    newCallbackSecret.value = result.callbackSecret || ''
     showKey.value = true
   }
   showCreate.value = false

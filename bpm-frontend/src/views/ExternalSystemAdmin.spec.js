@@ -57,7 +57,7 @@ import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 
 vi.mock('../services/externalApi.js', () => ({
   getExternalSystems: vi.fn(async () => []),
-  createExternalSystem: vi.fn(async () => ({ apiKey: 'sk-new' })),
+  createExternalSystem: vi.fn(async () => ({ apiKey: 'sk-new', callbackSecret: 'cs-new' })),
   updateExternalSystem: vi.fn(async () => ({})),
   deleteExternalSystem: vi.fn(async () => ({})),
   rotateKey: vi.fn(async () => ({ apiKey: 'sk-rotated' })),
@@ -118,7 +118,7 @@ describe('ExternalSystemAdmin 的代發授權開關（#68a）', () => {
     getExternalSystems.mockClear()
     getExternalSystems.mockResolvedValue([])
     createExternalSystem.mockClear()
-    createExternalSystem.mockResolvedValue({ apiKey: 'sk-new' })
+    createExternalSystem.mockResolvedValue({ apiKey: 'sk-new', callbackSecret: 'cs-new' })
     updateExternalSystem.mockClear()
     updateExternalSystem.mockResolvedValue({})
   })
@@ -327,7 +327,7 @@ describe('ExternalSystemAdmin 的候選群組白名單（#88 政策 B）', () =>
     getExternalSystems.mockClear()
     getExternalSystems.mockResolvedValue([])
     createExternalSystem.mockClear()
-    createExternalSystem.mockResolvedValue({ apiKey: 'sk-new' })
+    createExternalSystem.mockResolvedValue({ apiKey: 'sk-new', callbackSecret: 'cs-new' })
     updateExternalSystem.mockClear()
     updateExternalSystem.mockResolvedValue({})
   })
@@ -456,6 +456,10 @@ describe('ExternalSystemAdmin 的候選群組白名單（#88 政策 B）', () =>
  * {@code ElMessageBox.confirm} 以 spy 取代（真的對話框在 jsdom 裡沒有人按）。
  *
  * <h3>負向控制組（實測：把實作改壞再跑本檔）</h3>
+ *
+ * <p>以下計數是<b>當時</b>的檔案規模（24 條）。#21 遺留於文末新增 3 條
+ * 「建立時顯示 callbackSecret」測試後，本檔總數為 27 條；新增的 3 條
+ * 不經過輪換路徑，不影響下列結果。
  *
  * <ul>
  *   <li>service 的端點改成 {@code rotate-key}：{@code externalApi.spec.js}
@@ -639,5 +643,122 @@ describe('ExternalSystemAdmin 的回呼密鑰輪換（#21）', () => {
     // 錯誤訊息由 services/http.js 的攔截器顯示；view 若再顯示一次會變成
     // 兩個 toast（與 MyApplications.vue 的催辦同一條規則）。
     expect(errorSpy).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * #21 遺留：建立外部系統時必須同時顯示 {@code callbackSecret}。
+ *
+ * <h3>缺陷形狀：能力存在、入口只開了一半</h3>
+ *
+ * <p>後端建立外部系統的回應同時帶回 {@code apiKey} 與 {@code callbackSecret}
+ * 兩把明文（列表／詳情永遠是 {@code ***} 或 {@code null}），但管理頁只把
+ * {@code apiKey} 放進一次性對話框。後果是：新建立的外部系統拿不到回呼密鑰，
+ * 它的回呼永遠 401，而唯一的補救是按「輪換回呼密鑰」——一顆會讓舊密鑰
+ * 立刻失效的破壞性按鈕。正常流程被迫從破壞性操作開始，這與 #21 輪換 UI
+ * 想解決的「能力存在、入口不存在」是同一個形狀，只是缺在建立路徑。
+ *
+ * <h3>兩件必須釘住的事</h3>
+ *
+ * <ol>
+ *   <li><b>明文真的渲染出來</b>：只有 state 有值不算交付（與輪換那組
+ *       同一條教訓 —— 拿掉 {@code :model-value} 時 state 斷言照樣綠）。</li>
+ *   <li><b>「僅顯示一次」的另一半</b>：關閉對話框後 callbackSecret
+ *       必須從元件狀態消失，不留下「重新打開就看到」的曝露面。</li>
+ * </ol>
+ *
+ * <h3>負向控制組（2026-10-03 實測，3 條）</h3>
+ *
+ * <ul>
+ *   <li>拿掉 {@code submitForm} 的
+ *       {@code newCallbackSecret.value = result.callbackSecret || ''}：
+ *       <b>2 紅 1 綠</b>。紅的是「明文真的渲染」與「關閉後清掉」
+ *       （後者在前置條件就紅），綠的是「後端沒帶欄位時只有 API Key」。</li>
+ *   <li>拿掉「密鑰資訊」對話框的 {@code @closed="clearCallbackSecret"}：
+ *       <b>1 紅 2 綠</b>。紅的是「關閉後明文從元件狀態消失」。</li>
+ * </ul>
+ *
+ * <h3>⚠️ 這裡用「完整 mount」</h3>
+ *
+ * <p>要驗的正是對話框裡有沒有真的渲染出兩把明文；{@code shallow} 之下
+ * {@code el-dialog} 的內容不會渲染，斷言會變成對空字串的空斷言。
+ * 建立流程直接呼叫 {@code submitForm}（setupState），與按鈕綁定的是
+ * 同一個函式；對話框以 {@code findAllComponents} 依標題定位。
+ */
+describe('ExternalSystemAdmin 建立時的一次性密鑰（#21 遺留）', () => {
+  beforeEach(() => {
+    getExternalSystems.mockClear()
+    getExternalSystems.mockResolvedValue([])
+    createExternalSystem.mockClear()
+    createExternalSystem.mockResolvedValue({
+      systemId: 'brand-new', apiKey: 'sk-created', callbackSecret: 'cs-created',
+    })
+    document.body.innerHTML = ''
+  })
+
+  async function mountFull() {
+    const wrapper = mount(Admin, { global: { plugins: [ElementPlus] } })
+    await flush()
+    return wrapper
+  }
+
+  /** 建立一張新系統並等到一次性對話框出現。 */
+  async function createSystem(wrapper) {
+    const s = state(wrapper)
+    s.form.systemId = 'brand-new'
+    s.form.systemName = '新系統'
+    await s.submitForm()
+    await flush()
+    return s
+  }
+
+  const secretDialog = (wrapper) =>
+    wrapper.findAllComponents({ name: 'ElDialog' })
+      .find((d) => d.props('title') === '密鑰資訊')
+
+  it('建立成功後對話框同時渲染 apiKey 與 callbackSecret 的明文', async () => {
+    const wrapper = await mountFull()
+    const s = await createSystem(wrapper)
+
+    expect(s.showKey).toBe(true)
+    expect(s.newApiKey).toBe('sk-created')
+    expect(s.newCallbackSecret,
+      'callbackSecret 明文必須進到一次性對話框的狀態').toBe('cs-created')
+
+    const dialog = secretDialog(wrapper)
+    expect(dialog, '必須存在顯示建立結果的密鑰對話框').toBeTruthy()
+    // ⚠️ 明文在 <input> 的 value 裡，不在 textContent 裡 ——
+    // 只斷 wrapper.text() 會是一條永遠不會紅的空斷言。
+    const values = dialog.findAll('input').map((i) => i.element.value)
+    expect(values, 'API Key 的明文').toContain('sk-created')
+    expect(values, '回呼密鑰的明文（少了它新系統的回呼永遠 401）').toContain('cs-created')
+    expect(dialog.text(), '兩把密鑰都必須提醒僅顯示一次').toContain('僅顯示一次')
+  })
+
+  it('關閉對話框後 callbackSecret 從元件狀態消失（僅顯示一次的另一半）', async () => {
+    const wrapper = await mountFull()
+    const s = await createSystem(wrapper)
+    expect(s.newCallbackSecret).toBe('cs-created')
+
+    // 與輪換那組同一種模擬方式：jsdom 不跑 CSS transition，
+    // 直接對對話框元件發出 el-dialog 的 closed 事件（元件接的 @closed）。
+    s.showKey = false
+    await wrapper.vm.$nextTick()
+    await secretDialog(wrapper).vm.$emit('closed')
+
+    expect(s.newCallbackSecret, '明文不得留在元件裡等下一次被打開').toBe('')
+    const values = secretDialog(wrapper).findAll('input').map((i) => i.element.value)
+    expect(values).not.toContain('cs-created')
+  })
+
+  it('後端沒帶 callbackSecret 時不渲染空白欄位（只有 API Key）', async () => {
+    createExternalSystem.mockResolvedValue({ systemId: 'brand-new', apiKey: 'sk-only' })
+    const wrapper = await mountFull()
+    const s = await createSystem(wrapper)
+
+    expect(s.newCallbackSecret).toBe('')
+    const values = secretDialog(wrapper).findAll('input').map((i) => i.element.value)
+    expect(values).toContain('sk-only')
+    expect(values, '沒有 callbackSecret 就不該多一個空欄位').toHaveLength(1)
   })
 })
