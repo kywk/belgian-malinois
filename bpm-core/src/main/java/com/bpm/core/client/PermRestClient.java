@@ -34,18 +34,48 @@ public class PermRestClient {
      *
      * <p>逾時值刻意設得短：這些呼叫在簽核的同步路徑上，使用者正在等待。
      * 寧可快速失敗（讓使用者看到錯誤並重試）也不要把執行緒與交易一起卡住。
+     *
+     * <h2>認證注入（#9 正式化）</h2>
+     *
+     * <p>{@code authToken} 非空時，以<b>設定值原樣</b>放進 {@code authHeader}
+     * 指定的 header。本服務不解析、不重組、不加前綴：
+     * <ul>
+     *   <li>Bearer 形式的真實系統：{@code perm-auth-token: "Bearer <token>"}</li>
+     *   <li>Sa-Token 形式的真實系統：{@code perm-auth-token: "satoken <token>"}</li>
+     * </ul>
+     *
+     * <p>空字串（dev mock 的預設）＝<b>完全不送出該 header</b>，
+     * 因此未設 token 的環境行為與加入本功能前逐位元相同。
+     *
+     * <p>⚠️ token 只放進 request header，<b>不得</b>寫進日誌、例外訊息或稽核。
+     * 本類別的所有錯誤訊息只含服務名／路徑／狀態碼，不含 header
+     * （見 {@link ExternalApiException} 的說明）。
+     *
+     * <h2>錯誤映射（#9 正式化）</h2>
+     *
+     * <p>非 2xx 與連線／逾時都映射成 {@link ExternalApiException}
+     * （服務名＋狀態碼＋路徑，不含 response body）。404 的
+     * {@link ExternalApiException#isNotFound()} 保留「查無此權限碼」的語意，
+     * 服務層既有行為不變。
      */
     public PermRestClient(
             @Value("${bpm.external.perm-service-url}") String baseUrl,
             @Value("${bpm.external.connect-timeout-ms:2000}") long connectTimeoutMs,
-            @Value("${bpm.external.read-timeout-ms:3000}") long readTimeoutMs) {
+            @Value("${bpm.external.read-timeout-ms:3000}") long readTimeoutMs,
+            @Value("${bpm.external.auth-header:Authorization}") String authHeader,
+            @Value("${bpm.external.perm-auth-token:}") String authToken) {
         var requestFactory = new org.springframework.http.client.SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(java.time.Duration.ofMillis(connectTimeoutMs));
         requestFactory.setReadTimeout(java.time.Duration.ofMillis(readTimeoutMs));
-        this.restClient = RestClient.builder()
+        var builder = RestClient.builder()
                 .baseUrl(baseUrl)
                 .requestFactory(requestFactory)
-                .build();
+                .defaultStatusHandler(ExternalApiErrors.statusHandler(ExternalApiException.Service.PERM))
+                .requestInterceptor(ExternalApiErrors.connectionInterceptor(ExternalApiException.Service.PERM));
+        if (authToken != null && !authToken.isEmpty()) {
+            builder.defaultHeader(authHeader, authToken);
+        }
+        this.restClient = builder.build();
     }
 
     public List<String> getUsersByPermission(String permCode) {
