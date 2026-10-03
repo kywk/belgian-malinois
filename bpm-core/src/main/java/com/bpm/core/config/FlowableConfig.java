@@ -2,6 +2,7 @@ package com.bpm.core.config;
 
 import com.bpm.core.notify.EmailNotifyDelegate;
 import com.bpm.core.notify.NotifyTaskListener;
+import com.bpm.core.notify.TeamsNotifyDelegate;
 import com.bpm.core.notify.TimeoutNotifyDelegate;
 import com.bpm.core.service.BpmPermissionService;
 import com.bpm.core.service.BpmQueryService;
@@ -80,6 +81,7 @@ public class FlowableConfig {
             TimeoutNotifyDelegate timeoutNotifyDelegate,
             com.bpm.core.webhook.WebhookTaskListener webhookTaskListener,
             EmailNotifyDelegate emailNotifyDelegate,
+            TeamsNotifyDelegate teamsNotifyDelegate,
             com.bpm.core.engine.DataValidationDelegate dataValidationDelegate,
             com.bpm.core.engine.ExternalApiDelegate externalApiDelegate,
             com.bpm.core.engine.BlankAssigneeNormalizingInterceptor blankAssigneeNormalizingInterceptor) {
@@ -127,6 +129,11 @@ public class FlowableConfig {
                     // 不進 BpmnLintService.EL_WHITELIST —— 它是
                     // delegateExpression 的解析對象，不是運算式可呼叫的函式。
                     Map.entry("emailNotifyDelegate", emailNotifyDelegate),
+                    // #44 通用 Teams 通知 delegate。與 emailNotifyDelegate／
+                    // timeoutNotifyDelegate 同一條分界：只加在這份 map，
+                    // 不進 BpmnLintService.EL_WHITELIST —— 它是
+                    // delegateExpression 的解析對象，不是運算式可呼叫的函式。
+                    Map.entry("teamsNotifyDelegate", teamsNotifyDelegate),
                     // #48 通用資料驗證 delegate。失敗丟 BpmnError
                     // （errorCode=DATA_VALIDATION_FAILED），由設計師用 boundary
                     // error 接住；同樣只加在這份 map，不進 EL 白名單。
