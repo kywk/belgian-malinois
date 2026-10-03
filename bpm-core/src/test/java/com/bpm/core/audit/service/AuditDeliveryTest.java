@@ -2,12 +2,17 @@ package com.bpm.core.audit.service;
 
 import com.bpm.core.audit.consumer.AuditEventConsumer;
 import com.bpm.core.support.IntegrationTestBase;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer;
+import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.sql.Statement;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -39,9 +44,56 @@ class AuditDeliveryTest extends IntegrationTestBase {
     @Autowired
     private AuditLogService auditLogService;
 
+    @Autowired
+    private RabbitListenerEndpointRegistry listenerRegistry;
+
+    @Autowired
+    private RabbitTemplate rabbitTemplate;
+
+    /** 本測試類別停用的 listener（@AfterEach 復原）。 */
+    private AbstractMessageListenerContainer pausedAuditListener;
+
     @BeforeEach
     void clean() {
+        // ── 背景噪音隔離 ──────────────────────────────────────────────
+        // 其他測試類別發布的稽核事件會由 audit.log.queue 的 RabbitListener
+        // 非同步寫入稽核表。本類別的斷言是「精確列數」（rowCount），一筆
+        // 遲到的背景訊息就會讓它多 1 —— Boot 4 升級的全套件實測踩到
+        // （單獨跑綠、全套件紅）。因此在整個類別期間停掉 consumer，並清空
+        // 佇列殘留，讓斷言只看到本測試直接呼叫 consumer.handle 的資料。
+        pauseAuditListener();
+        drainAuditQueue();
         truncateAuditLog();
+    }
+
+    @AfterEach
+    void resumeAuditListener() {
+        // 先清殘留再恢復 —— 否則恢復後會把別人的舊訊息寫進來，留給下一個類別。
+        drainAuditQueue();
+        if (pausedAuditListener != null && !pausedAuditListener.isRunning()) {
+            pausedAuditListener.start();
+        }
+        pausedAuditListener = null;
+    }
+
+    /** 停掉 audit.log.queue 的 listener（找不到時不擋測試，只留 null）。 */
+    private void pauseAuditListener() {
+        pausedAuditListener = listenerRegistry.getListenerContainers().stream()
+                .filter(AbstractMessageListenerContainer.class::isInstance)
+                .map(AbstractMessageListenerContainer.class::cast)
+                .filter(c -> Arrays.asList(c.getQueueNames()).contains("audit.log.queue"))
+                .findFirst()
+                .orElse(null);
+        if (pausedAuditListener != null) {
+            pausedAuditListener.stop();
+        }
+    }
+
+    /** 清掉佇列裡既有殘留，讓斷言只看到本測試的訊息。 */
+    private void drainAuditQueue() {
+        while (rabbitTemplate.receive("audit.log.queue", 100) != null) {
+            // 丟棄：不是本測試的證據。
+        }
     }
 
     private static Map<String, Object> event(String eventId) {

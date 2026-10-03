@@ -2,7 +2,7 @@ package com.bpm.core.config;
 
 import jakarta.servlet.RequestDispatcher;
 import org.springframework.boot.web.error.ErrorAttributeOptions;
-import org.springframework.boot.web.servlet.error.DefaultErrorAttributes;
+import org.springframework.boot.webmvc.error.DefaultErrorAttributes;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.web.context.request.WebRequest;
@@ -97,10 +97,12 @@ import java.util.Map;
 public class DeliberateErrorMessageAttributes extends DefaultErrorAttributes {
 
     /**
-     * Boot 3.x 的簽章是 {@code (WebRequest, ErrorAttributeOptions)}；
-     * 3.x 之前是 {@code (HttpServletRequest, ...)}。
-     * 已用 javap 對 {@code spring-boot-3.5.16}.jar 確認（{@code javap
-     * org.springframework.boot.web.servlet.error.ErrorAttributes}）。
+     * Boot 4.1.1 的 {@code DefaultErrorAttributes} 已搬到
+     * {@code org.springframework.boot.webmvc.error}，但簽章不變：
+     * {@code (WebRequest, ErrorAttributeOptions)}；{@code ErrorAttributeOptions}
+     * 本身仍留在 {@code org.springframework.boot.web.error}。
+     * 已用 javap 對 {@code spring-boot-webmvc-4.1.1.jar} 確認。
+     * Boot 3.x 的簽章相同；3.x 之前才是 {@code (HttpServletRequest, ...)}。
      */
     @Override
     public Map<String, Object> getErrorAttributes(WebRequest webRequest, ErrorAttributeOptions options) {

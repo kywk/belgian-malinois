@@ -22,6 +22,9 @@ flowable:
   # 測試中關掉 async executor：它會起背景執行緒輪詢 job，
   # 讓測試的時序變成不確定（timer／async task 可能在斷言之後才跑）。
   async-executor-activate: false
+  # 與 production 一致（見 application.yml 的同名設定，S5-0b）：
+  # Flowable 8 預設 Jackson 3，本專案 Java 程式碼仍在 Jackson 2，Stage 6 才遷移。
+  variable-json-mapper: jackson2
 
 bpm:
   security:

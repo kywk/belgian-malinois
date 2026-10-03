@@ -87,7 +87,13 @@ spring:
           enabled: true
           initial-interval: 1000
           multiplier: 2.0
-          max-attempts: 3
+          # S5-0d（Boot 4 yml 遷移）：max-attempts 在 Boot 4 已移除（deprecation level error），
+          # 改名 max-retries。Spring AMQP 4 的重試底層從 Spring Retry 換成 Spring Framework，
+          # 語意跟著變：總嘗試次數 = 1 次初始 + max-retries。
+          # 舊 max-attempts: 3 等於 3 次總嘗試，故設 2 維持相同行為（1 + 2）。
+          # WebhookRetryDlqTest 會讀取綁定後的值（Java API 的 getMaxAttempts 已不存在，
+          # 屬 Stage 5 Java 修復範圍）。
+          max-retries: 2
   data:
     redis:
       host: localhost
@@ -118,6 +124,12 @@ spring:
 flowable:
   database-schema-update: true
   async-executor-activate: true
+  # Stage 5（S5-0b）：Flowable 8 預設用 Jackson 3，而本專案 Java 程式碼仍在 Jackson 2
+  # （5 個注入點，見 pom 的 spring-boot-jackson2）。設成 jackson2 讓流程變數的 JSON
+  # 仍走 Jackson 2；Stage 6 完成 Jackson 3 遷移後再移除。
+  # ⚠️ Flowable 的 metadata 已標「jackson2 is deprecated for removal」——
+  # 這是有退場時程的技術債，不是可無限期延後的選配。
+  variable-json-mapper: jackson2
 
 bpm:
   # 三個 DataSource 共用的連線來源（security-audit P2-3）。

@@ -1,5 +1,6 @@
 package com.bpm.core.service;
 
+import com.bpm.core.security.AuthorityResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -116,13 +117,14 @@ public class CandidateGroupMembership {
         }
 
         // JWT roles claim 那條路不會查權限中心（見類別註解），
-        // 那些 authority 就是唯一已知的群組線索。ROLE_ 前綴的是 Spring 的角色
-        // 表示法（"ROLE_" + 名稱.toUpperCase()），不是群組名稱，排除掉。
+        // 那些 authority 就是唯一已知的群組線索。框架標記要排除：
+        // ROLE_（Spring 的角色表示法）與 FACTOR_（Security 7 的認證因子）
+        // —— 判斷只有 AuthorityResolver.isPermissionCode 一份。
         var auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth != null && auth.isAuthenticated()) {
             for (var a : auth.getAuthorities()) {
                 String v = a.getAuthority();
-                if (v != null && !v.isBlank() && !v.startsWith("ROLE_")) {
+                if (AuthorityResolver.isPermissionCode(v)) {
                     addIfPresent(out, v);
                 }
             }
