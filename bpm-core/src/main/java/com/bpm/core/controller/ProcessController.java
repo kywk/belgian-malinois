@@ -338,9 +338,8 @@ public class ProcessController {
      * <p>刪除成功後，對刪除前收集到的每個「有可送對象」的待處理任務發一則
      * {@code process_cancelled}（{@link NotifyPublisher#processCancelled}）。
      * 收件人是現任受理人：assignee 優先、候選任務送候選人
-     * （規則抽在 {@link NotifyPublisher#taskRecipients}，既有副本的收斂
-     * 見該方法）；候選群組沒有 email、無人任務沒有收件人，兩者都略過，
-     * 不送空訊息。
+     * （規則只有一份，抽在 {@link NotifyPublisher#taskRecipients}）；
+     * 候選群組沒有 email、無人任務沒有收件人，兩者都略過，不送空訊息。
      *
      * <p><b>為什麼每任務一則</b>：平行關卡時各任務的受理人不同，一則合併信
      * 無法回答每個人「我手上哪個任務消失了」；與催辦的每任務一則一致
@@ -414,8 +413,8 @@ public class ProcessController {
         // ⑤ 通知收件人必須在刪除<b>之前</b>收集：任務隨實例一起消失，
         //    刪除後查不到任何人。只收「有可送對象」的任務 —— 候選群組
         //    沒有 email、無人任務沒有收件人，都不送空訊息。
-        //    收件人規則用 NotifyPublisher.taskRecipients（共用實作；
-        //    TaskController 的既有副本待收斂，見該方法）。
+        //    收件人規則用 NotifyPublisher.taskRecipients（唯一實作；
+        //    TaskController 催辦走同一條，見該方法）。
         Map<Task, List<String>> deliverable = new LinkedHashMap<>();
         for (Task t : taskService.createTaskQuery().processInstanceId(id).list()) {
             List<String> to = NotifyPublisher.taskRecipients(taskService, t);

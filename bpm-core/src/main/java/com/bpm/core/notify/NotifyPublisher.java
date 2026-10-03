@@ -238,14 +238,9 @@ public class NotifyPublisher {
      * 候選「人」；候選群組沒有 email，略過。
      *
      * <p>#7 殘餘收尾把這條規則抽成<b>共用實作</b>，撤回通知的收件人由此
-     * 決定。判定與 {@code TaskController.taskRecipients} 刻意同形
-     * （assignee 有值只送他；否則取 {@code candidate} identity link 的
-     * userId）。
-     *
-     * <p>⚠️ {@code TaskController.taskRecipients} 與
-     * {@code TimeoutNotifyDelegate.candidateUsers} 是同規則的既有副本
-     * （各自成形於不同工項）。本次的檔案邊界不含那兩個檔案，因此尚未
-     * 收斂；後續應把它們改成呼叫這裡，刪掉各自的實作，讓規則真的只有一份。
+     * 決定；#7n 再把兩個既有副本收斂進來 —— {@code TaskController.urgeTask}
+     * 與 {@code TimeoutNotifyDelegate} 都呼叫這裡（後者只取候選人那一格，
+     * 見 {@link #candidateUsers}）。規則只有這一份。
      *
      * @return 去重後的收件人；沒有任何可送對象時回空清單（呼叫端據此
      *         略過該任務，不送空訊息）
@@ -253,6 +248,19 @@ public class NotifyPublisher {
     public static List<String> taskRecipients(TaskService taskService, Task task) {
         String assignee = task.getAssignee();
         if (assignee != null && !assignee.isBlank()) return List.of(assignee);
+        return candidateUsers(taskService, task);
+    }
+
+    /**
+     * 候選「人」抽取：{@code candidate} identity link 的 userId，去重；
+     * 候選群組（只有 groupId、沒有 userId）沒有 email，刻意不回傳。
+     *
+     * <p>{@link #taskRecipients} 與 {@code TimeoutNotifyDelegate} 共用
+     * 這一格。逾時提醒的外層已經處理「assignee 優先」（有 assignee 時
+     * 不取候選），所以它直接呼叫這裡取候選人 —— 兩邊對「哪些 link 算
+     * 候選人」的判定因此不可能分岔。
+     */
+    static List<String> candidateUsers(TaskService taskService, Task task) {
         return taskService.getIdentityLinksForTask(task.getId()).stream()
                 .filter(l -> IdentityLinkType.CANDIDATE.equals(l.getType()))
                 .map(IdentityLink::getUserId)
