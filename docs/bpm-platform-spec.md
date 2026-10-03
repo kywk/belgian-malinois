@@ -31,6 +31,7 @@
 | 資料庫 | MSSQL（每個微服務獨立 DB） |
 | 服務間通訊 | REST（同步）+ RabbitMQ（非同步） |
 | API Gateway | Nginx（路由 + JWT 驗證） |
+| API 文件 | springdoc-openapi（dev/test：`/swagger-ui.html`；prod 由 profile 關閉） |
 
 ### 前端
 | 元件 | 技術 |

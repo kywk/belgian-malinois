@@ -22,6 +22,13 @@
              單獨變更 Flowable 主版本，出問題就能確定來源是 Flowable 而非 Boot。
              ⚠️ 不要在這裡直接跳 8.x —— Flowable 8 不支援 Boot 3。 -->
         <flowable.version>7.2.0</flowable.version>
+        <!-- springdoc-openapi（#65）。2.x 是給 Spring Boot 3 的線，3.x 給 Boot 4 ——
+             不要跟著 Maven Central 的 latest 往上跳。
+             2.9.1 的 parent POM 就是 spring-boot-starter-parent 3.5.16（與本專案相同），
+             是 2.x 線最後一個穩定版；官方相容矩陣把 3.5.x 對到 2.8.x，但 2.8.17
+             的建置基準是 3.5.13，2.9.1 反而更貼合目前版本。
+             ⚠️ 升級 Boot 3.5.x 時要一起確認這裡。 -->
+        <springdoc.version>2.9.1</springdoc.version>
     </properties>
 
     <dependencies>
@@ -36,6 +43,15 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- API 文件（#65）。dev/test 開放 /swagger-ui.html 與 /v3/api-docs；
+             prod 由 application.yml 的 prod 文件把 api-docs 與 swagger-ui 設為
+             enabled: false（那時端點根本不會註冊）。SecurityConfig 對這些路徑的
+             permitAll 只是讓 dev/test 進得去，兩層的關係寫在該處的註解。 -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>${springdoc.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
