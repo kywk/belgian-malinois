@@ -81,3 +81,13 @@ bpm:
     # 不留預設值：漏設就要大聲失敗，不要靜默打到別的服務。
     mock-enabled: true
 
+# BPMN 部署期環境變數替換（#53）的測試值。全部是假資料。
+#
+# BpmnEnvSubstitutionDeploymentTest 需要一個「這個環境已設定」的佔位符
+# （ENV_FINANCE_GROUP）與一個「刻意不設」的（測試自己挑不存在的名字）。
+# 值含 & 的 ENV_XML_ESCAPE 讓轉義在真的引擎解析路徑上被驗一次。
+bpmn:
+  variables:
+    ENV_FINANCE_GROUP: finance_dept_approver
+    ENV_XML_ESCAPE: "A&B"
+
