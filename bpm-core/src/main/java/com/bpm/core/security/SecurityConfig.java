@@ -12,8 +12,8 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -133,7 +133,20 @@ public class SecurityConfig {
                 .formLogin(f -> f.disable())
                 .oauth2ResourceServer(oauth -> oauth.jwt(jwt ->
                         jwt.jwtAuthenticationConverter(jwtAuthenticationConverter())))
-                .addFilterBefore(gatewayFilter, UsernamePasswordAuthenticationFilter.class)
+                // ⚠️ 閘道 filter 必須排在 JWT 認證<b>之後</b>（Boot 4／Security 7 修正）。
+                //
+                // GatewayAuthenticationFilter 的優先序規則靠「已有認證就不覆蓋」：
+                // 帶 Bearer token 時 JWT 先建立認證，閘道標頭就被忽略（見該類別
+                // 註解「JWT 身分優先於閘道注入的標頭」）。
+                //
+                // 改動前是 addFilterBefore(..., UsernamePasswordAuthenticationFilter.class)：
+                // Security 6 的鏈序是 Bearer → UPF，所以閘道 filter 確實排在 JWT 之後；
+                // Security 7 的相對順序變了，錨在 UPF 會讓閘道 filter 跑在 Bearer
+                // <b>之前</b> —— 於是帶閘道密鑰的請求改由標頭決定身分（兩條安全測試
+                // 紅：jwtIdentityWinsOverGatewayHeader／jwtIdentityWinsAndParametersCannotOverrideIt）。
+                // 改錨在 BearerTokenAuthenticationFilter 之後，語意與原本完全相同，
+                // 且不再依賴 UPF 與 Bearer 的相對位置。
+                .addFilterAfter(gatewayFilter, BearerTokenAuthenticationFilter.class)
                 .authorizeHttpRequests(auth -> {
 
                     // ── 錯誤頁的 ERROR dispatch ─────────────────────

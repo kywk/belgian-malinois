@@ -109,6 +109,30 @@ public class AuthorityResolver {
      */
     public static final String PERM_FORM_DESIGN = "bpm:form:design";
 
+    /**
+     * Spring Security 7 的「認證因子」authority 前綴（例：{@code FACTOR_BEARER}）。
+     *
+     * <p>Security 7 起，bearer 認證會附帶一個因子 authority，描述「這次認證用了
+     * 什麼因子」——它<b>不是</b>權限碼、也不是候選群組名稱。Boot 4 升級後它會出現
+     * 在 SecurityContext 的 authorities 裡，任何把 authority 當業務字串的消費點
+     * 都必須排除它（見 {@link #isPermissionCode}）。
+     */
+    public static final String FACTOR_PREFIX = "FACTOR_";
+
+    /**
+     * 這個 authority 是不是「業務可用的權限碼／候選群組名」。
+     *
+     * <p>排除兩類框架標記：{@code ROLE_}（Spring 的角色表示法）與
+     * {@code FACTOR_}（Security 7 的認證因子）。規則只有這一份 ——
+     * {@code MeController}（permissions 欄位）與 {@code CandidateGroupMembership}
+     * （候選群組線索）都呼叫這裡。
+     */
+    public static boolean isPermissionCode(String authority) {
+        return authority != null && !authority.isBlank()
+                && !authority.startsWith("ROLE_")
+                && !authority.startsWith(FACTOR_PREFIX);
+    }
+
     private final BpmPermissionService permissionService;
 
     public AuthorityResolver(BpmPermissionService permissionService) {

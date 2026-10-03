@@ -113,9 +113,11 @@ import java.util.TreeSet;
  * {@link AuthorityResolver#ROLE_ADMIN}。本端點把它拆成兩個欄位：
  *
  * <ul>
- *   <li>{@code permissions}：<b>不以 {@code ROLE_} 開頭</b>的 authorities
- *       —— 權限碼（{@code bpm:form:design}）與非角色字串。
- *       閘道認證附帶的 {@code ROLE_GATEWAY} 也因此不會外洩出去。</li>
+ *   <li>{@code permissions}：<b>不以 {@code ROLE_}／{@code FACTOR_} 開頭</b>的
+ *       authorities —— 權限碼（{@code bpm:form:design}）與非角色字串
+ *       （判斷只有 {@link AuthorityResolver#isPermissionCode} 一份）。
+ *       閘道認證附帶的 {@code ROLE_GATEWAY}、Security 7 的 {@code FACTOR_BEARER}
+ *       也因此不會外洩出去。</li>
  *   <li>{@code admin}：是否持有 {@link AuthorityResolver#ROLE_ADMIN}。</li>
  * </ul>
  *
@@ -128,15 +130,6 @@ import java.util.TreeSet;
 @RestController
 @RequestMapping("/api/me")
 public class MeController {
-
-    /**
-     * Spring Security 內部用來表示「角色」的前綴。
-     *
-     * <p>與 {@code SecurityConfig.hasRole} 組出 {@code ROLE_} 的那個字面值
-     * 是同一個約定；放在這裡常數化，是為了讓「哪些 authority 是權限碼」
-     * 這個判斷只有一處。
-     */
-    private static final String ROLE_PREFIX = "ROLE_";
 
     /**
      * 呼叫者自己的權限。
@@ -185,7 +178,9 @@ public class MeController {
                 admin = true;
                 continue;
             }
-            if (value.startsWith(ROLE_PREFIX)) continue;   // ROLE_GATEWAY 等角色標記
+            // ROLE_（角色標記）與 FACTOR_（Security 7 的認證因子）都不是權限碼；
+            // 判斷只有 AuthorityResolver.isPermissionCode 一份。
+            if (!AuthorityResolver.isPermissionCode(value)) continue;
             permissions.add(value);
         }
         return new MyPermissions(callerId, List.copyOf(permissions), admin);

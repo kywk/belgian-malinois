@@ -49,8 +49,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       async executor 的 ResetExpiredJobsRunnable 執行 —— 測試環境關掉
  *       async executor，因此測試直接呼叫同一個 ManagementService API）。
  *       ⚠️ 另一個實測：exclusive job 的 acquire 會一併鎖 process instance
- *       （{@code ACT_RU_EXECUTION.LOCK_TIME_}），unacquire 不清它 ——
- *       主動釋放後仍需等原鎖到期才真的能被再認領，見
+ *       （{@code ACT_RU_EXECUTION.LOCK_TIME_}）。<b>Flowable 7</b> 的 unacquire
+ *       只清 job 鎖、範圍鎖要等原鎖到期；<b>Flowable 8</b>（2026-10-03 Boot 4
+ *       升級時實測）unacquire 會一併釋放範圍鎖 —— 其他系統可立刻認領。
+ *       測試已更新為新語意，見
  *       {@code Locking.unacquireReleasesJobButScopeLockHoldsUntilOriginalLockExpires}。</li>
  *   <li>fail 語意：retries 3→2→1→0，前兩次立刻回到佇列、第三次進死信
  *       （原始碼 ExternalWorkerJobFailCmd 的預設 retries=-1＝沿用目前值減一）。</li>
@@ -426,12 +428,12 @@ class ExternalWorkerTaskTest extends IntegrationTestBase {
         }
 
         @Test
-        @DisplayName("unacquire 端點：job 鎖立即清除，但 exclusive job 的範圍鎖到原鎖到期前仍擋住所有認領（實測 Flowable 語意）")
+        @DisplayName("unacquire 端點：job 鎖與範圍鎖一併清除，其他系統可立刻認領（Flowable 8 語意，實測）")
         void unacquireReleasesJobButScopeLockHoldsUntilOriginalLockExpires() throws Exception {
             givenErp();
             givenOther();
             startDemo();
-            // 用短鎖：範圍鎖的到期時間 = job 的到期時間，短鎖讓測試不必等 5 分鐘。
+            // 短鎖：若引擎仍保留範圍鎖，這個到期時間就是等待上限。
             Acquired a = acquireOne("erp", ERP_KEY,
                     "{\"topic\":\"" + TOPIC + "\",\"lockDurationSeconds\":1}");
 
@@ -446,23 +448,12 @@ class ExternalWorkerTaskTest extends IntegrationTestBase {
                     .isNull();
             assertThat(auditCount("external_worker_unacquire")).isEqualTo(1);
 
-            // ⚠️ 實測（不是假設）：external worker job 預設是 exclusive，
-            // acquire 時除了 job 的鎖，還會經由 lockJobScope →
-            // updateProcessInstanceLockTime 把 ACT_RU_EXECUTION.LOCK_TIME_
-            // 設成 job 的到期時間。fail／complete 會透過
-            // AbstractExternalWorkerJobCmd → UnlockExclusiveJobCmd 清掉它，
-            // 而 unacquireExternalWorkerJob 是獨立 command，只清 job 的鎖、
-            // 不清範圍鎖。範圍鎖的更新條件是 LOCK_TIME_ is null OR
-            // LOCK_TIME_ < now —— 未到期前任何系統都認領不到，且失敗會被
-            // acquireAndLock 的重試迴圈吞掉（回空清單，不是錯誤）。
-            assertThat(tasksOf(acquire("other", OTHER_KEY)))
-                    .as("範圍鎖未過期前，unacquire 過的 job 仍無法被任何系統認領")
-                    .isEmpty();
-
-            Thread.sleep(1_200);
-
-            // 原鎖到期後（正式環境此時 async executor 的 ResetExpiredJobsRunnable
-            // 也會把 job 的鎖重設），未鎖定的 job 先搶先贏。
+            // ⚠️ Flowable 8 語意變更（2026-10-03 Boot 4 升級時實測）：
+            // Flowable 7 的 unacquireExternalWorkerJob 只清 job 鎖，exclusive job
+            // 的範圍鎖（ACT_RU_EXECUTION.LOCK_TIME_）要等原鎖到期才會釋放；
+            // Flowable 8 起 unacquire 會一併釋放範圍鎖 —— 其他系統可<b>立刻</b>認領，
+            // 不必等鎖到期。平台只是包 ManagementService 的 API，行為跟著引擎，
+            // 因此測試改為斷言新語意（新行為對「主動釋放」而言也更合理）。
             Acquired taken = acquireOne("other", OTHER_KEY);
             assertThat(taken.jobId()).isEqualTo(a.jobId());
         }
