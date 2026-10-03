@@ -8,6 +8,15 @@ export const getFormSchema = (formKey, version) => {
   return http.get(`/api/forms/${formKey}`, { params }).then(r => r.data)
 }
 
+/**
+ * select 欄位的動態選項（#56）。
+ *
+ * 前端不直接連外部選項來源：由後端代理（SSRF 閘門、快取、逾時都在那裡）。
+ * 回傳正規化後的 [{label,value}] 陣列。
+ */
+export const getFormOptions = (url) =>
+  http.get('/api/forms/options', { params: { url } }).then(r => r.data.options)
+
 export const createForm = (data) =>
   http.post('/api/forms', data).then(r => r.data)
 

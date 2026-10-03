@@ -82,6 +82,16 @@
         </el-form-item>
       </template>
 
+      <!-- select 動態選項來源（#56）：遠端優先、上方靜態選項為 fallback -->
+      <el-form-item v-if="selectedField.type === 'select'" label="選項 API（選填）">
+        <el-input :model-value="selectedField.optionsUrl"
+          @update:model-value="update('optionsUrl', $event)"
+          placeholder="https://.../options.json" />
+        <div class="field-hint">
+          後端代理抓取，回傳 [{label,value}] 或 ["a","b"]；載入失敗時改用上方靜態選項。
+        </div>
+      </el-form-item>
+
       <!-- file -->
       <template v-if="selectedField.type === 'file'">
         <el-form-item label="接受檔案類型">
@@ -146,4 +156,5 @@ function removeOption(index) {
 
 <style scoped>
 .field-config { padding: 12px; }
+.field-hint { font-size: 12px; color: #909399; line-height: 1.4; margin-top: 4px; }
 </style>

@@ -450,7 +450,7 @@ public class BpmQueryService {
 | 數字 | 數字輸入 | label, required, min, max, precision |
 | 日期 | 日期選擇 | label, required, format, minDate, maxDate |
 | 日期區間 | 起迄日期 | label, required |
-| 下拉選單 | 單選下拉 | label, required, options（靜態/API 動態載入） |
+| 下拉選單 | 單選下拉 | label, required, options（靜態，兼作 fallback）, optionsUrl（API 動態載入，經後端代理） |
 | 單選 | Radio | label, required, options |
 | 多選 | Checkbox | label, required, options, maxSelect |
 | 檔案上傳 | 附件 | label, required, accept, maxSize, maxCount |
@@ -507,7 +507,8 @@ public class FormData {
                 { "label": "特休", "value": "annual" },
                 { "label": "事假", "value": "personal" },
                 { "label": "病假", "value": "sick" }
-            ]
+            ],
+            "optionsUrl": "https://hr.example.com/api/leave-types"
         },
         {
             "id": "dateRange",
@@ -525,6 +526,20 @@ public class FormData {
     ]
 }
 ```
+
+#### 動態選項（`optionsUrl`，backlog #56）
+
+select 欄位可加 `optionsUrl`（字串）。設定後前端呼叫
+`GET /api/forms/options?url=...` 由**後端代理**抓取（前端不直連，避免 CORS
+與把使用者網路位置曝露給外部系統）：
+
+- **遠端優先、`options` 為 fallback**：遠端載入成功即取代靜態選項（空陣列
+  也算成功）；失敗時回退靜態 `options` 並顯示提示，**不阻擋表單**。
+- URL 一律先過 `WebhookUrlPolicy`（SSRF 閘門）：被拒回 403 且不發請求；
+  政策檢查在快取之前（快取不得掩蓋拒絕）。
+- 上游回應接受 `[{label,value}]` 與 `["a","b"]`（後者正規化為
+  `{label:a, value:a}`）；非 2xx／逾時／非 JSON／形狀不合回 502。
+- 抓取結果快取於 Redis 60 秒（key 含完整 URL）；Redis 故障時直接抓取。
 
 表單模式（mode）：
 - `edit`：申請表單，欄位可編輯
@@ -577,6 +592,7 @@ public class FormData {
 POST   /api/forms                    → 建立表單定義
 GET    /api/forms                    → 查詢表單列表
 GET    /api/forms/{formKey}          → 取得表單 Schema
+GET    /api/forms/options?url=...    → 代理抓取 select 動態選項（SSRF 閘門＋60 秒快取）
 PUT    /api/forms/{id}               → 更新表單定義
 POST   /api/forms/{id}/publish       → 發佈表單
 
