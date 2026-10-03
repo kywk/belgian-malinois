@@ -1,6 +1,7 @@
 package com.bpm.core.support;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -50,6 +51,12 @@ public class ExternalApiTestSink {
     /** name → 注入的回應狀態碼。沒有 entries 的 name 一律回 200。 */
     private static final Map<String, Integer> FAIL_STATUS = new ConcurrentHashMap<>();
 
+    /**
+     * name → 覆寫的回應 body（#56 的動態選項測試需要真的 JSON 陣列）。
+     * 沒設定的 name 回既有的 {@code {"sink":...}} 固定 body。
+     */
+    private static final Map<String, String> RESPONSE_BODY = new ConcurrentHashMap<>();
+
     /** 讓 {@code name} 的回應固定為指定狀態碼（0 或 null 等於清除）。 */
     public static void fail(String name, int status) {
         if (status <= 0) {
@@ -59,9 +66,19 @@ public class ExternalApiTestSink {
         }
     }
 
+    /** 讓 {@code name} 的成功回應回指定 body（{@code null} 等於清除）。 */
+    public static void respondWith(String name, String body) {
+        if (body == null) {
+            RESPONSE_BODY.remove(name);
+        } else {
+            RESPONSE_BODY.put(name, body);
+        }
+    }
+
     public static void reset() {
         RECEIVED.clear();
         FAIL_STATUS.clear();
+        RESPONSE_BODY.clear();
     }
 
     public static List<Received> received() {
@@ -77,6 +94,13 @@ public class ExternalApiTestSink {
         Integer failStatus = FAIL_STATUS.get(name);
         if (failStatus != null) {
             return ResponseEntity.status(failStatus).body("{\"injected\":true}");
+        }
+        String overridden = RESPONSE_BODY.get(name);
+        if (overridden != null) {
+            // 明確標 JSON：讓「只接受 JSON」的呼叫端（#56）測到真實形狀。
+            return ResponseEntity.status(HttpStatus.OK)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(overridden);
         }
         return ResponseEntity.status(HttpStatus.OK)
                 .body("{\"sink\":\"" + name + "\",\"method\":\"" + method + "\"}");

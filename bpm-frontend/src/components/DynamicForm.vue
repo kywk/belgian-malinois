@@ -21,8 +21,12 @@
 
       <el-select v-else-if="field.type === 'select'" v-model="formData[field.id]"
         :disabled="isReadonly(field)" :placeholder="field.placeholder">
-        <el-option v-for="opt in field.options" :key="opt.value" :label="opt.label" :value="opt.value" />
+        <el-option v-for="opt in optionsFor(field)" :key="opt.value" :label="opt.label" :value="opt.value" />
       </el-select>
+      <div v-if="optionsLoading[field.id]" class="options-hint">選項載入中…</div>
+      <div v-else-if="optionsError[field.id]" class="options-hint options-hint-error">
+        選項載入失敗，已改用預設選項
+      </div>
 
       <el-radio-group v-else-if="field.type === 'radio'" v-model="formData[field.id]"
         :disabled="isReadonly(field)">
@@ -54,7 +58,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
-import { getFormSchema } from '../services/formApi.js'
+import { getFormSchema, getFormOptions } from '../services/formApi.js'
 
 const props = defineProps({
   formKey: { type: String, required: true },
@@ -69,6 +73,18 @@ const emit = defineEmits(['submit'])
 const fields = ref([])
 const formData = reactive({})
 const formRef = ref()
+
+/**
+ * 動態選項（#56）：以欄位 id 為 key 的遠端結果／狀態。
+ *
+ * 規則：**遠端優先、靜態 options 為 fallback**。
+ * - 抓取成功 → optionsFor() 回遠端清單（即使空陣列，那也是上游的答案）。
+ * - 抓取失敗 → remoteOptions 沒有這個 key，回退 schema 的靜態 options，
+ *   並顯示提示；表單照常可填可送（選項載入失敗不阻擋表單）。
+ */
+const remoteOptions = reactive({})
+const optionsLoading = reactive({})
+const optionsError = reactive({})
 
 const visibleFields = computed(() => fields.value.filter(f => {
   // Hide readonly fields that have no value (e.g. approverComment on first submit)
@@ -100,9 +116,37 @@ async function loadSchema() {
         formData[f.id] = val ?? null
       }
     })
+    // 動態選項：不 await —— 遠端抓取不阻擋表單渲染，成功後選項自然補上。
+    fields.value.forEach(f => {
+      if (f.type === 'select' && f.optionsUrl) loadRemoteOptions(f)
+    })
   } catch (e) {
     console.error('Failed to load form schema:', e)
   }
+}
+
+/**
+ * select 欄位的遠端選項。成功 → 覆蓋靜態 options；失敗 → 保留靜態 fallback。
+ *
+ * 失敗時只記錄與顯示提示，不 throw：呼叫端是 fire-and-forget，
+ * 而表單可用性不依賴外部選項來源（見 remoteOptions 的註解）。
+ */
+async function loadRemoteOptions(field) {
+  optionsLoading[field.id] = true
+  optionsError[field.id] = false
+  try {
+    remoteOptions[field.id] = await getFormOptions(field.optionsUrl)
+  } catch (e) {
+    optionsError[field.id] = true
+    console.warn(`動態選項載入失敗（${field.id} / ${field.optionsUrl}），改用靜態選項:`, e)
+  } finally {
+    optionsLoading[field.id] = false
+  }
+}
+
+/** 遠端優先、靜態 fallback；兩者都沒有時空陣列。 */
+function optionsFor(field) {
+  return remoteOptions[field.id] ?? field.options ?? []
 }
 
 // Fill variables into form when they change
@@ -129,3 +173,8 @@ onMounted(loadSchema)
 
 defineExpose({ formData })
 </script>
+
+<style scoped>
+.options-hint { font-size: 12px; color: #909399; line-height: 1.4; }
+.options-hint-error { color: #e6a23c; }
+</style>
