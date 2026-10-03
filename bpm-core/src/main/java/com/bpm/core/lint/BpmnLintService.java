@@ -51,6 +51,137 @@ public class BpmnLintService {
             // permService／bpmQueryService 的對應方法各有最後一哩的缺口，
             // 見 DynamicAssigneeResolver 類別註解。與 setBeans() 必須同步。
             "dynamicAssignee");
+
+    /**
+     * 每個 bean 允許被 BPMN 呼叫的方法（#35）。
+     *
+     * <h2>為什麼 bean 層不夠</h2>
+     *
+     * <p>改動前（#35 之前），規則 g 只檢查 {@code ${bean.…}} 的
+     * bean 名稱 —— 只要 bean 在清單上，<b>任何方法名都放行</b>。
+     * 兩個後果：
+     * <ul>
+     *   <li><b>打錯字要到執行期才爆</b>：{@code ${orgService.getDirectManger(initiator)}}
+     *       部署綠燈，第一個送件的人拿到 {@code Unknown property used in expression}
+     *       —— 正是本 repo 反覆在修的「失敗時間與編輯時間脫鉤」。</li>
+     *   <li><b>維運方法也進得了 BPMN</b>：{@code orgService.invalidateCache(...)}
+     *       之類管理端點在用的方法，業務人員在設計器就能呼叫。</li>
+     * </ul>
+     *
+     * <h2>判準（與 bean 層的關係）</h2>
+     *
+     * <ul>
+     *   <li>bean 不在 {@link #EL_WHITELIST} → 只發既有的 bean 層 error，
+     *       <b>不</b>再加一條方法層錯誤（bean 清單裡根本沒有它的方法清單）。</li>
+     *   <li>bean 在 {@link #EL_WHITELIST}、運算式出現 {@code .method} →
+     *       方法必須在本表；否則發 {@code el-method-whitelist} error。</li>
+     *   <li>裸用 {@code ${bean}}（沒有點）維持現狀 —— 由規則 i 處理。</li>
+     * </ul>
+     *
+     * <p>⚠️ 這是<b>字串層</b>的 regex 檢查，不是 AST 走訪：已知可被空白
+     * （{@code ${ orgService.…}}）與更長的 member access 鏈繞過，
+     * 與 bean 層規則繼承同一個限制（見 {@code docs/plan/2026-09-28-security-audit.md}
+     * P2-5 的 (b)）。本表不假裝解決那個問題。
+     *
+     * <p>⚠️ 本表與實際類別必須同步 —— {@code ElMethodWhitelistDriftTest}
+     * 用 reflection 斷言「列出的方法真的存在」，以及「類別的 public 方法
+     * 不在本表就必須在 {@link #EL_METHOD_EXCLUDED}」。新增 bean 時
+     * 兩張表與 {@link #EL_WHITELIST} 三者都要補。
+     */
+    // public 與 EL_WHITELIST 一致：這是 lint 的對外契約，測試與其他檢查
+    // 可以從這裡推導對象。不可變的 Map／Set.of，外部無法修改。
+    public static final Map<String, Set<String>> EL_METHOD_WHITELIST = Map.of(
+            "orgService", Set.of(
+                    // 直屬主管（設計器「直屬主管（一階）」產生的運算式）
+                    "getDirectManager",
+                    // 完整主管鏈。⚠️ 不可直接索引（規則 j）；要第 N 階請用 getManagerAtLevel
+                    "getManagerChain",
+                    // 第 N 階主管（設計器「直屬主管（N 階）」）；鏈不足時回最高階，完全沒有主管拋例外
+                    "getManagerAtLevel",
+                    // 所屬部門代碼（設計器「發起人所屬單位」候選群組）
+                    "getDeptId",
+                    // 所屬部門代碼的舊名稱（spec §4.1 對設計師承諾過的別名）
+                    "getDeptGroup",
+                    // 部門成員清單
+                    "getDeptMembers",
+                    // 代理人代換：有代理人回代理人，否則回本人（#5）
+                    "resolveEffective",
+                    // 這個人是否可受理工作（沒有代理人）；供條件判斷使用
+                    "isUserAvailable"),
+            "permService", Set.of(
+                    // 權限持有人清單（設計器「特定權限」候選人）
+                    "getUsersByPermission",
+                    // 部門範圍的權限持有人清單（spec §4.1）
+                    "getUsersByPermissionAndDept",
+                    // 是否持有指定權限碼（spec §4.1）
+                    "hasPermission",
+                    // 使用者的完整權限清單
+                    "getUserPermissions",
+                    // 第一位可受理的權限持有人；⚠️ 沒有持有人時回 null，
+                    // 指派欄位請改用 dynamicAssignee.firstAvailable（找不到人拋例外）
+                    "getFirstAvailableUser"),
+            "bpmQueryService", Set.of(
+                    // 主管鏈上最近一位持有權限碼的主管（spec §4.1）；找不到時回 null
+                    "getManagerWithPermission",
+                    // 同部門持有權限碼且可受理的人（spec §4.1）
+                    "getDeptUsersWithPermission"),
+            "assigneeResolver", Set.of(
+                    // 第一個任務的受理人（出廠兩支 BPMN 使用）；參數必須是 execution
+                    "resolve",
+                    // 代理代換；ExternalApiController 在啟動後重設第一關受理人時使用
+                    "effectiveAssignee"),
+            "applicantResolver", Set.of(
+                    // 補件關卡的受理人（出廠兩支 BPMN 使用）；參數必須是 execution
+                    "resolve",
+                    // 三段規則的共用入口（催辦與補件關卡共用同一份判定，見 #3）
+                    "resolveApplicant"),
+            "dynamicAssignee", Set.of(
+                    // 第 N 階主管＋代理人；找不到人拋例外，不回 null
+                    "managerAtLevel",
+                    // 權限碼持有人第一位＋代理人；沒有持有人拋例外
+                    "firstAvailable",
+                    // 主管鏈上持有權限碼的主管＋代理人；找不到人拋例外
+                    "managerWithPermission"));
+
+    /**
+     * 明確<b>排除</b>的 public 方法（#35）：存在於 bean 類別上，但刻意不讓
+     * BPMN 呼叫。{@code ElMethodWhitelistDriftTest} 用它來斷言
+     * 「類別的每個 public 方法都有歸屬」—— 新增方法時若兩邊都沒列，
+     * 測試會紅，強迫作者做一次「這是不是 EL 函式」的決定。
+     *
+     * <p>三種排除理由：
+     * <ol>
+     *   <li><b>維運 API</b>（{@code invalidateCache} 等）：管理端點在用，
+     *       業務流程沒有理由清快取。</li>
+     *   <li><b>靜態工具</b>（{@code putIfPresent}）：給 controller 寫啟動變數，
+     *       不是 EL 函式。</li>
+     *   <li><b>P1-7 的刻意 stub</b>（{@code getAuthorizedManager}／
+     *       {@code getUsersByPermissionAndCondition}）：永遠拋
+     *       {@code UnsupportedOperationException}。security-audit 對這兩個
+     *       方法的修法正是「實作前應直接 throw，<b>或加進 lint 的 error 規則</b>」
+     *       —— 部署期擋下比執行期才爆更早。真正實作後把它們移進白名單。</li>
+     * </ol>
+     */
+    // package-private：只有同 package 的 ElMethodWhitelistDriftTest 在用，
+    // 不是 lint 執行期需要的資料。
+    static final Map<String, Set<String>> EL_METHOD_EXCLUDED = Map.of(
+            "orgService", Set.of(
+                    // 維運 API：組織快取失效（管理端點呼叫）
+                    "invalidateCache",
+                    // 維運 API：部門成員快取失效（管理端點呼叫）
+                    "invalidateDeptMembers",
+                    // P1-7 刻意 stub：金額分級核決未實作，永遠拋例外
+                    "getAuthorizedManager"),
+            "permService", Set.of(
+                    // 維運 API：權限快取失效（管理端點呼叫）
+                    "invalidateCache",
+                    // P1-7 刻意 stub：條件式權限查詢未實作，永遠拋例外
+                    "getUsersByPermissionAndCondition"),
+            "assigneeResolver", Set.of(
+                    // static 工具：供 controller 寫 firstTaskAssignee／
+                    // firstTaskCandidateGroups，不是 EL 函式
+                    "putIfPresent"));
+
     private static final Set<String> DEFAULT_NAMES = Set.of(
             "Task", "Task 1", "Task 2", "Task 3", "");
 
@@ -393,8 +524,8 @@ public class BpmnLintService {
      *
      * <h2>為什麼白名單 regex 抓不到它們（security-audit P2-6）</h2>
      *
-     * <p>{@link #checkElWhitelist} 的 regex 是 {@code \$\{(\w+)\.} ——
-     * <b>必須有「點」</b>才匹配，因為它要抽出 bean 名稱。所以
+     * <p>{@link #checkElWhitelist} 的 regex 是 {@code \$\{(\w+)\.(\w+)?} ——
+     * <b>bean 名稱後面必須有「點」</b>才匹配（有點才可能是 bean 呼叫）。所以
      * {@code ${dept}} 這種純變數參照完全不被任何規則檢查。
      *
      * <p>而設計器原本就會產生它們：使用者在「部門代碼」欄輸入 {@code dept001}，
@@ -624,15 +755,43 @@ public class BpmnLintService {
     /** 指派欄位：屬性名（用於訊息）＋ 運算式。 */
     private record Assignment(String attribute, String expr) {}
 
+    /**
+     * 從指派運算式抽出 {@code ${bean.method} 的 bean 與方法名。
+     *
+     * <p>形狀刻意與改動前的 {@code \$\{(\w+)\.} 相同，只多一個<b>可選</b>的
+     * 方法名 capture group：方法名可選是為了保留原行為 —— {@code ${bean.}}
+     * 這種沒有方法名的寫法，bean 層錯誤仍然要照發。不引入 parser 相依
+     * （JUEL AST 的走訪是 security-audit P2-5 (b) 的另一個工項）。
+     */
+    private static final java.util.regex.Pattern EL_BEAN_METHOD =
+            java.util.regex.Pattern.compile("\\$\\{(\\w+)\\.(\\w+)?");
+
     private void checkElWhitelist(String expr, String elementId, String elementName, List<LintError> errors) {
         if (expr == null || !expr.contains("${")) return;
-        // Extract bean name from ${beanName.method(...)}
-        var matcher = java.util.regex.Pattern.compile("\\$\\{(\\w+)\\.").matcher(expr);
+        // Extract bean name (and method, when present) from ${beanName.method(...)}
+        var matcher = EL_BEAN_METHOD.matcher(expr);
         while (matcher.find()) {
             String bean = matcher.group(1);
             if (!EL_WHITELIST.contains(bean)) {
                 errors.add(new LintError(elementId, elementName, "el-whitelist",
                         "EL 函數 '" + bean + "' 不在白名單內（允許: " + EL_WHITELIST + "）", "error"));
+                // 非白名單 bean 的方法不另外檢查：bean 本身已被擋下，
+                // 而「該 bean 的合法方法」這份事實根本不存在（刻意如此）。
+                continue;
+            }
+            String method = matcher.group(2);
+            // 沒有方法名（${bean.}）或裸用（${bean}，不會 match）都維持現狀。
+            if (method == null) continue;
+            Set<String> allowed = EL_METHOD_WHITELIST.get(bean);
+            // 白名單 bean 必然有方法清單（ElMethodWhitelistDriftTest 釘住）。
+            // 這裡防禦性跳過而不是 NPE：lint 掛掉會讓所有規則一起失效。
+            if (allowed == null) continue;
+            if (!allowed.contains(method)) {
+                // 排序後再輸出：Set.of 的迭代順序未定義，訊息每次不同會讓
+                // 「貼錯誤訊息去搜尋」與測試斷言都不穩定。
+                errors.add(new LintError(elementId, elementName, "el-method-whitelist",
+                        "EL 方法 '" + bean + "." + method + "' 不在白名單內（允許: "
+                                + new java.util.TreeSet<>(allowed) + "）", "error"));
             }
         }
     }
