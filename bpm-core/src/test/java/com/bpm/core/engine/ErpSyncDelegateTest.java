@@ -227,6 +227,23 @@ class ErpSyncDelegateTest {
     }
 
     @Test
+    @DisplayName("PATCH 被擋在驗證層（HttpURLConnection 不支援，實測 Invalid HTTP method）→ 不發請求")
+    void patchIsRejectedWithoutRequest() {
+        when(execution.getCurrentFlowElement()).thenReturn(serviceTask(
+                field("url", baseUrl + "/ok"),
+                field("method", "PATCH"),
+                field("payload", "{\"x\":1}")));
+
+        BpmnError error = callAndCatch(delegateAllowingLocalhost(), execution);
+
+        assertThat(error.getErrorCode()).isEqualTo(ErpSyncDelegate.ERROR_CODE_FAILED);
+        assertThat(error.getMessage()).contains("PATCH");
+        assertThat(hits.get())
+                .as("放行的話會變成誤導的『連線失敗：Invalid HTTP method: PATCH』")
+                .isZero();
+    }
+
+    @Test
     @DisplayName("2xx 但 body 為空（204 等）→ resultVariable 設為空字串（不是不設）")
     void emptyResponseBodyStillSetsResultVariable() {
         when(execution.getCurrentFlowElement()).thenReturn(serviceTask(
@@ -406,8 +423,7 @@ class ErpSyncDelegateTest {
                 .isEqualTo(org.springframework.http.HttpMethod.POST);
         assertThat(ErpSyncDelegate.parseMethod("Put "))
                 .isEqualTo(org.springframework.http.HttpMethod.PUT);
-        assertThat(ErpSyncDelegate.parseMethod("PATCH"))
-                .isEqualTo(org.springframework.http.HttpMethod.PATCH);
+        assertThat(ErpSyncDelegate.parseMethod("PATCH")).isNull();
         assertThat(ErpSyncDelegate.parseMethod("GET")).isNull();
         assertThat(ErpSyncDelegate.parseMethod("DELETE")).isNull();
         assertThat(ErpSyncDelegate.parseMethod("BREW")).isNull();

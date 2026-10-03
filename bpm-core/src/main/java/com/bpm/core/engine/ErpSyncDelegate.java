@@ -40,10 +40,12 @@ import java.util.Set;
  * <h2>欄位</h2>
  * <ul>
  *   <li>{@code url}（必填）：支援 {@code ${var}} 替換。</li>
- *   <li>{@code method}（可選）：POST／PUT／PATCH，預設 POST。payload 是
- *       必填，因此只允許帶 body 的 method —— GET 的 body 不可互通
- *       （與 #49 同一條理由），DELETE 的 body 在
- *       {@code HttpURLConnection} 上同樣不可靠。</li>
+ *   <li>{@code method}（可選）：POST／PUT，預設 POST。payload 是必填，
+ *       因此只允許帶 body 的 method —— GET 的 body 不可互通（與 #49
+ *       同一條理由）；PATCH 在 {@code HttpURLConnection}
+ *       （{@link SafeRestClients} 的底層）不支援，會直接拋
+ *       {@code Invalid HTTP method: PATCH}（單元測試實測），因此也擋在
+ *       驗證層、不讓它變成一句誤導的「連線失敗」。</li>
  *   <li>{@code payload}（必填）：JSON 字串，支援 {@code ${var}} 替換，
  *       以 {@code application/json} 送出。<b>送出前會先驗證是合法 JSON</b>
  *       —— 非 JSON 的 payload 不會發請求，直接 BpmnError。驗證的是
@@ -122,11 +124,11 @@ public class ErpSyncDelegate implements JavaDelegate {
     public static final String ERROR_CODE_FAILED = "ERP_SYNC_FAILED";
 
     /**
-     * 允許的 method。payload 必填，所以只收帶 body 的 method ——
-     * 見類別註解。
+     * 允許的 method。payload 必填，所以只收帶 body、且
+     * {@code HttpURLConnection} 支援的 method —— 見類別註解。
      */
     private static final Set<HttpMethod> ALLOWED_METHODS =
-            Set.of(HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH);
+            Set.of(HttpMethod.POST, HttpMethod.PUT);
 
     private final WebhookUrlPolicy urlPolicy;
     private final ObjectMapper objectMapper;
@@ -184,7 +186,7 @@ public class ErpSyncDelegate implements JavaDelegate {
         HttpMethod method = parseMethod(methodRaw);
         if (method == null) {
             throw failed(execution,
-                    "不支援的 method '" + methodRaw + "'（只允許 POST／PUT／PATCH）", url, null);
+                    "不支援的 method '" + methodRaw + "'（只允許 POST／PUT）", url, null);
         }
 
         String payload = BpmnFieldSupport.field(task, "payload", execution);
@@ -230,8 +232,8 @@ public class ErpSyncDelegate implements JavaDelegate {
     }
 
     /**
-     * 空白＝預設 POST；POST／PUT／PATCH 不分大小寫；其他值回 {@code null}
-     * 由呼叫端報錯。
+     * 空白＝預設 POST；POST／PUT 不分大小寫；其他值（含 GET／DELETE／
+     * PATCH）回 {@code null} 由呼叫端報錯。
      */
     static HttpMethod parseMethod(String raw) {
         if (raw == null || raw.isBlank()) return HttpMethod.POST;
