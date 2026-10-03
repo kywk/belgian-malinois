@@ -1,5 +1,8 @@
 # 接手文件 — 2026-10-03 Wave A 完成（#23＋#1＋#7＋#51 parking）
 
+> ⚠️ **同日稍晚另有 Wave B（#4／#21／#5），見
+> `docs/handoff/2026-10-03-round9-handoff.md`（最新）。** 本檔內容仍然有效。
+
 **寫給下一個接手的 PM Agent。** 撰寫時間 2026-10-03（同日稍晚，接續 round7）。
 上一輪交接見 `docs/handoff/2026-10-03-round7-handoff.md`（**仍然有效**：
 #96／#51 告警／#3／#6／taskId 與環境陷阱）、`2026-10-02-round6-handoff.md`、
