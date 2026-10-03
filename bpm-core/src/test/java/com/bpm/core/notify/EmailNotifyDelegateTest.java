@@ -35,6 +35,13 @@ import static org.mockito.Mockito.when;
  * {@code EmailNotifyDelegateIntegrationTest}）才在真實引擎裡跑，
  * 那裡的 SMTP 刻意是壞的（{@code application-test.yml} 指到不存在的
  * port），驗的是 fail-open：寄不出去，流程仍然走完。
+ *
+ * <h2>收件人正規化（#43 收尾）</h2>
+ *
+ * <p>{@code to} 現在接受 userId：不含 {@code @} 補 {@code @company.com}。
+ * 這是平台慣例（assignee／candidateUsers 都是 {@code user001}）與 delegate
+ * 初版「原樣送出」之間的落差收尾；邊界（含 {@code @} 一律原樣、補網域後
+ * 才去重）都在下面釘住。
  */
 class EmailNotifyDelegateTest {
 
@@ -113,7 +120,7 @@ class EmailNotifyDelegateTest {
     }
 
     @Test
-    @DisplayName("收件人 trim、去空項、去重（與 DLQ 告警同一條規則）")
+    @DisplayName("收件人 trim、去空項、去重；完整 email 原樣（形狀與 DLQ 告警一致）")
     void parsesRecipientsLikeDeadLetterConsumer() {
         when(execution.getCurrentFlowElement()).thenReturn(serviceTask(
                 field("to", " a@x.com ,, b@x.com ,a@x.com, ")));
@@ -121,6 +128,77 @@ class EmailNotifyDelegateTest {
         delegate.send(execution);
 
         assertThat(captureMail().getTo()).containsExactly("a@x.com", "b@x.com");
+    }
+
+    // ── 正向：收件人正規化（#43 收尾）─────────────────────────────────
+
+    @Test
+    @DisplayName("userId（不含 @）自動補 @company.com：平台慣例 user001 → user001@company.com")
+    void userIdGetsCompanyDomain() {
+        when(execution.getCurrentFlowElement()).thenReturn(serviceTask(
+                field("to", " user001 ")));
+
+        delegate.send(execution);
+
+        assertThat(captureMail().getTo()).containsExactly("user001@company.com");
+    }
+
+    @Test
+    @DisplayName("完整 email（含 @）原樣使用，不重複補網域")
+    void emailIsKeptAsIs() {
+        when(execution.getCurrentFlowElement()).thenReturn(serviceTask(
+                field("to", "user001@x.com")));
+
+        delegate.send(execution);
+
+        assertThat(captureMail().getTo()).containsExactly("user001@x.com");
+    }
+
+    @Test
+    @DisplayName("混合清單：userId 補網域、email 原樣，順序不變")
+    void mixesUserIdsAndEmails() {
+        when(execution.getCurrentFlowElement()).thenReturn(serviceTask(
+                field("to", "mgr001, audit@x.com , user002")));
+
+        delegate.send(execution);
+
+        assertThat(captureMail().getTo())
+                .containsExactly("mgr001@company.com", "audit@x.com", "user002@company.com");
+    }
+
+    @Test
+    @DisplayName("${var} 替換出 userId 也補網域（設計師把變數當 userId 用是常態）")
+    void substitutedUserIdGetsDomain() {
+        when(execution.getVariable("approver")).thenReturn("user007");
+        when(execution.getCurrentFlowElement()).thenReturn(serviceTask(
+                field("to", "mgr001@company.com,${approver}")));
+
+        delegate.send(execution);
+
+        assertThat(captureMail().getTo())
+                .containsExactly("mgr001@company.com", "user007@company.com");
+    }
+
+    @Test
+    @DisplayName("@ 在怪位置（a@）→ 原樣放行：含 @ 就當設計師自己寫的位址，不補也不丟")
+    void atSignAnywhereIsLeftUntouched() {
+        when(execution.getCurrentFlowElement()).thenReturn(serviceTask(
+                field("to", "a@,b")));
+
+        delegate.send(execution);
+
+        assertThat(captureMail().getTo()).containsExactly("a@", "b@company.com");
+    }
+
+    @Test
+    @DisplayName("去重在補網域之後：user001 與 user001@company.com 是同一位址，只寄一次")
+    void dedupesAfterNormalization() {
+        when(execution.getCurrentFlowElement()).thenReturn(serviceTask(
+                field("to", "user001, user001@company.com,user001")));
+
+        delegate.send(execution);
+
+        assertThat(captureMail().getTo()).containsExactly("user001@company.com");
     }
 
     @Test
