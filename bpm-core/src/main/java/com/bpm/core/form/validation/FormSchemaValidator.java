@@ -2,9 +2,9 @@ package com.bpm.core.form.validation;
 
 import com.bpm.core.form.model.FormDefinition;
 import com.bpm.core.form.repository.FormDefinitionRepository;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -142,7 +142,7 @@ public class FormSchemaValidator {
         JsonNode data;
         try {
             data = objectMapper.readTree(dataJson);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "dataJson 不是合法的 JSON：" + e.getOriginalMessage());
         }
@@ -168,7 +168,7 @@ public class FormSchemaValidator {
         JsonNode schema;
         try {
             schema = objectMapper.readTree(raw);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw unreadable(def, "JSON 解析失敗：" + e.getOriginalMessage());
         }
         if (schema == null || !schema.isObject()) {
@@ -213,7 +213,8 @@ public class FormSchemaValidator {
         List<Violation> violations = new ArrayList<>();
 
         // 未知欄位先報：它與 schema 的欄位順序無關，且是最可能的注入樣態。
-        data.fieldNames().forEachRemaining(name -> {
+        // Jackson 3 把 fieldNames() 更名為 propertyNames()（回傳 Collection）。
+        data.propertyNames().forEach(name -> {
             if (!fields.containsKey(name)) {
                 violations.add(new Violation(name, "不在表單 schema 定義的欄位中"));
             }

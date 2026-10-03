@@ -2,7 +2,7 @@ package com.bpm.core.external;
 
 import com.bpm.core.model.ExternalSystem;
 import com.bpm.core.repository.ExternalSystemRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletException;

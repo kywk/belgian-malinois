@@ -2,10 +2,10 @@ package com.bpm.core.form.service;
 
 import com.bpm.core.http.SafeRestClients;
 import com.bpm.core.webhook.WebhookUrlPolicy;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -210,7 +210,7 @@ public class FormOptionsService {
         JsonNode root;
         try {
             root = objectMapper.readTree(body);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw upstream("上游回應不是合法 JSON：" + e.getOriginalMessage(), url);
         }
         if (root == null || !root.isArray()) {
@@ -237,7 +237,8 @@ public class FormOptionsService {
         }
         if (node.isObject()) {
             JsonNode valueNode = node.get("value");
-            if (valueNode == null || valueNode.isNull() || valueNode.isContainerNode()) {
+            // Jackson 3 把 isContainerNode() 更名為 isContainer()。
+            if (valueNode == null || valueNode.isNull() || valueNode.isContainer()) {
                 return null;
             }
             String value = valueNode.asText();

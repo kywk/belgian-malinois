@@ -24,8 +24,8 @@
              Flowable 8 是唯一支援 Boot 4 的線（8.0.0 也是 8.x 唯一版本，2026-02-27 發布後無 patch）；
              反向也成立：Flowable 7.2.0 在 Boot 4 上無法運作。兩者之間沒有中繼點，
              這也是 Stage 4 先把 Flowable 單獨升到 7.2.0（留在 Boot 3.5.16）的原因。
-             ⚠️ 升級後 `flowable.variable-json-mapper: jackson2` 必須保留（見 application.yml）；
-             Flowable 8 預設 Jackson 3，而本專案 Java 程式碼仍在 Jackson 2，Stage 6 才遷移。 -->
+             Stage 6 完成 Jackson 3 遷移後，已移除 `flowable.variable-json-mapper: jackson2`：
+             Flowable 8 預設就是 Jackson 3，現在 Java 程式碼與它同一顆。 -->
         <flowable.version>8.0.0</flowable.version>
         <!-- springdoc-openapi（#65）。2.x 是給 Spring Boot 3 的線，3.x 給 Boot 4（S5-0e）。
              3.1.1 是 3.x 最新版，其 parent POM 就是 spring-boot-starter-parent 4.1.0，
@@ -38,16 +38,12 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
-        <!-- Stage 5（S5-0e）：補回 Jackson 2 的自動配置。Boot 4 預設自動配置 Jackson 3 的
-             JsonMapper，而本專案 5 個類別（WebhookConsumer／AuditEventPublisher／
-             AuditEventConsumer／ExternalApiAuthFilter／ExternalSystemPolicy）仍以建構式注入
-             Jackson 2 的 com.fasterxml.jackson.databind.ObjectMapper —— 少了這個模組，
-             Stage 5 啟動就會失敗（前置調查結論 ①）。
-             ⚠️ 這是「補回 Jackson 2 依賴」，不是 Jackson 3 遷移；Stage 6 才移除。 -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-jackson2</artifactId>
-        </dependency>
+        <!-- Stage 5（S5-0e）曾在此宣告 spring-boot-jackson2，補回 Jackson 2 自動配置，
+             讓 5 個以建構式注入 com.fasterxml.jackson.databind.ObjectMapper 的類別
+             （WebhookConsumer／AuditEventPublisher／AuditEventConsumer／
+             ExternalApiAuthFilter／ExternalSystemPolicy）度過 Boot 4 啟動。
+             Stage 6 完成 Jackson 3 遷移後，該依賴與它帶進來的 Jackson 2 自動配置一併移除
+             （保留本註解，理由同下方的 properties-migrator：讓下一個人知道它曾經在場）。 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>

@@ -1,7 +1,7 @@
 package com.bpm.core.dlq;
 
 import com.bpm.core.audit.AuditEventPublisher;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Message;

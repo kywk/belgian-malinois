@@ -3,7 +3,7 @@ package com.bpm.core.notify;
 import com.bpm.core.engine.BpmnFieldSupport;
 import com.bpm.core.http.SafeRestClients;
 import com.bpm.core.webhook.WebhookUrlPolicy;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.flowable.bpmn.model.ServiceTask;
 import org.flowable.engine.delegate.DelegateExecution;
 import org.flowable.engine.delegate.JavaDelegate;
