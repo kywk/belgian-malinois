@@ -48,6 +48,37 @@ public class ExternalSystem {
     @Column(nullable = false, length = 64)
     private String apiKey; // SHA-256 hash
 
+    /**
+     * 回呼（{@code POST /api/callback/{type}}）用的密鑰（工項 #21）。
+     *
+     * <p><b>⚠️ 這裡存的是密鑰本身，不是雜湊 —— 與 {@link #apiKey} 刻意不同。</b>
+     * apiKey 可以只存 SHA-256 是因為驗證方式是「雜湊送來的明文再比對」，
+     * 伺服器不需要原始值；而 HMAC 驗簽的<b>密鑰就是原始密鑰</b>，
+     * 伺服器必須持有它才能重算簽章。把 HMAC 密鑰雜湊後儲存有兩種結果：
+     * <ul>
+     *   <li>拿雜湊當 HMAC 密鑰 → 用戶端也被要求用雜湊簽章。此時<b>雜湊本身
+     *       就是可用於偽造的密鑰</b>，資料庫外洩的後果與明文相同，雜湊白做。</li>
+     *   <li>拿雜湊當「驗證用摘要」→ 根本無法驗簽（伺服器沒有原始密鑰）。</li>
+     * </ul>
+     * 也就是說 MAC 密鑰沒有「不可逆儲存」的選項，只能選擇可還原的儲存方式
+     * （明文，或搭配外部 KMS 的加密）。本工項沒有 KMS，因此採明文儲存 ——
+     * 與 Stripe／GitHub 等 webhook 簽章密鑰的實務一致。
+     *
+     * <p>防護改成落在別處：{@code READ_ONLY} 讓請求 body 無法指定它、
+     * 回應一律遮蔽成 {@code ***}、明文只在建立與輪換時各回傳一次、
+     * 稽核只記「密鑰的雜湊前綴」（見
+     * {@code ExternalSystemAdminController.secretHashPrefix}）。
+     *
+     * <p><b>可空，且空值的語意是「尚未設定」而非「不限制」</b>——
+     * 這是它與 {@code allowedActions} 那組授權欄位最大的差別。
+     * 沒有密鑰就無法驗簽，因此 null 一律拒絕（401）。
+     * 既有資料列在 V5 migration 之後全部是 null，也就是<b>既有系統預設不能
+     * 回呼</b>，直到管理員呼叫 {@code rotate-callback-secret} 產生一組為止。
+     */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Column(length = 64)
+    private String callbackSecret; // 回呼密鑰本身；null = 尚未設定
+
     private String contactEmail;
 
     @Column(columnDefinition = "NVARCHAR(MAX)")
@@ -111,6 +142,8 @@ public class ExternalSystem {
     public void setSystemName(String systemName) { this.systemName = systemName; }
     public String getApiKey() { return apiKey; }
     public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+    public String getCallbackSecret() { return callbackSecret; }
+    public void setCallbackSecret(String callbackSecret) { this.callbackSecret = callbackSecret; }
     public String getContactEmail() { return contactEmail; }
     public void setContactEmail(String contactEmail) { this.contactEmail = contactEmail; }
     public String getAllowedProcessKeys() { return allowedProcessKeys; }

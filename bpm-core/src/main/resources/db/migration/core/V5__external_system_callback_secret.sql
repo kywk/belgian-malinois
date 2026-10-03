@@ -1,0 +1,32 @@
+-- 外部系統的回呼密鑰（工項 #21，per-system callback secret）。
+--
+-- ## 為什麼需要
+--
+-- POST /api/callback/{type} 讓外部系統在非同步工作完成後喚醒流程
+-- （spec §10.2：message correlation）。認證模式由使用者裁決為
+-- 「每個外部系統一組回呼密鑰」：X-System-Id + HMAC-SHA256 簽章 + 時間戳窗。
+--
+-- ## ⚠️ 為什麼這欄不是雜湊（與 apiKey 不同）
+--
+-- apiKey 只存 SHA-256 是因為驗證方式是「雜湊送來的明文再比對」，伺服器不需要
+-- 原始值。HMAC 驗簽則必須持有原始密鑰才能重算簽章；若拿雜湊當 HMAC 密鑰，
+-- 雜湊本身就變成可用於偽造的密鑰，資料庫外洩的後果與明文相同 —— 雜湊買不到
+-- 任何東西。因此這裡存的是密鑰本身（可還原），防護改落在：READ_ONLY、
+-- 回應遮蔽、明文只在建立與 rotate-callback-secret 各回傳一次、稽核只記雜湊前綴。
+-- 沒有 KMS 可用的前提下，這與 Stripe／GitHub 等 webhook 簽章密鑰的實務一致。
+--
+-- ## 為什麼可空、而且不回填
+--
+-- null = 「尚未設定回呼密鑰」。沒有密鑰就無法驗簽，呼叫端一律 401，
+-- 不會退回任何寬鬆路徑。既有資料列在這次 migration 之後全部是 null，
+-- 也就是**既有系統預設不能回呼**，直到管理員對它呼叫
+-- POST /api/admin/external-systems/{systemId}/rotate-callback-secret 產生一組為止。
+-- 刻意不做回填：
+--   * 回填需要產生明文並安全地交給每個外部系統，那是輪換端點的職責，
+--     而且與 rotate-key 一樣「明文只出現一次」；
+--   * 給一個預設值（例如空字串）等於讓所有既有系統共用可預測的密鑰。
+--
+-- 包存在性判斷：與 V3／V4 相同，讓 migration 在 ddl-auto 建出來的舊 dev DB 上也能重跑。
+IF COL_LENGTH('bpm_external_system', 'callback_secret') IS NULL
+    ALTER TABLE bpm_external_system
+        ADD callback_secret NVARCHAR(64) NULL;

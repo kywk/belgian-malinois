@@ -25,14 +25,19 @@ public class ExternalApiAuthFilter extends OncePerRequestFilter {
     private final ExternalSystemRepository repo;
     private final AuditEventPublisher auditPublisher;
     private final ObjectMapper objectMapper;
-    private final ExternalSystemPolicy policy;
+    /**
+     * 停用／IP／allowedActions 的規則已抽到 {@link ExternalSystemAccessGuard}
+     * （工項 #21：回呼端點需要同一份規則）。此處只負責 API key 認證、
+     * action 解析與拒絕稽核 —— 順序與訊息與抽共用前完全相同。
+     */
+    private final ExternalSystemAccessGuard accessGuard;
 
     public ExternalApiAuthFilter(ExternalSystemRepository repo, AuditEventPublisher auditPublisher,
-                                  ObjectMapper objectMapper, ExternalSystemPolicy policy) {
+                                  ObjectMapper objectMapper, ExternalSystemAccessGuard accessGuard) {
         this.repo = repo;
         this.auditPublisher = auditPublisher;
         this.objectMapper = objectMapper;
-        this.policy = policy;
+        this.accessGuard = accessGuard;
     }
 
     @Override
@@ -63,17 +68,15 @@ public class ExternalApiAuthFilter extends OncePerRequestFilter {
 
         ExternalSystem sys = optSys.get();
 
-        if (!Boolean.TRUE.equals(sys.getEnabled())) {
-            reject(response, 403, "System is disabled", systemId, request);
-            return;
-        }
-
         // IP 白名單。改動前用 Set.of(split(",")) —— 白名單若有重複 IP 會拋
         // IllegalArgumentException 變成 500，且集合元素未 trim（trim 的是
         // clientIp），因此 "10.0.0.1, 10.0.0.2" 的第二個項目永遠比不中。
         String clientIp = request.getRemoteAddr();
-        if (!policy.isIpAllowed(sys, clientIp)) {
-            reject(response, 403, "IP not in whitelist: " + clientIp, systemId, request);
+        // 停用與 IP 的規則在 ExternalSystemAccessGuard（工項 #21 抽共用）——
+        // 順序（停用 → IP → 解析 action → allowedActions）與訊息與抽共用前相同。
+        var denied = accessGuard.rejectSystemOrIp(sys, clientIp);
+        if (denied.isPresent()) {
+            reject(response, denied.get().status(), denied.get().reason(), systemId, request);
             return;
         }
 
@@ -85,8 +88,9 @@ public class ExternalApiAuthFilter extends OncePerRequestFilter {
             reject(response, 403, "Unrecognised external API endpoint", systemId, request);
             return;
         }
-        if (!policy.isActionAllowed(sys, action)) {
-            reject(response, 403, "Action not allowed: " + action, systemId, request);
+        denied = accessGuard.rejectAction(sys, action);
+        if (denied.isPresent()) {
+            reject(response, denied.get().status(), denied.get().reason(), systemId, request);
             return;
         }
 
