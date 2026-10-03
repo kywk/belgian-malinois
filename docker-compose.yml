@@ -1,3 +1,7 @@
+# 本檔是開發基底（搭配 docker-compose.dev.yml）。
+# 資源上限刻意只放在 docker-compose.prod.yml：本機 dev 機器（24GB）不需要
+# 限制，且限制會讓開發時的建置／除錯行為與正式環境不同。prod 是獨立檔案，
+# 不會疊到本檔。
 services:
   mssql:
     image: mcr.microsoft.com/mssql/server:2022-latest
