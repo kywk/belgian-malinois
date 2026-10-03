@@ -343,6 +343,14 @@ public class FormService {
         return dataRepo.save(data);
     }
 
+    /**
+     * 某案件的所有表單資料列，依 {@code submittedAt} 遞減 ——
+     * <b>最新版本排最前面</b>。
+     *
+     * <p>#58 起同一個案件可以有<b>多列</b>同一份表單：每一次退回修改都是
+     * 新增一列（見 {@link #updateData}），舊版本保留。呼叫端若只要「目前
+     * 的內容」取第一筆即可；全部列出則可以還原修改歷史。
+     */
     @Transactional(value = "formTransactionManager", readOnly = true)
     public List<FormData> getDataByProcess(String processInstanceId) {
         return dataRepo.findByProcessInstanceIdOrderBySubmittedAtDesc(processInstanceId);
@@ -352,10 +360,11 @@ public class FormService {
      * 依 id 取得一筆表單資料。
      *
      * <p>存在的原因不只是「給 delete 記錄內容用」（那是 {@link #getById} 的用途），
-     * 而是<b>物件層授權需要知道這筆資料掛在哪個案件上</b>：
+     * 而是<b>物件層授權需要知道這筆資料掛在哪個案件上、以及誰是送件人</b>：
      * {@code PUT /api/form-data/{id}} 的路徑參數只有 {@code id}，而
-     * {@code processInstanceId} 在 DB 裡 —— 守衛要拿它去問
-     * {@code ProcessAccessGuard.requireParticipant}。
+     * {@code processInstanceId} 與 {@code submittedBy} 都在 DB 裡 ——
+     * 守衛要拿前者去問 {@code ProcessAccessGuard.requireParticipant}，
+     * 拿後者做 #58 的送件人比對。
      *
      * <p>⚠️ 不可改成「把守衛塞進 {@link #updateData}」：授權判斷必須留在 controller，
      * 否則 service 會同時被 HTTP 與非 HTTP 的呼叫路徑共用，卻只有其中一條
@@ -368,11 +377,48 @@ public class FormService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }
 
+    /**
+     * 修改表單資料 —— <b>版本化</b>：新增一列，不覆寫原列（#58）。
+     *
+     * <h2>為什麼不是「把舊列改掉」</h2>
+     *
+     * <p>表單資料是「這張單填了什麼」的證據，薪資、理由、金額都在裡面。
+     * 改動前這裡直接 {@code existing.setDataJson(updated.getDataJson())}：
+     * 原始送件當場消失，而 {@code submittedAt} 是 {@code updatable = false}
+     * —— 連「什麼時候被改的」都不會變。稽核雖然記了 {@code FORM_UPDATE}，
+     * 卻沒有留下「改動前的內容」，事後調查只能看到結果。
+     *
+     * <p>現在每次修改新增一列：{@code processInstanceId}／
+     * {@code formDefinitionId}／{@code submittedBy}／{@code taskId} 沿用舊列，
+     * {@code dataJson} 是新的，{@code submittedAt} 由 {@code @PrePersist}
+     * 寫成當下時間。舊列完整保留，版本鏈由 {@code FORM_UPDATE} 稽核的
+     * {@code formDataId}（新列）與 {@code supersededFormDataId}（被取代的舊列）
+     * 串起（見 {@code FormDataController.update}）。
+     *
+     * <p>⚠️ {@code taskId} 沿用舊列而不是換成現任補件任務：{@code PUT} 的
+     * body 只保證帶 {@code dataJson}，換成別的來源會讓非 HTTP 呼叫路徑
+     * 拿到不同的結果。這是已知的簡化，不影響「誰送的、什麼時候送的」。
+     *
+     * <p>⚠️ 授權與退回狀態<b>不在</b>這裡：只有 controller 知道呼叫者是誰
+     * （見 {@link #getDataById} 的說明）。本方法只負責「新增版本」這個資料動作。
+     *
+     * @return 新版本列（呼叫端要拿它的 id 寫稽核）
+     */
     @Transactional("formTransactionManager")
     public FormData updateData(String id, FormData updated) {
         FormData existing = dataRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
-        existing.setDataJson(updated.getDataJson());
-        return dataRepo.save(existing);
+
+        FormData revision = new FormData();
+        revision.setFormDefinitionId(existing.getFormDefinitionId());
+        revision.setProcessInstanceId(existing.getProcessInstanceId());
+        revision.setTaskId(existing.getTaskId());
+        revision.setSubmittedBy(existing.getSubmittedBy());
+        revision.setDataJson(updated.getDataJson());
+        // submittedAt 刻意留 null → @PrePersist 寫入當下時間。
+        // 不可沿用 existing.getSubmittedAt()：那會讓新版本在
+        // getDataByProcess 的遞減排序中與舊版本同時間（甚至排在後面），
+        // 「最新版本排最前面」就不再成立。
+        return dataRepo.save(revision);
     }
 }
