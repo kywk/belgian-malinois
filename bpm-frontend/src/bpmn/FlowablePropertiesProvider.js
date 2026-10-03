@@ -1,4 +1,5 @@
 import AssigneeProps from './AssigneeProps.js'
+import CallActivityProps from './CallActivityProps.js'
 import FormProps from './FormProps.js'
 import WebhookProps from './WebhookProps.js'
 
@@ -32,6 +33,13 @@ export default class FlowablePropertiesProvider {
       }
       if (is(element, 'bpmn:StartEvent')) {
         groups.push(FormProps(element))
+      }
+      // Call Activity（#4、spec §4.4.2）：業務人員在這裡選預定義加簽子流程。
+      // 掛在 bpmn:CallActivity 上，與 webhook 掛在 UserTask／Process 同一種
+      // 形狀；provider 本身是 FlowablePropertiesProvider，由 bpmn/index.js
+      // 註冊進模型器（useBpmnModeler 的 additionalModules）。
+      if (is(element, 'bpmn:CallActivity')) {
+        groups.push(CallActivityProps(element))
       }
       return groups
     }

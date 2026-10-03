@@ -35,6 +35,7 @@ const XML = `<?xml version="1.0" encoding="UTF-8"?>
     <startEvent id="start"/>
     <userTask id="t1"/>
     <serviceTask id="s1"/>
+    <callActivity id="ca1"/>
   </process>
 </definitions>`
 
@@ -48,7 +49,8 @@ async function fixtures() {
     process: { businessObject: process },
     userTask: { businessObject: byId('t1') },
     startEvent: { businessObject: byId('start') },
-    serviceTask: { businessObject: byId('s1') }
+    serviceTask: { businessObject: byId('s1') },
+    callActivity: { businessObject: byId('ca1') }
   }
 }
 
@@ -60,7 +62,7 @@ function groupIds(p, element) {
   return p.getGroups(element)([]).map(g => g.id)
 }
 
-describe('FlowablePropertiesProvider 的 webhook 面板掛載', () => {
+describe('FlowablePropertiesProvider 的面板掛載', () => {
   it('bpmn:Process 必須掛上 webhook 面板 —— 後端讀 <process> 的設定，設計器就得看得到', async () => {
     const p = provider()
     const { process } = await fixtures()
@@ -79,5 +81,11 @@ describe('FlowablePropertiesProvider 的 webhook 面板掛載', () => {
     // StartEvent 只有表單面板（既有行為），ServiceTask 完全沒有自訂面板。
     expect(groupIds(p, startEvent)).toEqual(['flowable-form'])
     expect(groupIds(p, serviceTask)).toEqual([])
+  })
+
+  it('bpmn:CallActivity 必須掛上呼叫子流程面板（#4）—— 業務人員才選得到預定義加簽子流程', async () => {
+    const p = provider()
+    const { callActivity } = await fixtures()
+    expect(groupIds(p, callActivity)).toEqual(['flowable-call-activity'])
   })
 })

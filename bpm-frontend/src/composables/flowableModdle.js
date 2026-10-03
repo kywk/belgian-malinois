@@ -95,6 +95,54 @@ export default {
         { name: 'url', isAttr: true, type: 'String' },
         { name: 'method', isAttr: true, type: 'String' }
       ]
+    },
+    // ── Call Activity 的子流程呼叫設定（#4，spec §4.4.2）─────────────
+    // 寫出來長相：
+    //   <callActivity calledElement="countersign-review"
+    //                 flowable:inheritVariables="false">
+    //     <bpmn:extensionElements>
+    //       <flowable:in source="legalReviewer" target="countersignAssignee"/>
+    //       <flowable:out source="approved" target="countersignApproved"/>
+    //     </bpmn:extensionElements>
+    //   </callActivity>
+    //
+    // ⚠️ In／Out 的 superClass: ['Element'] 不可移除，理由與檔頭的
+    // TaskListener 完全相同 —— 而且後果已用 bpmn-moddle 實測過：
+    // 沒有這兩個型別時，設計器「開啟含 in／out 的 BPMN 再存檔」會把
+    // <flowable:in>／<flowable:out> 整個刪掉（unparsable content → 匯出時
+    // extensionElements 只剩空的）。那等於使用者在設計器按一次儲存，就
+    // 無聲拆掉父流程與子流程之間的變數映射。
+    //
+    // inheritVariables 定義成 Boolean 而不是放給 moddle 當 unknown
+    // attribute：unknown attribute 雖然目前會被保留在 $attrs，但每次解析都
+    // 產生 warning，而且那條保留路徑不受型別系統保證（見 #67 TaskListener
+    // 的教訓）。
+    {
+      name: 'CallActivity',
+      extends: ['bpmn:CallActivity'],
+      properties: [
+        { name: 'inheritVariables', isAttr: true, type: 'Boolean' }
+      ]
+    },
+    {
+      name: 'In',
+      superClass: ['Element'],
+      properties: [
+        { name: 'source', isAttr: true, type: 'String' },
+        { name: 'sourceExpression', isAttr: true, type: 'String' },
+        { name: 'target', isAttr: true, type: 'String' },
+        { name: 'targetExpression', isAttr: true, type: 'String' }
+      ]
+    },
+    {
+      name: 'Out',
+      superClass: ['Element'],
+      properties: [
+        { name: 'source', isAttr: true, type: 'String' },
+        { name: 'sourceExpression', isAttr: true, type: 'String' },
+        { name: 'target', isAttr: true, type: 'String' },
+        { name: 'targetExpression', isAttr: true, type: 'String' }
+      ]
     }
   ]
 }
