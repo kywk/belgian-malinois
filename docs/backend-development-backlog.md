@@ -1,7 +1,7 @@
 # Greyhound BPM 平台 — 後端開發工項清單
 
 > 產出日期：2026-06-08
-> 最後更新：2026-10-04（**#63／#64 完成（測試覆蓋＋端到端；修復 PROCESS_COMPLETED result 真 bug）；同日 #41／#53、#60／#61、走查＋#28／#32／#35；前端 DynamicForm 鏈斷裂修復**；#70 全部完成：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3，EOL 安全債清償；Wave G：#97／#44／#45／#46／#47；Wave F：待決策六項；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
+> 最後更新：2026-10-04（**#8／#9 完成 —— 97 項全清（✅97／🟡0／⬜0）；同日 #63／#64、#41／#53、#60／#61、走查＋#28／#32／#35；前端 DynamicForm 鏈斷裂修復**；#70 全部完成：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3，EOL 安全債清償；Wave G：#97／#44／#45／#46／#47；Wave F：待決策六項；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
 > 基於規格文件 vs 實際程式碼差異分析
 >
 > 狀態：✅ 完成　🟡 部分完成（說明欄寫缺什麼）　⬜ 未開始
@@ -43,8 +43,8 @@
 
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
-| 8 | OrgRestClient 正式實作 | 對接外圍組織系統 REST API（非 Mock） | 3d | 🟡 client 有逾時與容錯、mock fail-closed；仍只對接 `MockOrgController`（待權限中心） |
-| 9 | PermRestClient 正式實作 | 對接外圍權限系統 REST API | 2d | 🟡 同 #8；條件式權限查詢刻意拋 Unsupported |
+| 8 | OrgRestClient 正式實作 | 對接外圍組織系統 REST API（非 Mock） | 3d | ✅ 2026-10-04（**依 mock 契約正式化**，使用者裁決）：認證注入（`bpm.external.auth-header`＋`org-auth-token`，值原樣、空＝不送）、統一錯誤映射（`ExternalApiException`：service／kind／status／path、**不帶 body**）、真 HTTP 契約測試 19 條；404 fail-closed 語意保留。真實系統上線只需換 URL＋token。merge `d511a95` |
+| 9 | PermRestClient 正式實作 | 對接外圍權限系統 REST API | 2d | ✅ 2026-10-04（同 #8）：`perm-auth-token`＋契約測試 14 條；條件式查詢維持 P1-7 stub（lint 擋下）。merge `d511a95` |
 | 10 | Redis 快取實作 | 所有 org/perm 查詢加入 Redis TTL 快取 | 2d | ✅ TTL 快取、快取空值、Redis 故障時退化 |
 | 11 | 快取主動失效 Webhook | `/api/internal/cache-invalidate/org`、`/perm` 實作 | 1d | ✅ 需 `ROLE_GATEWAY`（信任閘道） |
 | 12 | BpmQueryService 組合查詢 | `getManagerWithPermission`、`getDeptUsersWithPermission` | 2d | ✅ |
@@ -321,7 +321,7 @@
 | 2026-09-29 新增 | 29 | 29 | 0 | 0 | 0d |
 | 2026-10-02 新增 | 2 | 2 | 0 | 0 | 0d |
 | 2026-10-03 新增 | 1 | 1 | 0 | 0 | 0d |
-| **合計** | **97** | **95** | **2** | **0** | **~5 人天** |
+| **合計** | **97** | **97** | **0** | **0** | **0d** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -607,6 +607,13 @@
 > 驗收：**1584 全綠**（+218）、熱啟動＋acceptance 7/0；線上完整請假流程（formData 啟動→主管核准）
 > 的 `PROCESS_COMPLETE` 稽核 `result=approved`。
 > 統計：✅ 95、🟡 2、⬜ 0；剩餘上限 **~5 人天**（僅 #8／#9，下一批）。
+>
+> **2026-10-04（#8／#9）—— 外圍 client 正式化；backlog 97 項全數結清。**
+> 依 mock 契約正式化（使用者裁決）：認證注入（`bpm.external.auth-header`＋per-service token，值原樣、空＝不送）、
+> 統一錯誤映射（`ExternalApiException`：service／kind／status／path、**不帶 body**；`RestClientException` 子類保住既有 catch 網）、
+> 真 HTTP 契約測試 33 條；404 fail-closed 與服務層語意保留；prod compose 注入 `ORG_AUTH_TOKEN`／`PERM_AUTH_TOKEN`。
+> 驗收：**1617 全綠**（+33）、熱啟動（設 token）acceptance 7/0、log 零 token 洩漏。
+> **統計：✅ 97、🟡 0、⬜ 0；剩餘 0d。** 真實系統上線只需換 URL＋token（部署檢查清單見 round21）。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是
