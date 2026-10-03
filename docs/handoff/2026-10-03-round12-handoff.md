@@ -1,5 +1,8 @@
 # 接手文件 — 2026-10-03 Wave E 完成（#43＋#48＋#49＋#50）
 
+> ⚠️ **同日稍晚另有 Wave F（#22 白名單／#58／#56／#65／#43 補網域），見
+> `docs/handoff/2026-10-03-round13-handoff.md`（最新）。** 本檔內容仍然有效。
+
 **寫給下一個接手的 PM Agent。** 撰寫時間 2026-10-03（同日，接續 round11）。
 上一輪交接見 `docs/handoff/2026-10-03-round11-handoff.md`（**仍然有效**：Wave D）、
 `round10`（Wave C）、`round9`（Wave B）、`round8`（Wave A）、`round7`（#96／#51／#3／#6／taskId）、

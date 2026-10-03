@@ -1,7 +1,7 @@
 # Greyhound BPM 平台 — 後端開發工項清單
 
 > 產出日期：2026-06-08
-> 最後更新：2026-10-03（Wave E：#43 EmailNotifyDelegate、#48 DataValidationDelegate、#49 ExternalApiDelegate、#50 JVM 記憶體；Wave D：#22 External Worker、#24 Signal 廣播、#20 usage-logs、小殘餘批次；Wave C：#55 Schema 驗證、#59 封存保護、#7 撤回通知、#21 UI；Wave B：#4 Call Activity、#21 Callback、#5 代理人；Wave A：#23 逾期提醒、#1 `returnTo=initiator`、#7 流程撤回、#51 parking；同日稍早：#96 完成路徑通知收斂、#51 DLQ 告警與重放、#3 催辦開放受理人、#6 HMAC fallback 移除、currentTask 補 taskId）
+> 最後更新：2026-10-03（Wave F：待決策六項落實 —— #22 topic 白名單、#58 版本化、#56 動態選項、#65 OpenAPI、#43 to 補網域；Wave E：#43/#48/#49 delegate、#50 JVM；Wave D：#22/#24/#20、小殘餘；Wave C：#55/#59/#7 通知/#21 UI；Wave B：#4/#21/#5；Wave A：#23/#1/#7/#51；同日稍早：#96/#51 告警/#3/#6/taskId）
 > 基於規格文件 vs 實際程式碼差異分析
 >
 > 狀態：✅ 完成　🟡 部分完成（說明欄寫缺什麼）　⬜ 未開始
@@ -67,7 +67,7 @@
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
 | 21 | Callback 接收端 | HMAC Token 驗證、冪等檢查（Redis SetIfAbsent）、Message Correlation | 3d | ✅ **2026-10-03 完成**（`9032365`，merge `f3aed18`）。使用者裁決 per-system callback secret：`ExternalSystem.callbackSecret`（可還原儲存——HMAC 驗簽需要原始密鑰，非雜湊；V5 migration）＋建立時回傳一次＋`rotate-callback-secret`。端點 `POST /api/callback/{type}`：`X-System-Id`＋`X-Callback-Signature`（對原始 body）＋`X-Callback-Timestamp`（±5 分鐘）、`allowedActions` 含 `callback`（空＝不限制）、Redis 冪等（fail-closed 503；交易未 commit 釋放鍵）、correlation 用 `messageEventReceived`（Flowable 7 無 `createMessageCorrelationBuilder`）。線上實測：正確簽章 200 喚醒、duplicate 200、壞簽章 401、缺 deliveryId 400、輪換後舊 401 新 200。⚠️ 已知：secret 明文存 DB（無 KMS；防護靠 READ_ONLY／遮蔽／只回一次／稽核雜湊前綴）；硬殺 crash 窗口（鍵留 24h TTL）。✅ **同日收尾**（`6f5067d`，merge `a8e9a3a`）：管理頁新增「回呼密鑰」狀態欄與輪換按鈕（明文僅顯示一次、關閉即清）。✅ **再收尾**（`19d37f2`）：建立系統時同一對話框同時顯示 `apiKey` 與 `callbackSecret` 明文（僅顯示一次） |
-| 22 | External Worker Task 支援 | 輪詢認領機制 | 3d | ✅ **2026-10-03 完成**（`0d8a3c9`，merge `7c216f5`）。BPMN `flowable:type="external-worker"`＋`flowable:topic`（jar 位元碼確認）；`/api/external/worker/**`：acquire／查詢／complete／fail／unacquire，包 Flowable `ManagementService` external worker API；workerId 一律伺服器鑄造 `system:<id>`（偽造 400）；他人 job 與不存在共用 404；`allowedActions` 新增 `external_worker`（filter 只加映射）。線上實測：acquire→complete→流程續行、別系統 complete 404。⚠️ 已知：跨系統共享 topic 先搶先贏（建議系統專屬 topic）；acquire 回傳流程變數（共用 topic 時可見）；fail 依 Flowable 預設 3→2→1→0 進死信 |
+| 22 | External Worker Task 支援 | 輪詢認領機制 | 3d | ✅ **2026-10-03 完成**（`0d8a3c9`，merge `7c216f5`）。BPMN `flowable:type="external-worker"`＋`flowable:topic`（jar 位元碼確認）；`/api/external/worker/**`：acquire／查詢／complete／fail／unacquire，包 Flowable `ManagementService` external worker API；workerId 一律伺服器鑄造 `system:<id>`（偽造 400）；他人 job 與不存在共用 404；`allowedActions` 新增 `external_worker`（filter 只加映射）。線上實測：acquire→complete→流程續行、別系統 complete 404。⚠️ 已知：跨系統共享 topic 先搶先贏（建議系統專屬 topic）；acquire 回傳流程變數（共用 topic 時可見）；fail 依 Flowable 預設 3→2→1→0 進死信。✅ **同日收尾**（`42726c0`，merge `541c468`）：`allowedWorkerTopics` 白名單（V7 migration；空＝不限制，與 `allowedCandidateGroups` 同一四態規則）——acquire／查詢在碰 job **之前**檢查（403、訊息指名），管理端欄位＋稽核＋前端列表/表單同步。線上實測：白名單內 200、未列 topic 403 |
 | 23 | Timer Event 超時處理 | 超時自動觸發、超時預警通知 | 2d | ✅ **2026-10-03 完成**（`2f8756e`，merge `4d6a6fd`）。政策（使用者裁決）：**只提醒現任受理人、不自動動作**。機制：BPMN **非中斷式** boundary timer（`cancelActivity="false"`）＋ `timeoutNotifyDelegate`（`JavaDelegate`）→ `NotifyPublisher.taskTimedOut` 事件 `task_timeout` → EmailConsumer。⚠️ 實測推翻「current activity 是 boundary」的假設：delegate 掛在 boundary 後 serviceTask 時 current activity 是 serviceTask，改由 incoming flow 反推；中斷式接法明確擋下（同 command 任務列未 flush，靠查不到任務擋不住）。線上實測：5 秒 timer → 恰 1 封「任務已逾時」；任務保留、流程仍在跑。webhook `timeout` 選項維持移除、payload 休眠（不同機制） |
 | 24 | Signal Event 廣播 | 一對多喚醒流程 | 1d | ✅ **2026-10-03 完成**（`fa8bf07`，merge `90ea773`）。`POST /api/admin/signals/{signalName}/broadcast`（ROLE_ADMIN）：廣播前查等待訂閱數（0 → 404，與 callback 一致）、`runtimeService.signalEventReceived(name, vars)`；`SIGNAL_BROADCAST` 稽核（detail 只記變數個數）。線上實測：2 個等待實例一次全醒、第二次 404、稽核齊全。⚠️ 已知：process-scoped signal 會被計數但全域廣播跳過（Flowable 語意，測試釘住）；count 與廣播間有競態窗口 |
 
@@ -113,7 +113,7 @@
 
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
-| 43 | EmailNotifyDelegate | 流程節點中觸發 Email 通知 | 1d | ✅ **2026-10-03 完成**（`3dfea85`，merge `894102f`）。`flowable:field`：`to`（必填、逗號分隔、支援 `${var}`、**完整 email 地址**——與 EmailConsumer 的 userId 慣例刻意不同，javadoc 明示）、`subject`／`body`；`JavaMailSender` 直寄、FROM 同既有；**fail-open**（寄失敗不擋流程）；共用 `BpmnFieldSupport`（不依賴單例 setter 注入）。線上實測：MailHog 收到「E2E Delegate 通知」 |
+| 43 | EmailNotifyDelegate | 流程節點中觸發 Email 通知 | 1d | ✅ **2026-10-03 完成**（`3dfea85`，merge `894102f`）。`flowable:field`：`to`（必填、逗號分隔、支援 `${var}`、**完整 email 地址**——與 EmailConsumer 的 userId 慣例刻意不同，javadoc 明示）、`subject`／`body`；`JavaMailSender` 直寄、FROM 同既有；**fail-open**（寄失敗不擋流程）；共用 `BpmnFieldSupport`（不依賴單例 setter 注入）。線上實測：MailHog 收到「E2E Delegate 通知」。✅ **同日收尾**（`ec52679`，merge `f845756`）：`to` 無 `@` 自動補 `@company.com`（完整 email 原樣；去重移到補網域後）。線上實測：`to=user001` → MailHog 收到 `user001@company.com`（+1） |
 | 44 | TeamsNotifyDelegate | 流程節點中觸發 Teams 通知 | 1d | ⬜ |
 | 45 | ESignDelegate | 觸發電子簽章 + 等待 Callback 喚醒 | 3d | ⬜ |
 | 46 | ErpSyncDelegate | 同步資料到 ERP 系統 | 2d | ⬜ |
@@ -138,9 +138,9 @@
 |---|------|------|------|------|
 | 54 | 表單版本管理 | version 自增、歷史版本查詢、依版本取 schema | 2d | ✅ 改版路徑、依版本取 schema、撞號重試 |
 | 55 | 表單 Schema 驗證 | 提交時驗證 dataJson 符合 schemaJson 定義 | 2d | ✅ **2026-10-03 完成**（`e543d8e`，merge `cf2463c`）。新 `FormSchemaValidator`（required 缺漏／null／空白／空陣列、型別依 `DynamicForm` 契約、**未知欄位拒絕**、schema 毀損 500 fail-closed）；`FormDataController.submit` 在授權／身分之後、寫入之前呼叫，違規 400 逐欄位指名、零副作用。線上實測：缺 required 400、未知欄位 400、合法 200。⚠️ 已知：查不到的 `formDefinitionId` 略過驗證（既有測試資料 id 對不到定義；以測試釘住現況）；`PUT /api/form-data/{id}` 不驗（#58 範圍） |
-| 56 | 動態選項（API 載入） | 下拉選單 options 支援從外部 API 動態取得 | 2d | ⬜ |
+| 56 | 動態選項（API 載入） | 下拉選單 options 支援從外部 API 動態取得 | 2d | ✅ **2026-10-03 完成**（`3f106ad`，merge `058aee3`）。schema select 可設 `optionsUrl`；`GET /api/forms/options?url=` 後端代理：🔴 URL 先過 `WebhookUrlPolicy`（**policy 先於快取**）、**不跟隨 3xx**、Redis 快取 60s（讀寫壞值 fail-open）、非 2xx／非 JSON／逾時 → 502；前端遠端優先、失敗回退靜態 options。線上實測：loopback 403（零請求）、公開非 JSON 502、未登入 401。⚠️ 已知：`/options` 是 formKey 保留字；`optionsUrl` 存檔時不驗證；**既有 `WebhookConsumer`／`ExternalApiDelegate` 仍跟隨 3xx**（SSRF 重導缺口，建議另開工項統一收斂） |
 | 57 | 檔案上傳支援 | 檔案上傳元件對應的 storage + API | 3d | ✅ `AttachmentController`：路徑圍堵、物件層授權、稽核人員唯讀調閱 |
-| 58 | 表單資料更新 | 退回修改時 PUT form-data 的版本控制邏輯 | 1d | 🟡 `PUT /api/form-data/{id}` 可用；缺版本控制與本人／退回狀態檢查 |
+| 58 | 表單資料更新 | 退回修改時 PUT form-data 的版本控制邏輯 | 1d | ✅ **2026-10-03 完成**（`09e5254`，merge `6cdd1a2`）。三道閘門：送件人本人（`existing.getSubmittedBy()`，非送件人 404＋DATA_ACCESS）→ 退回狀態（現任任務含 `isRevisionTask` 且指派給 caller，否則 409；已結束亦 409）→ **版本化**（每次修改新增一列、舊列保留；`FORM_UPDATE` 稽核含 `supersededFormDataId`）。線上實測：審核中 409、非送件人 404、退回中 200 新列、GET 兩列（新在前）、稽核含新舊 id。⚠️ 已知：PUT 仍不驗 schemaJson；狀態與寫入間無鎖；多列語意未來前端須取第一筆 |
 | 59 | 封存/刪除保護完善 | archived 狀態完整測試、流程中使用的表單不可封存 | 1d | ✅ **2026-10-03 完成**（`77f71c7`，merge `0eaa500`）。`archive`：被**執行中**流程使用的表單 → 409（訊息指名第一個使用中案件；以 FormData 的 `formDefinitionId` 判定，不用 `_formVersions`——那是「流程定義引用」不是「已填寫」）；`delete`：draft 有任何 FormData → 409。跨交易唯讀查 runtime（同型先例 `FormDataController.submit`）。線上實測：使用中 409、未使用 create→publish→archive 200。⚠️ 已知：「啟動但未送表單」不算使用中（版本鎖定仍可運作）。✅ **同日補 index**（`7343eb9`）：`V6__form_data_form_definition_id_index.sql`（幂等；測試查 `sys.indexes` 釘住） |
 
 ---
@@ -154,7 +154,7 @@
 | 62 | 認證授權整合 | Sa-Token / JWT 對接、API Gateway 層 JWT 驗證 | 3d | ✅ 後端：JWT 驗證＋信任閘道、預設 denyAll（R-01）；前端 OIDC 流程依決策延後 |
 | 63 | 單元測試 | bpm-core Service/Controller 層單元測試 | 5d | 🟡 約 280 個測試，偏回歸與安全守衛，非系統性覆蓋 |
 | 64 | 整合測試 | 流程端到端測試（啟動→審核→完成）、外部系統接入測試 | 5d | 🟡 Testcontainers＋`acceptance/`（TC-A01／A02／A04）＋`acceptance-test.sh` |
-| 65 | API 文件 | Swagger/OpenAPI 文件產生、外部系統對接文件 | 2d | ⬜ |
+| 65 | API 文件 | Swagger/OpenAPI 文件產生、外部系統對接文件 | 2d | ✅ **2026-10-03 完成**（`a7d1310`，merge `43eb5f0`）。springdoc 2.9.1（parent POM 實證與 Boot 3.5.16 同版）；**prod 關閉**（`application.yml` prod 文件 `springdoc.*.enabled=false`）、dev/test 開放；`SecurityConfig` 僅加文件路徑 permitAll（雙層防護，`OpenApiProdDisabledTest` 守門）。線上實測：`/v3/api-docs` 200（title「Greyhound BPM 平台 API」）、`/swagger-ui.html` 302。⚠️ prod 執行期未實測（設定層＋框架語意） |
 
 ---
 
@@ -226,6 +226,14 @@
 |---|------|------|------|------|
 | 95 | 文件與現況同步（#68 範圍外清單） | 修正現行文件與程式碼落差：`CLAUDE.md` 的 R-18 阻斷／無應用層認證敘述、`docs/plan/README.md` 狀態表（49.5 → 19.5 人日）、spec §4.3 `returnTo`（未實作）、§9.4 status（駁回是 `completed + result=rejected`）、§11.3 `getManagerAtLevel`、Phase 4/5 逐項對程式碼勾選；歷史快照（security-audit／handover）只加註 | 0.2d | ✅ **2026-10-02 完成**（`8da65e9`，merge `b471e69`）。每一處附 file:line；未勾：Phase 4 CI/CD（R-07／R-08）、Phase 5 Call Activity（#4）。⚠️ 另發現 R-19／R-23 的外部 `_` 變數過濾殘留（程式缺陷）—— 已於同日修復：R-19 修 `completeTask`、收尾 `c05afae` 修 `startProcess`（同一份 helper） |
 | 96 | 完成路徑通知收斂 | 外部 API（`ExternalApiController.completeTask`）完成任務時也發退回／拒絕／結案通知；收斂成全域 `TASK_COMPLETED`／`PROCESS_COMPLETED` listener（`FlowableConfig` 註冊），避免 HTTP 路徑與外部路徑兩套規則 | 1.5d | ✅ **2026-10-03 完成**（`2cf789d`，merge `7f88ac2`）。新增 `CompletionNotifyListener`（全域 listener）：`TASK_COMPLETED` 發 returned／rejected，`PROCESS_COMPLETED` 只在 `applicantEventFor(vars,true)==process_completed` 時發（恰好一則、不重複）；補件與 standalone 加簽略過；`TaskController` 移除直接呼叫（防雙發）。⚠️ **實測發現原設計不足**：同 command 剛寫入的 `approved`／`rejected` 不在歷史變數查詢結果（未 flush）——改用 `CommandContext` attribute 暫存同 command 的完成關卡與 vars，歷史＋execution 只作 fallback。申請人判定抽成 `ApplicantIdentityLookup` 與催辦共用。線上實測：外部 API 完成最後一關 → 申請人（onBehalfOf）恰好 1 封「已核准」；HTTP 路徑亦恰好 1 封 |
+
+---
+
+## 六、2026-10-03 新增的工項
+
+| # | 工項 | 說明 | 估時 | 狀態 |
+|---|------|------|------|------|
+| 97 | 外部 HTTP 客戶端不跟隨重導（SSRF） | `WebhookConsumer` 與 `ExternalApiDelegate` 目前跟隨 3xx 重導，而 `WebhookUrlPolicy` 只檢查原始 URL → 通過政策的主機可 302 到 loopback／內網。`FormOptionsService`（#56）已明確不跟隨；本項把三個客戶端統一收斂（共用「不跟隨重導」的 client 設定） | 0.5d | ⬜ **2026-10-03 Wave F 發現**（`FormOptionsService` 實作時揭露） |
 
 ---
 
@@ -308,11 +316,12 @@
 | 稽核 Log | 4 | 3 | 0 | 1 | 3d |
 | 通用 Delegate | 7 | 3 | 1 | 3 | 8d |
 | 基礎設施 | 4 | 3 | 0 | 1 | 1d |
-| Form Service | 6 | 4 | 1 | 1 | 3d |
-| 跨服務整合 | 6 | 1 | 4 | 1 | 17d |
+| Form Service | 6 | 6 | 0 | 0 | 0d |
+| 跨服務整合 | 6 | 2 | 4 | 0 | 15d |
 | 2026-09-29 新增 | 29 | 28 | 0 | 1 | 12.5d |
 | 2026-10-02 新增 | 2 | 2 | 0 | 0 | 0d |
-| **合計** | **96** | **77** | **9** | **10** | **~54.5 人天** |
+| 2026-10-03 新增 | 1 | 0 | 0 | 1 | 0.5d |
+| **合計** | **97** | **80** | **7** | **8** | **~50 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -510,6 +519,20 @@
 > `acceptance-test` PASS 7 / FAIL 0。
 > 統計：✅ 77、🟡 9、⬜ 10；剩餘上限 ~54.5 人天。
 > ⚠️ dev 庫新增探測殘留：`probe-43-49`（2 版）。
+>
+> **2026-10-03（Wave F，待決策六項落實）—— #22 白名單／#58 版本化／#56 動態選項／#65 OpenAPI／#43 補網域完成；後端 1151、前端 200 全綠。**
+> 五個獨立 worktree 並行（D5 任意節點暫不做、D7 parking 維持現狀）：
+> D1 #22 topic 白名單（`42726c0`→`541c468`）：`allowedWorkerTopics`（V7）＋policy 檢查＋管理頁。
+> D2 #58（`09e5254`→`6cdd1a2`）：PUT 限送件人（404）＋退回狀態（409）＋版本化新增列。
+> D3 #56（`3f106ad`→`058aee3`）：後端代理＋WebhookUrlPolicy（先於快取、不跟隨 3xx）＋Redis 快取＋前端 fallback。
+> D4 #65（`a7d1310`→`43eb5f0`）：springdoc 2.9.1；prod 關閉、dev/test 開放。
+> D6 #43（`ec52679`→`f845756`）：`to` 無 `@` 補 `@company.com`。
+> 線上實測：白名單內 200／未列 topic 403；審核中 409／非送件人 404／退回中 200 新列＋兩列＋稽核；
+> options loopback 403／公開非 JSON 502／未登入 401；`/v3/api-docs` 200；`to=user001` → MailHog +1。
+> `acceptance-test` PASS 7 / FAIL 0。
+> 統計：✅ 80、🟡 7、⬜ 7；剩餘上限 ~49.5 人天。
+> ⚠️ dev 庫新增探測殘留：`probe-43-49`（3 版）；已停用外部系統 `e2e-topic`。
+> ⚠️ 新發現待開工項：**既有 `WebhookConsumer`／`ExternalApiDelegate` 跟隨 3xx**（SSRF 重導缺口）。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是
