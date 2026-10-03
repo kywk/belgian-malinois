@@ -9,6 +9,10 @@
 #   WEBHOOK_HMAC_SECRET    webhook 簽章密鑰。
 #   ORG_SERVICE_URL        真實組織系統。未設定即啟動失敗（P2-7）。
 #   PERM_SERVICE_URL       真實權限系統。同上。
+#   ORG_AUTH_TOKEN         組織系統的認證 token，原樣放進 Authorization header
+#                          （可填 "Bearer xxx" 或 "satoken xxx"）。選用：
+#                          留空＝不送 header。BPM_EXTERNAL_AUTH_HEADER 可換 header 名。
+#   PERM_AUTH_TOKEN        權限系統的認證 token，規則同上。
 #   OIDC_ISSUER_URI        企業 IdP 的位置。本服務只驗證 JWT，不簽發也不處理
 #                          OIDC 流程（那由另一個服務負責）。
 #                          prod 未設定即啟動失敗（JwtSecurityValidator）。
@@ -100,6 +104,11 @@ services:
       # 不該啟動成功，它能提供服務就代表它正在做錯誤的授權決定。
       ORG_SERVICE_URL: "${ORG_SERVICE_URL}"
       PERM_SERVICE_URL: "${PERM_SERVICE_URL}"
+      # 真實系統的認證（#8／#9）。留空＝不送 auth-header；值以原樣放進
+      # Authorization（application.yml 的 bpm.external.auth-header）。
+      # ⚠️ 這兩個值只進 request header，不寫日誌／例外訊息／稽核。
+      ORG_AUTH_TOKEN: "${ORG_AUTH_TOKEN:-}"
+      PERM_AUTH_TOKEN: "${PERM_AUTH_TOKEN:-}"
       # 身分來源（R-01）。未設定會讓啟動失敗 —— 身分設錯的服務
       # 能提供服務，就代表它正在接受偽造的身分，而且看起來一切正常。
       OIDC_ISSUER_URI: "${OIDC_ISSUER_URI}"

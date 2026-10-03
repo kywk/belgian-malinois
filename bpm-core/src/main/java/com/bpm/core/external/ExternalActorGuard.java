@@ -1,5 +1,6 @@
 package com.bpm.core.external;
 
+import com.bpm.core.client.ExternalApiException;
 import com.bpm.core.model.ExternalSystem;
 import com.bpm.core.service.OrgService;
 import org.slf4j.Logger;
@@ -333,7 +334,11 @@ public class ExternalActorGuard {
      * 而不是當成拒絕（400 不會被重試、不會被告警）。
      */
     private static boolean isDefinitiveRejection(Exception e) {
-        return e instanceof HttpClientErrorException.NotFound;
+        // 正式 client（#8／#9）把外部系統的 404 映射成 ExternalApiException；
+        // Spring 原生型別仍要認，因為單元測試與其他來源可能直接丟它。
+        // ⚠️ 兩者判準相同：只有 404 是「明確的拒絕」，其他狀態碼都是故障。
+        if (e instanceof HttpClientErrorException.NotFound) return true;
+        return e instanceof ExternalApiException api && api.isNotFound();
     }
 
     /**
