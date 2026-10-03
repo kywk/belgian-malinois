@@ -1,7 +1,7 @@
 # Greyhound BPM 平台 — 後端開發工項清單
 
 > 產出日期：2026-06-08
-> 最後更新：2026-10-04（**#60／#61 跨服務整合完成；同日走查＋#28／#32／#35；前端 DynamicForm 鏈斷裂修復**；#70 全部完成：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3，EOL 安全債清償；Wave G：#97／#44／#45／#46／#47；Wave F：待決策六項；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
+> 最後更新：2026-10-04（**#41／#53 完成（異常偵測、環境變數替換）；同日 #60／#61 跨服務整合、走查＋#28／#32／#35；前端 DynamicForm 鏈斷裂修復**；#70 全部完成：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3，EOL 安全債清償；Wave G：#97／#44／#45／#46／#47；Wave F：待決策六項；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
 > 基於規格文件 vs 實際程式碼差異分析
 >
 > 狀態：✅ 完成　🟡 部分完成（說明欄寫缺什麼）　⬜ 未開始
@@ -106,7 +106,7 @@
 |---|------|------|------|------|
 | 39 | Hash chain 完整性驗證 API | `/api/audit-logs/integrity-check` | 2d | ✅ 逐筆走鏈，v2 雜湊涵蓋全部欄位 |
 | 40 | 匯出 CSV/Excel | `/api/audit-logs/export`，匯出操作本身也記錄 | 2d | ✅ **2026-10-02 完成**（`990cf1e`，merge `b3a8dd4`；使用者裁決只做 CSV）。UTF-8 BOM＋RFC 4180 逃逸、逐頁 500 筆直接寫 response（**不用 `StreamingResponseBody`** —— ASYNC dispatch 會丟失逐請求閘道身分、每次成功匯出噴 ERROR）、篩選參數與列表逐字相同、共用查詢補 `a.id DESC` 全序、匯出以既有 `EXPORT_DATA` 留痕（篩選＋命中筆數）。線上實測：dir001 200／admin001 403／user001 403／未登入 401；CSV 269KB 格式正確；`EXPORT_DATA` 查得到。待裁決：筆數上限、CSV 公式注入、中斷語意 |
-| 41 | 異常操作偵測 | 短時間大量審批、異常存取模式偵測 + 告警 | 3d | ⬜ （`UnreachableTaskListener` 只告警沒人看得到的任務，不算異常偵測） |
+| 41 | 異常操作偵測 | 短時間大量審批、異常存取模式偵測 + 告警 | 3d | ✅ 2026-10-04：`AnomalyDetector`（`@Scheduled` 60s、首跑延遲 60s）——大量審批（50／10m）／異常存取（20／10m，denied JSON 精判、LIKE 粗篩）；告警＝`ANOMALY_DETECTED` 稽核＋ERROR log＋選配 email（預設不寄）；30m 冷卻。merge `0807a00` |
 | 42 | 操作類型完整覆蓋 | 確保所有操作類型都有對應的 publish 呼叫 | 2d | ✅ `OperationTypeCoverageTest` 守住；未實作的操作列在 `NOT_YET_IMPLEMENTED` |
 
 ### 1.9 通用 Delegate Bean（全新開發）
@@ -128,7 +128,7 @@
 | 50 | JVM 記憶體配置 | Dockerfile 加入 JAVA_TOOL_OPTIONS、docker-compose resource limits | 0.5d | ✅ **2026-10-03 完成**（`67e3d93`，merge `6de2f52`）。Dockerfile `ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"`（容器感知、不寫死 Xmx；OOM 交由 orchestrator 重啟）；**limits 只放 `docker-compose.prod.yml`**（bpm-core 2G／mssql 2G／rabbitmq 768M／redis 256M／nginx 128M；dev 刻意不受限，base 檔加註說明）。線上驗證：容器 log `Picked up JAVA_TOOL_OPTIONS`；`docker compose config` 三種組合通過 |
 | 51 | RabbitMQ DLQ 告警 | Dead Letter Queue 消費者 + 告警通知 | 1d | ✅ **2026-10-03 完成**（`7a1dcef`，merge `1d9841c`）。`DeadLetterConsumer` 除 ERROR log 外新增 `DLQ_MESSAGE` 稽核（operator=system；detail 只放非敏感中介資料：queue／event／messageId／payload 長度／x-death 摘要，不放 payload）＋選配 email（`bpm.dlq.alert-recipients`，預設空＝不寄）。告警三段各自 try/catch：**DLQ 無 DLX，consumer 拋例外＝無限 requeue**。新增 `POST /api/admin/dlq/replay?queue=bpm\|audit&max=`（ROLE_ADMIN）：`basicGet`＋成功才 ack，目的地取 `x-death` 最舊一筆的 exchange／routing key（含 `dlx.exchange` 防呆；缺 x-death 走 queue 對照 fallback），失敗 nack 放回並停止；`DLQ_REPLAY` 稽核 operator=呼叫者。⚠️ **待裁決的取捨**：consumer 正常返回即 ack，訊息離開佇列——「進 DLQ 即告警」與「留存待人工重放」互斥；重放目前涵蓋「consumer 停用／服務中斷期間累積」的訊息。✅ **同日 parking 收尾**（`5c7531e`，merge `dcf29d3`）：告警後把死信重發布到 `dlq.parking.bpm`／`dlq.parking.audit`（無 consumer、無 TTL）再 ack，origin 以自訂標頭 `x-bpm-origin-*` 保留（RabbitMQ 3.13 起不再維護客戶端重發布的 x-death，降為備援）；重放改讀 parking（queue 值為 `dlq.parking.*`）。線上實測：真實死信 → parking=1、dlq=0、`DLQ_MESSAGE`；replay `replayed:2`（primary＋fallback）→ 通知成功送達、webhook 再失敗自動 re-park；`DLQ_REPLAY` 稽核 `fallbackUsed:1` |
 | 52 | 多版本流程並行處理 | 確保新案用新版、舊案繼續舊版的邏輯正確 | 1d | ✅ **2026-10-02 完成**（`a80d323`，merge `f04f584`）。`MultiVersionProcessTest` 3 條（真實 DB）：v2 部署後新實例走 v2、v1 舊實例連完成後的路由都走 v1；表單版本鎖（發布 v2 後舊實例鎖 v1、同定義下新實例鎖 v2 的內建對照）；新舊並存的版本查詢與 `resourcedata`。只加測試、未發現缺陷 |
-| 53 | BPMN 環境變數替換 | 部署時依環境替換 `${ENV_*}` 變數 | 1d | ⬜ |
+| 53 | BPMN 環境變數替換 | 部署時依環境替換 `${ENV_*}` 變數 | 1d | ✅ 2026-10-04：只認 `${ENV_*}`、值來自 `bpmn.variables.*`（env 可覆蓋）、未設定 fail-closed 400、XML 轉義；**原始 XML 落地／commit、resolved 僅上線**；稽核記變數名＋`resolvedSha256`；lint 規則 i 豁免。merge `8b0d246` |
 
 ---
 
@@ -321,7 +321,7 @@
 | 2026-09-29 新增 | 29 | 29 | 0 | 0 | 0d |
 | 2026-10-02 新增 | 2 | 2 | 0 | 0 | 0d |
 | 2026-10-03 新增 | 1 | 1 | 0 | 0 | 0d |
-| **合計** | **97** | **91** | **4** | **2** | **~19 人天** |
+| **合計** | **97** | **93** | **4** | **0** | **~15 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -585,6 +585,19 @@
 > 驗收：**1321 全綠**（+24）、熱啟動（Git 開啟）seed 三次部署各一 commit、acceptance 7/0；
 > 線上實測 formData 啟動 200／落地、缺必填與重疊 400、legacy variables 200。
 > 統計：✅ 91、🟡 4、⬜ 2；剩餘上限 **~19 人天**。
+>
+> **2026-10-04（#41／#53）—— 異常偵測與環境變數替換。**
+> #41：`AnomalyDetector`（`@Scheduled`）掃描稽核 DB 滑動窗口——大量審批（50／10m）與
+> 異常存取（20／10m，denied 精判）；告警＝`ANOMALY_DETECTED` 稽核＋ERROR log＋選配 email；
+> 30m 冷卻（記憶體）。**預設值保守**，一般驗收不會觸發。
+> #53：`${ENV_*}` 部署期替換——只認 ENV 命名空間、值來自 `bpmn.variables.*`（env 可覆蓋）、
+> 未設定 fail-closed 400、XML 轉義；**原始 XML 落地／commit（祕密不進 Git）、resolved 僅上線**；
+> lint 規則 i 豁免、稽核記變數名與 `resolvedSha256`。
+> 驗收：**1366 全綠**（+45；首跑 1 紅為 `AuditDeliveryTest` 既有 flake，重跑全綠——
+> **flake 已列入 #64 必辦**）、熱啟動＋seed＋acceptance 7/0；
+> 線上實測：ENV 部署 200／引擎 XML resolved／原始檔保留佔位／未設定 400；
+> 3 次 denied → `ANOMALY_DETECTED`（user001、hitCount=3、threshold=2）＋ERROR log。
+> 統計：✅ 93、🟡 4、⬜ 0；剩餘上限 **~15 人天**（#63／#64 施工中）。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是
