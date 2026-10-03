@@ -890,6 +890,20 @@ PUT  /api/admin/process-definitions/{processDefinitionKey}/variable-spec/{id}
 | 定時等待 | Timer Event | 超時自動觸發 |
 | 流程完成後觸發 | End Event Listener + MQ | 發布到下游系統 |
 
+> ✅ **2026-10-03 加註（工項 #24 已完成）**：廣播訊號實作為管理端
+> `POST /api/admin/signals/{signalName}/broadcast`（`ROLE_ADMIN`，沿用
+> `/api/admin/**` 既有規則），body 可選 `{"variables": {...}}`，回
+> `{signalName, waiting, variablesApplied}`。先查
+> `ExecutionQuery.signalEventSubscriptionName(name)`：0 個等待訂閱 → **404**
+> （Flowable 全域廣播在無訂閱時是靜默 no-op，404 讓「什麼都沒發生」被看見；
+> 與 callback 查無訂閱的 404 一致）；>0 → `RuntimeService.signalEventReceived(name, variables)`
+> 一次喚醒全部並把變數套用到每個被喚醒的實例。稽核型別 `SIGNAL_BROADCAST`
+> （operator＝呼叫者，detail 只記 signalName 與計數，不記變數值）。
+> ⚠️ 訊號須宣告於 `<definitions>` 層級（global scope）：`flowable:scope="processInstance"`
+> 的訊號會被 `waiting` 數到，但全域廣播不會喚醒（Flowable 語意，測試已釘住）。
+> 實作 `bpm-core/src/main/java/com/bpm/core/controller/SignalBroadcastController.java`；
+> 測試 `bpm-core/src/test/java/com/bpm/core/controller/SignalBroadcastTest.java`。
+
 ### 10.2 Callback 機制
 
 ```java

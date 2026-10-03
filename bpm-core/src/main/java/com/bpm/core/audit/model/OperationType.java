@@ -91,7 +91,24 @@ public enum OperationType {
      * {@code POST /api/admin/dlq/replay} 處理完畢後發出（operator＝呼叫者）。
      * 重放會造成外部副作用（webhook 再送、通知再寄），必須留下誰放了多少筆。
      */
-    DLQ_REPLAY;
+    DLQ_REPLAY,
+    /**
+     * 管理員廣播流程訊號（#24）。由 {@code SignalBroadcastController} 在
+     * {@code POST /api/admin/signals/{signalName}/broadcast} 成功廣播後發出
+     * （operator＝呼叫者）。
+     *
+     * <p>與 {@link #EXTERNAL_API_CALL} 的差別是「誰觸發、喚醒幾個」：
+     * 後者是外部系統對<b>單一</b> processInstanceId 的回呼（operator 是
+     * systemId），這裡是管理員對<b>所有</b>等待同一 signal 的實例做廣播
+     * （operator 是登入者）。兩者混用會讓稽核查詢分不出
+     * 「外部系統回呼」與「管理員手動喚醒」—— 而後者是範圍最大、
+     * 最需要人工問責的操作。
+     *
+     * <p>detail 只放 signalName 與計數（waiting／variables），
+     * <b>不放變數值</b>：廣播的變數會寫進每一個被喚醒的實例，
+     * 可能含業務資料，而稽核庫的讀取權與案件內容的讀取權不是同一件事。
+     */
+    SIGNAL_BROADCAST;
 
     /**
      * 對應的操作<b>尚未實作</b>，因此不會有程式碼發出這些值。
