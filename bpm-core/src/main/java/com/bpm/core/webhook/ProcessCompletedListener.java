@@ -97,6 +97,26 @@ public class ProcessCompletedListener implements FlowableEventListener {
             // 修法：結案後應該查歷史變數，那才是結案狀態的權威來源。
             Map<String, Object> vars = resolveFinalVariables(processInstanceId);
 
+            // ── ⚠️ 同一命令內剛寫入的變數還不在歷史裡（2026-10-04，#64 實測）──
+            //
+            // PROCESS_COMPLETED 是在 complete 命令<b>之內</b>同步派發的，而
+            // 核准／拒絕變數正是那個命令才寫入的（TaskController 的
+            // taskService.complete(id, vars)）。此時歷史查詢看不到尚未 flush
+            // 的變數列 → vars 只有啟動時的欄位 → result 被判成 unknown。
+            //
+            // 這不是理論問題：內建兩支流程的 approved／rejected 都只在最後
+            // 一關寫入，因此<b>每一張正常核准的單</b>都會被通報成 unknown。
+            // 既有測試沒抓到，是因為它們在「啟動時」就先放了 approved
+            // （ProcessWebhookWiringTest）或是在 commit 之後才呼叫判定方法
+            // （ProcessResultReportingTest）—— 兩者都繞過了事件當下的視窗。
+            //
+            // 事件實體在派發當下仍持有最新變數，用它補強（歷史為底、實體
+            // 覆蓋）：已 commit 的歷史仍是權威來源，這裡只補它還看不到的值。
+            Map<String, Object> live = exec.getVariables();
+            if (live != null && !live.isEmpty()) {
+                vars.putAll(live);
+            }
+
             // 取不到變數時不再猜「approved」——「不知道」就說不知道。
             String result = resolveResult(vars);
 
