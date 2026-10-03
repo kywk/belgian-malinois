@@ -136,7 +136,7 @@ describe('saveWebhooks 的存檔契約', () => {
     const back = await m.fromXML(xml, 'bpmn:Definitions')
     const backProcess = back.rootElement.rootElements.find(p => p.id === 'p1')
     expect(readWebhooks(backProcess, 'process.completed')).toEqual([
-      { event: 'process.completed', url: 'https://erp.example/done', method: 'POST' }
+      { event: 'process.completed', url: 'https://erp.example/done', method: 'POST', payloadTemplate: '' }
     ])
   })
 
@@ -238,6 +238,36 @@ describe('面板實際掛給元件的設定', () => {
     expect(modeling.updateProperties).toHaveBeenCalledTimes(1)
     const added = webhookContainerOf(modeling.updateProperties.mock.calls[0][1]).values
     expect(added.map(w => w.event)).toEqual(['create', 'create'])
+  })
+
+  it('payload 模板欄位（#28）：顯示現值、修改走同一次存檔、清空後 XML 不再有屬性', async () => {
+    const { m, rootElement, task } = await parse('',
+      '<extensionElements><flowable:webhooks>' +
+      '<flowable:webhook event="create" url="https://erp.example/x" method="POST"' +
+      ' payloadTemplate="{&quot;t&quot;:&quot;{{taskName}}&quot;}"/>' +
+      '</flowable:webhooks></extensionElements>')
+    const element = { businessObject: task }
+    const modeling = fakeModeling()
+    stubModeling(modeling)
+
+    const group = WebhookProps(element)
+    const entry = group.entries.find(e => e.id === 'webhook-payload-template-0')
+    expect(entry, '每個 webhook entry 都必須有模板欄位').toBeTruthy()
+
+    const vnode = entry.component({ element })
+    // 讀：XML 的實體引用被解回原始模板字串。
+    expect(vnode.props.getValue()).toBe('{"t":"{{taskName}}"}')
+
+    // 寫：與其他欄位同一條路徑（一次 updateProperties），值原樣進 moddle。
+    vnode.props.setValue('{"x":"{{taskId}}"}')
+    expect(modeling.updateProperties).toHaveBeenCalledTimes(1)
+    expect(webhookContainerOf(modeling.updateProperties.mock.calls[0][1]).values[0].payloadTemplate)
+      .toBe('{"x":"{{taskId}}"}')
+
+    // 清空：不得留下 payloadTemplate="" —— 空白模板等於未設定。
+    vnode.props.setValue('')
+    const { xml } = await m.toXML(rootElement, { format: true })
+    expect(xml).not.toContain('payloadTemplate')
   })
 })
 

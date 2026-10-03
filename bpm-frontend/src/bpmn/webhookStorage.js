@@ -55,7 +55,11 @@ function normalize(wh, defaultEvent = DEFAULT_EVENT) {
   return {
     event: wh?.event || defaultEvent,
     url: wh?.url || '',
-    method: wh?.method || DEFAULT_METHOD
+    method: wh?.method || DEFAULT_METHOD,
+    // #28：沒有這個欄位時回空字串（不是 undefined）—— 面板與測試都靠
+    // 「空字串＝未設定」這個單一形狀，undefined 會讓 `wh.payloadTemplate`
+    // 在部分路徑變成非預期的 falsy 差異。
+    payloadTemplate: wh?.payloadTemplate || ''
   }
 }
 
@@ -72,7 +76,7 @@ function normalize(wh, defaultEvent = DEFAULT_EVENT) {
  * 「非空才優先」，剛刪掉的設定會立刻從舊 documentation 裡復活 ——
  * 使用者看到的是「刪了沒用」。兩邊都必須是「有元素就是權威」。
  *
- * @returns {Array<{event: string, url: string, method: string}>}
+ * @returns {Array<{event: string, url: string, method: string, payloadTemplate: string}>}
  */
 export function readWebhooks(bo, defaultEvent = DEFAULT_EVENT) {
   const container = containerOf(bo)
@@ -112,13 +116,20 @@ export function buildExtensionElements(bo, webhooks, defaultEvent = DEFAULT_EVEN
   const kept = (existing?.get?.('values') || []).filter(el => !isContainer(el))
 
   const container = model.create(WEBHOOKS_TYPE)
-  container.values = (webhooks || []).map(wh =>
-    model.create(WEBHOOK_TYPE, {
+  container.values = (webhooks || []).map(wh => {
+    const props = {
       event: wh.event || defaultEvent,
       url: wh.url || '',
       method: wh.method || DEFAULT_METHOD
-    })
-  )
+    }
+    // #28：模板空白時不寫入屬性。後端 resolver 對「屬性不存在」與「空屬性」
+    // 的處理相同（都視為未設定），但 XML 上留著 payloadTemplate="" 只會
+    // 讓 diff 與人工檢查多一個噪音。「未設定就是沒有屬性」是清楚的契約。
+    if (wh.payloadTemplate && wh.payloadTemplate.trim()) {
+      props.payloadTemplate = wh.payloadTemplate
+    }
+    return model.create(WEBHOOK_TYPE, props)
+  })
   kept.push(container)
 
   // 沿用既有的 ExtensionElements 實例（它可能帶著別人已經加的東西），

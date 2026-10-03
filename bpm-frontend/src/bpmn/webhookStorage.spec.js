@@ -50,24 +50,48 @@ describe('節點層 webhook 設定的存放格式', () => {
 
     const ee = buildExtensionElements(task, [
       { event: 'create', url: 'https://erp.example/hook', method: 'POST' },
-      { event: 'complete', url: 'https://erp.example/hook2', method: 'PUT' }
+      { event: 'complete', url: 'https://erp.example/hook2', method: 'PUT', payloadTemplate: '{"task":"{{taskName}}"}' }
     ])
     task.extensionElements = ee
 
     const { xml } = await m.toXML(rootElement, { format: true })
     // 這三行就是與後端的契約：後端 WebhookConfigResolver 讀
-    // ELEMENT="webhooks" / CHILD="webhook" / 屬性 event,url,method。
+    // ELEMENT="webhooks" / CHILD="webhook" / 屬性 event,url,method,payloadTemplate。
     expect(xml).toContain('<flowable:webhooks>')
     expect(xml).toContain('event="create"')
     expect(xml).toContain('url="https://erp.example/hook"')
     expect(xml).toContain('method="POST"')
     expect(xml).toContain('method="PUT"')
+    expect(xml).toContain('payloadTemplate=')
 
     // 往返一次確認讀得回來
     const back = await m.fromXML(xml, 'bpmn:Definitions')
     expect(readWebhooks(userTaskOf(back.rootElement, 'p1', 't1'))).toEqual([
-      { event: 'create', url: 'https://erp.example/hook', method: 'POST' },
-      { event: 'complete', url: 'https://erp.example/hook2', method: 'PUT' }
+      { event: 'create', url: 'https://erp.example/hook', method: 'POST', payloadTemplate: '' },
+      { event: 'complete', url: 'https://erp.example/hook2', method: 'PUT', payloadTemplate: '{"task":"{{taskName}}"}' }
+    ])
+  })
+
+  it('payloadTemplate：寫入屬性、空白時不寫入、round-trip 讀得回來（#28）', async () => {
+    const m = moddle()
+    const { rootElement } = await m.fromXML(shell(''), 'bpmn:Definitions')
+    const task = userTaskOf(rootElement, 'p1', 't1')
+
+    task.extensionElements = buildExtensionElements(task, [
+      { event: 'create', url: 'https://erp.example/t', method: 'POST', payloadTemplate: '{"task":"{{taskName}}"}' },
+      { event: 'create', url: 'https://erp.example/blank', method: 'POST', payloadTemplate: '   ' }
+    ])
+
+    const { xml } = await m.toXML(rootElement, { format: true })
+    expect(xml).toContain('payloadTemplate=')
+    // 空白模板＝未設定：不得寫出空屬性（後端對兩者的解讀相同，但空屬性
+    // 只會讓 XML diff 與人工檢查多一個噪音）。
+    expect(xml).not.toContain('payloadTemplate=""')
+
+    const back = await m.fromXML(xml, 'bpmn:Definitions')
+    expect(readWebhooks(userTaskOf(back.rootElement, 'p1', 't1'))).toEqual([
+      { event: 'create', url: 'https://erp.example/t', method: 'POST', payloadTemplate: '{"task":"{{taskName}}"}' },
+      { event: 'create', url: 'https://erp.example/blank', method: 'POST', payloadTemplate: '' }
     ])
   })
 
@@ -110,7 +134,7 @@ describe('節點層 webhook 設定的存放格式', () => {
       shell(`<documentation>${LEGACY_DOC_PREFIX}${legacy}</documentation>`), 'bpmn:Definitions')
 
     expect(readWebhooks(userTaskOf(rootElement, 'p1', 't1'))).toEqual([
-      { event: 'complete', url: 'https://legacy.example/old', method: 'PUT' }
+      { event: 'complete', url: 'https://legacy.example/old', method: 'PUT', payloadTemplate: '' }
     ])
   })
 
@@ -125,7 +149,7 @@ describe('節點層 webhook 設定的存放格式', () => {
 
     const task = userTaskOf(rootElement, 'p1', 't1')
     expect(readWebhooks(task)).toEqual([
-      { event: 'create', url: 'https://new.example/n', method: 'POST' }
+      { event: 'create', url: 'https://new.example/n', method: 'POST', payloadTemplate: '' }
     ])
 
     // 使用者把最後一筆刪掉 → 寫出空的 webhooks 元素。

@@ -93,7 +93,12 @@ export default {
       properties: [
         { name: 'event', isAttr: true, type: 'String' },
         { name: 'url', isAttr: true, type: 'String' },
-        { name: 'method', isAttr: true, type: 'String' }
+        { name: 'method', isAttr: true, type: 'String' },
+        // #28：自訂 body 模板。沒有這行，bpmn-moddle 在設計器「開啟 → 存檔」
+        // 的往返中會把屬性整個丟掉 —— 後端讀不到模板、body 退回預設 JSON，
+        // 而且存檔成功、沒有任何錯誤。屬性是選配：空白時不寫進 XML
+        // （見 webhookStorage.buildExtensionElements）。
+        { name: 'payloadTemplate', isAttr: true, type: 'String' }
       ]
     },
     // ── Call Activity 的子流程呼叫設定（#4，spec §4.4.2）─────────────
