@@ -82,6 +82,11 @@ public class FlowableConfig {
             EmailNotifyDelegate emailNotifyDelegate,
             com.bpm.core.engine.DataValidationDelegate dataValidationDelegate,
             com.bpm.core.engine.ExternalApiDelegate externalApiDelegate,
+            // #45 通用電子簽章 delegate：觸發外部簽核服務後，流程停在
+            // message catch event 等回呼（見該類別註解）。與
+            // externalApiDelegate 同一條分界：url 來自 BPMN，因此
+            // WebhookUrlPolicy 是它的安全相依。
+            com.bpm.core.engine.ESignDelegate eSignDelegate,
             com.bpm.core.engine.BlankAssigneeNormalizingInterceptor blankAssigneeNormalizingInterceptor) {
         return config -> {
             config.setEventListeners(List.of(processCompletedListener, unreachableTaskListener,
@@ -134,7 +139,11 @@ public class FlowableConfig {
                     // #49 通用外部 API delegate。🔴 它的 url 來自 BPMN，
                     // 因此 WebhookUrlPolicy（唯一的 SSRF 閘門）是它的安全相依。
                     // 同樣只加在這份 map，不進 EL 白名單。
-                    Map.entry("externalApiDelegate", externalApiDelegate)));
+                    Map.entry("externalApiDelegate", externalApiDelegate),
+                    // #45 通用電子簽章 delegate。只加在這份 map，不進 EL
+                    // 白名單 —— 它是 delegateExpression 的解析對象，不是
+                    // 運算式可呼叫的函式（與 webhookTaskListener 同一條分界）。
+                    Map.entry("esignDelegate", eSignDelegate)));
         };
     }
 }

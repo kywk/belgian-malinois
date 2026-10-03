@@ -938,6 +938,38 @@ public ResponseEntity<?> handleCallback(@RequestBody CallbackRequest req) {
 }
 ```
 
+> ✅ **2026-10-03 加註（工項 #45 已完成）**：等待 Callback 的標準 BPMN 畫法
+> 是「serviceTask 觸發 → message catch event 等回呼 → 後續」。`ESignDelegate`
+> （`flowable:delegateExpression="${esignDelegate}"`）只負責把簽核請求送出去，
+> **不在 delegate 內等待**；外部系統完成後以 `POST /api/callback/{type}`
+> 喚醒，`{type}` 就是 message name：
+>
+> ```xml
+> <message id="esignCompletedMsg" name="esign-completed"/>
+> ...
+> <serviceTask id="startEsign" flowable:delegateExpression="${esignDelegate}">
+>   <extensionElements>
+>     <flowable:field name="url" stringValue="https://esign.example.com/api/sign-requests"/>
+>     <flowable:field name="payload">
+>       <flowable:expression><![CDATA[{"processInstanceId":"${execution.processInstanceId}","docId":"${docId}"}]]></flowable:expression>
+>     </flowable:field>
+>     <flowable:field name="resultVariable" stringValue="esignResponse"/>
+>   </extensionElements>
+> </serviceTask>
+> <intermediateCatchEvent id="waitEsign">
+>   <messageEventDefinition messageRef="esignCompletedMsg"/>
+> </intermediateCatchEvent>
+> ```
+>
+> ⚠️ 回呼的 correlation 需要 `processInstanceId`，而它不是流程變數：payload
+> 要用 `expression` 形式的 `${execution.processInstanceId}` 帶上
+> （`stringValue` 的 `${processInstanceId}` 會替換成空字串，外部系統就永遠
+> 喚不醒流程）。url 一律先過 `WebhookUrlPolicy`（拒絕 →
+> `BpmnError("ESIGN_BLOCKED")`、零請求）；非 2xx／逾時／payload 非 JSON →
+> `BpmnError("ESIGN_FAILED")`，設計師用 boundary error 接住。實作
+> `bpm-core/src/main/java/com/bpm/core/engine/ESignDelegate.java`；測試
+> `ESignDelegateTest`／`ESignDelegateIntegrationTest`。
+
 ### 10.3 流程完成後觸發下游
 
 ```java
