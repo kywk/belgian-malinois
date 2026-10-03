@@ -27,6 +27,17 @@ public class NotifyConfig {
     @Column(nullable = false, length = 30)
     private String channel;
 
+    /**
+     * Teams Incoming Webhook URL（#32）。只有 {@code channel=teams} 會使用；
+     * 其他 channel 允許為 null（存了也不使用）。
+     *
+     * <p>寫入端（{@code NotifyAdminController}）對 teams 強制必填並先過
+     * {@code WebhookUrlPolicy}；消費端（{@code EmailConsumer}）送出前再過
+     * 同一份政策 —— 資料庫可能是 migration 前的舊列或直接被寫入。
+     */
+    @Column(length = 1000)
+    private String webhookUrl;
+
     private String templateId;
 
     @Column(nullable = false)
@@ -40,6 +51,8 @@ public class NotifyConfig {
     public void setEventType(String eventType) { this.eventType = eventType; }
     public String getChannel() { return channel; }
     public void setChannel(String channel) { this.channel = channel; }
+    public String getWebhookUrl() { return webhookUrl; }
+    public void setWebhookUrl(String webhookUrl) { this.webhookUrl = webhookUrl; }
     public String getTemplateId() { return templateId; }
     public void setTemplateId(String templateId) { this.templateId = templateId; }
     public Boolean getEnabled() { return enabled; }
