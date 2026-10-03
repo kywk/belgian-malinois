@@ -127,3 +127,51 @@ describe('DynamicForm 的動態選項（#56）', () => {
     expect(wrapper.find('.options-hint-error').exists()).toBe(false)
   })
 })
+
+/**
+ * 型別鏈回歸（2026-10-03 瀏覽器走查）：
+ *
+ * <p>#56 把兩個「選項載入提示」div 插進 el-select 與 el-radio-group 之間，
+ * 斷了 v-if/v-else-if 鏈 —— select 欄位下方會多一行「不支援的欄位類型:
+ * select」，而 radio/checkbox/file/link 改掛到提示 div 那條鏈上。
+ * 原本的測試只斷言「該有的在」，沒有斷言「不該有的不在」，所以全綠。
+ * 這裡補上「每個型別只渲染自己的控件、fallback 不得出現」。
+ */
+describe('DynamicForm 的型別鏈不得斷鏈（走查回歸）', () => {
+  const everyType = [
+    { id: 'f_text', type: 'text', label: '文字' },
+    { id: 'f_textarea', type: 'textarea', label: '長文' },
+    { id: 'f_number', type: 'number', label: '數字' },
+    { id: 'f_date', type: 'date', label: '日期' },
+    { id: 'f_select', type: 'select', label: '選單', options: [{ label: 'A', value: 'a' }] },
+    { id: 'f_radio', type: 'radio', label: '單選', options: [{ label: 'R', value: 'r' }] },
+    { id: 'f_checkbox', type: 'checkbox', label: '多選', options: [{ label: 'C', value: 'c' }] },
+    { id: 'f_file', type: 'file', label: '檔案' },
+    { id: 'f_link', type: 'link', label: '連結', url: 'https://example.com' },
+  ]
+
+  it('每個型別只渲染自己的控件，fallback 訊息不得出現', async () => {
+    mockSchema(everyType)
+
+    const wrapper = mountForm()
+    await flush()
+    await flush()
+
+    expect(wrapper.text()).not.toContain('不支援的欄位類型')
+    expect(wrapper.findAllComponents({ name: 'ElRadio' })).toHaveLength(1)
+    expect(wrapper.findAllComponents({ name: 'ElCheckbox' })).toHaveLength(1)
+    expect(wrapper.findComponent({ name: 'ElUpload' }).exists()).toBe(true)
+    expect(wrapper.find('a.el-link').exists()).toBe(true)
+  })
+
+  it('select 的載入提示仍在（移到鏈尾不影響），且不觸發 fallback', async () => {
+    getFormOptions.mockRejectedValue(new Error('502 Bad Gateway'))
+
+    const wrapper = mountForm()
+    await flush()
+    await flush()
+
+    expect(wrapper.find('.options-hint-error').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('不支援的欄位類型')
+  })
+})

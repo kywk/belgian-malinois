@@ -23,10 +23,6 @@
         :disabled="isReadonly(field)" :placeholder="field.placeholder">
         <el-option v-for="opt in optionsFor(field)" :key="opt.value" :label="opt.label" :value="opt.value" />
       </el-select>
-      <div v-if="optionsLoading[field.id]" class="options-hint">選項載入中…</div>
-      <div v-else-if="optionsError[field.id]" class="options-hint options-hint-error">
-        選項載入失敗，已改用預設選項
-      </div>
 
       <el-radio-group v-else-if="field.type === 'radio'" v-model="formData[field.id]"
         :disabled="isReadonly(field)">
@@ -48,6 +44,17 @@
       </el-link>
 
       <span v-else>不支援的欄位類型: {{ field.type }}</span>
+
+      <!-- ⚠️ 這兩個提示 div 必須留在整條型別鏈「之後」。
+           #56 一度把它們插在 el-select 與 el-radio-group 之間，v-else-if
+           鏈當場斷成兩條：radio/checkbox/file/link 改掛到提示 div 那條鏈上，
+           而 text/textarea/number/date/select 欄位全部多渲染一行 fallback
+           「不支援的欄位類型」。v-else-if 只認「相鄰的前一個兄弟」——
+           中間插任何節點都會斷鏈（走查 2026-10-03 抓到）。 -->
+      <div v-if="optionsLoading[field.id]" class="options-hint">選項載入中…</div>
+      <div v-else-if="optionsError[field.id]" class="options-hint options-hint-error">
+        選項載入失敗，已改用預設選項
+      </div>
     </el-form-item>
 
     <el-form-item v-if="mode === 'edit'">
