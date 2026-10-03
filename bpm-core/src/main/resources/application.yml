@@ -142,6 +142,20 @@ bpm:
   upload:
     dir: ./uploads
   bpmn-definitions-dir: ./bpmn-definitions
+  # BPMN 部署的 Git 版控（#61）。
+  # spec 明示「BPMN XML 版控於 Git（bpmn-definitions/ 目錄）」；DeploymentController
+  # 在 Flowable deploy 前把寫入的檔案 commit 進這裡的 repo（失敗回 503、不部署）。
+  bpmn:
+    git:
+      # 預設關閉。未啟用時 DeploymentController 完全不碰版控，部署行為與加入本功能
+      # 前相同（不多做任何 I/O）—— 因為 repo-dir 不存在時服務會自動 git init
+      # （可用性取捨，見 DeploymentGitCommitter#openOrInitRepo），啟用必須是明確的決定。
+      # prod 由 BPM_BPMN_GIT_ENABLED 之類的環境變數覆蓋。
+      enabled: false
+      # 預設與被部署的檔案同一個目錄：版控的就是 engine 拿到的那份內容。
+      repo-dir: ${bpm.bpmn-definitions-dir}
+      # commit 的 author／committer email；name 是操作者 id（operatorId）。
+      author-email: bpm-core@localhost
   security:
     jwt:
       # 本服務<b>只驗證</b> JWT，不簽發、不處理 OIDC 流程 —— 那由另一個服務負責。
