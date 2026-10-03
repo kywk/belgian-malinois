@@ -126,6 +126,30 @@ public class ExternalSystem {
     @Column(columnDefinition = "NVARCHAR(MAX)")
     private String allowedCandidateGroups; // JSON array string
 
+    /**
+     * 此系統被授權認領／查詢的 worker topic 白名單（#22 收尾）。
+     *
+     * <p>改動前 {@code /api/external/worker/**} <b>不檢查 topic 歸屬</b>：
+     * Flowable 的 acquire 只按 topic ＋「尚未鎖定」挑 job，沒有任何
+     * 「這個 job 屬於哪個系統」的維度，所以任何被授權 {@code external_worker}
+     * 的系統都能認領任何未鎖定的 job，而 acquire 會帶回該流程的變數
+     * —— 跨系統洩漏。需要隔離時只能用系統專屬的 topic 名稱，但那是
+     * <b>約定</b>而不是<b>強制</b>。本欄位把隔離變成強制。
+     *
+     * <p>⚠️ <b>空值的語意是「不限制」，不是「禁止所有 topic」</b>。
+     * 與 {@link #allowedCandidateGroups} 完全同一條四態規則
+     * （見 {@link com.bpm.core.external.ExternalSystemPolicy}）：
+     * migration 之後既有資料列一律為 null，而<b>不需要回填</b>
+     * （見 V7__external_system_allowed_worker_topics.sql）；反過來說，
+     * 對既有系統而言這個檢查完全沒有效果，直到管理員逐一設定 ——
+     * 與 {@code allowedProcessKeys} 是同一個已知狀況（R-21）。
+     *
+     * <p>格式與 {@code allowedProcessKeys} 同樣是 JSON array 字串
+     * （{@code ExternalSystemPolicy} 另外容忍逗號分隔格式）。
+     */
+    @Column(columnDefinition = "NVARCHAR(MAX)")
+    private String allowedWorkerTopics; // JSON array string
+
     @Column(updatable = false)
     private Instant createdAt;
 
@@ -160,6 +184,8 @@ public class ExternalSystem {
     public void setAllowOnBehalfOf(Boolean allowOnBehalfOf) { this.allowOnBehalfOf = allowOnBehalfOf; }
     public String getAllowedCandidateGroups() { return allowedCandidateGroups; }
     public void setAllowedCandidateGroups(String allowedCandidateGroups) { this.allowedCandidateGroups = allowedCandidateGroups; }
+    public String getAllowedWorkerTopics() { return allowedWorkerTopics; }
+    public void setAllowedWorkerTopics(String allowedWorkerTopics) { this.allowedWorkerTopics = allowedWorkerTopics; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getLastUsedAt() { return lastUsedAt; }

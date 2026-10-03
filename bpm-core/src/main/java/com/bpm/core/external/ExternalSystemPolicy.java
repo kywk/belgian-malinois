@@ -183,4 +183,35 @@ public class ExternalSystemPolicy {
         return allowed(sys.getAllowedCandidateGroups(), group,
                 "allowedCandidateGroups", sys.getSystemId());
     }
+
+    /**
+     * worker topic 是否在 {@code allowedWorkerTopics} 內（精確比對）。
+     *
+     * <h2>為什麼需要（#22 收尾）</h2>
+     *
+     * <p>Flowable 的 acquire 只按 topic ＋「尚未鎖定」挑 job
+     * （{@code selectExternalWorkerJobsToExecute} 的 {@code LOCK_EXP_TIME_ is null}），
+     * 沒有任何「這個 job 屬於哪個系統」的維度。改動前任何被授權
+     * {@code external_worker} 的系統都能認領任何 topic 的未鎖定 job，
+     * 而 acquire 會帶回流程變數 —— 跨系統洩漏。需要隔離時只能用系統專屬的
+     * topic 名稱，但那是<b>約定</b>而不是<b>強制</b>。
+     *
+     * <p>本檢查把「這個系統能用哪些 topic」變成與 {@code allowedActions}／
+     * {@code allowedCandidateGroups} 同一種授權決定，而判定仍然只有這一份
+     * （{@link #allowed}）。刻意<b>不</b>驗 topic 是否存在：topic 是 BPMN 部署者
+     * 自由選的字串，引擎沒有全集可查；而且別人的 topic 存在，不代表本系統
+     * 有權使用它 —— 白名單回答的是授權問題，不是存在性問題。
+     *
+     * <h2>⚠️ 欄位為空代表「不限制」</h2>
+     *
+     * <p>沿用 {@link Kind#UNRESTRICTED}，與 {@code allowedProcessKeys} 完全一致 ——
+     * <b>規則只能有一份</b>。migration 之後既有系統的這個欄位是 null，
+     * 所以它們的行為完全不變，不需要回填；反過來說，這個檢查對既有系統
+     * 沒有效果，直到管理員逐一設定（與 {@code allowedProcessKeys} 同一個
+     * 已知狀況，R-21）。
+     */
+    public boolean isWorkerTopicAllowed(ExternalSystem sys, String topic) {
+        return allowed(sys.getAllowedWorkerTopics(), topic,
+                "allowedWorkerTopics", sys.getSystemId());
+    }
 }

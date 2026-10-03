@@ -1,0 +1,31 @@
+-- 外部系統「可認領／查詢哪些 worker topic」的授權白名單（#22 收尾，2026-10-03 使用者裁決）。
+--
+-- ## 為什麼需要
+--
+-- 改動前 /api/external/worker/** 不檢查 topic 歸屬：Flowable 的 acquire 只按
+-- topic ＋「尚未鎖定」挑 job（selectExternalWorkerJobsToExecute 的
+-- LOCK_EXP_TIME_ is null），沒有任何「這個 job 屬於哪個系統」的維度。
+-- 於是任何被授權 external_worker 的系統都能認領任何未鎖定的 job，而 acquire
+-- 會帶回該流程的變數 —— 跨系統洩漏。需要隔離時只能用系統專屬的 topic 名稱
+-- （例如 erp-invoices），但那是**約定**而不是**強制**：打錯或惡意的系統照樣能撈。
+--
+-- 為什麼是「授權維度的白名單」而不是「驗證 topic 存在」：topic 名稱來自 BPMN
+-- 的 flowable:topic，是部署者自由選的字串，引擎沒有「topic 全集」可查；
+-- 而即使查得到，存在性也不是授權問題 —— 別的系統的 topic 存在，不代表
+-- 本系統有權使用它。白名單只問「這個系統被授權用哪些 topic」。
+--
+-- ## 為什麼可空、而且沒有預設值
+--
+-- 空值 = 「不限制」，與 allowedProcessKeys／allowedCandidateGroups 同一條規則
+-- （ExternalSystemPolicy.Kind.UNRESTRICTED）。所以：
+--   * 既有資料列不需要回填，migration 之後立刻可上線；
+--   * 明確寫 "[]" 才是「拒絕全部」（合法的設定，不是錯誤）。
+--
+-- ⚠️ 反過來說：對既有系統而言這個檢查完全沒有效果，直到管理員逐一設定。
+-- 與 allowedProcessKeys 是同一個已知狀況（R-21），刻意不順手改那個政策。
+--
+-- 包存在性判斷：與 V3／V4／V5 相同，讓 migration 在 ddl-auto 建出來的舊 dev DB
+-- 上也能重跑。
+IF COL_LENGTH('bpm_external_system', 'allowed_worker_topics') IS NULL
+    ALTER TABLE bpm_external_system
+        ADD allowed_worker_topics NVARCHAR(MAX) NULL;

@@ -219,4 +219,63 @@ class ExternalSystemPolicyTest {
             assertThat(policy.isCandidateGroupAllowed(withGroups("[\"dept001\"]"), null)).isFalse();
         }
     }
+
+    /**
+     * {@code allowedWorkerTopics}（#22 收尾）。
+     *
+     * <p>整合層（{@code ExternalWorkerTopicWhitelistTest}）已經把它走過一遍；
+     * 這裡補的是只有這一層才看得到的形狀：四態語意與 admin UI 自由填寫時
+     * 可能存進資料庫的逗號分隔格式。規則本身與其他欄位共用
+     * {@code allowed()}，這裡釘的是「worker topic 真的接上了同一份規則」。
+     */
+    @Nested
+    @DisplayName("allowedWorkerTopics")
+    class WorkerTopics {
+
+        private ExternalSystem withTopics(String raw) {
+            ExternalSystem s = new ExternalSystem();
+            s.setSystemId("erp");
+            s.setAllowedWorkerTopics(raw);
+            return s;
+        }
+
+        @Test
+        @DisplayName("null 與空白視為不限制（既有系統不需要回填）")
+        void blankMeansUnrestricted() {
+            assertThat(policy.isWorkerTopicAllowed(withTopics(null), "anything")).isTrue();
+            assertThat(policy.isWorkerTopicAllowed(withTopics(""), "anything")).isTrue();
+            assertThat(policy.isWorkerTopicAllowed(withTopics("   "), "anything")).isTrue();
+        }
+
+        @Test
+        @DisplayName("明確的空清單 [] 代表拒絕全部，不是不限制")
+        void emptyJsonArrayMeansDenyAll() {
+            assertThat(policy.isWorkerTopicAllowed(withTopics("[]"), "demo-topic")).isFalse();
+            assertThat(policy.isWorkerTopicAllowed(withTopics("[ ]"), "demo-topic")).isFalse();
+        }
+
+        @Test
+        @DisplayName("精確比對：逗號分隔可用、每個項目 trim、子串不得誤放行")
+        void exactMatching() {
+            ExternalSystem s = withTopics("demo-topic, erp-invoices ,hr-sync");
+            assertThat(policy.isWorkerTopicAllowed(s, "demo-topic")).isTrue();
+            assertThat(policy.isWorkerTopicAllowed(s, "erp-invoices")).isTrue();
+            assertThat(policy.isWorkerTopicAllowed(s, "hr-sync")).isTrue();
+            assertThat(policy.isWorkerTopicAllowed(s, "demo")).isFalse();
+            assertThat(policy.isWorkerTopicAllowed(s, "demo-topic-extended")).isFalse();
+        }
+
+        @Test
+        @DisplayName("格式錯誤 → 拒絕全部（fail-closed），不得當成不限制")
+        void malformedFailsClosed() {
+            assertThat(policy.isWorkerTopicAllowed(withTopics("[not json"), "demo-topic")).isFalse();
+            assertThat(policy.isWorkerTopicAllowed(withTopics(" , , "), "demo-topic")).isFalse();
+        }
+
+        @Test
+        @DisplayName("有清單時 null topic 不得放行")
+        void nullTopicDeniedAgainstList() {
+            assertThat(policy.isWorkerTopicAllowed(withTopics("[\"demo-topic\"]"), null)).isFalse();
+        }
+    }
 }
