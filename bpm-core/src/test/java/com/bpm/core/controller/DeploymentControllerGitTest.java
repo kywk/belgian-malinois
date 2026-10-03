@@ -3,6 +3,7 @@ package com.bpm.core.controller;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.lint.BpmnLintService;
+import com.bpm.core.service.BpmnEnvSubstitutor;
 import com.bpm.core.service.DeploymentGitCommitter;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.revwalk.RevCommit;
@@ -92,6 +93,9 @@ class DeploymentControllerGitTest {
     private DeploymentController controller(boolean gitEnabled, Path bpmnDir, Path repoDir) {
         return new DeploymentController(repositoryService, lintService, auditPublisher,
                 new DeploymentGitCommitter(gitEnabled, repoDir.toString(), "test@bpm.local"),
+                // #53 加入建構子注入；本組測試的 XML 沒有 ENV 佔位符，
+                // 空環境即可（無佔位符時 substitutor 逐位元不變）。
+                new BpmnEnvSubstitutor(new org.springframework.mock.env.MockEnvironment()),
                 bpmnDir.toString());
     }
 

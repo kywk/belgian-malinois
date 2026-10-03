@@ -129,6 +129,27 @@ flowable:
   # 預設的 Jackson 3 是同一顆。⚠️ Flowable 的 metadata 把 jackson2 標為
   # 「deprecated for removal」，留著會是下一個升版的斷點，不是可延後的選配。
 
+# BPMN 部署期的環境變數替換（#53，spec §12.3）。
+#
+# BPMN XML 裡可寫 ${ENV_XXX} 佔位符（只認 ENV_[A-Z0-9_]+ 命名空間；其他 ${...}
+# 是 Flowable EL，原樣不動）。部署時以本區塊的值替換後才送進引擎；查不到值或
+# 值只有空白 → 400，且不寫檔、不 commit、不部署（fail-closed）。
+#
+# ⚠️ 寫檔與 Git commit 保存的仍是含佔位符的原始 XML：環境差異（例如正式環境
+# 的群組名）不進版控。resolved XML 只在記憶體用於引擎部署與稽核 hash。
+#
+# 範例（spec §12.3 樣張；不要在這裡放真祕密）：
+#   bpmn.variables.ENV_FINANCE_GROUP: finance_dept_approver
+#   bpmn.variables.ENV_HR_GROUP: hr_approver
+#
+# prod 覆蓋方式：Spring relaxed binding —— 環境變數
+# BPMN_VARIABLES_ENV_FINANCE_GROUP=<值>（BpmnEnvSubstitutorTest 實測過），
+# 或沿用 YAML 鍵 bpmn.variables.ENV_FINANCE_GROUP。
+bpmn:
+  variables:
+    # 預設刻意留空：沒有明確設定時，帶佔位符的部署就該大聲失敗，
+    # 而不是靜默拿到一個不屬於這個環境的值。
+
 bpm:
   # 三個 DataSource 共用的連線來源（security-audit P2-3）。
   # 三個 DB 在同一個 MSSQL 實例上、用同一個帳號，所以收斂成一組屬性；
