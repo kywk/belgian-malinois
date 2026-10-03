@@ -89,6 +89,7 @@ public class FlowableConfig {
             // externalApiDelegate 同一條分界：url 來自 BPMN，因此
             // WebhookUrlPolicy 是它的安全相依。
             com.bpm.core.engine.ESignDelegate eSignDelegate,
+            com.bpm.core.engine.ErpSyncDelegate erpSyncDelegate,
             com.bpm.core.engine.BlankAssigneeNormalizingInterceptor blankAssigneeNormalizingInterceptor) {
         return config -> {
             config.setEventListeners(List.of(processCompletedListener, unreachableTaskListener,
@@ -150,7 +151,11 @@ public class FlowableConfig {
                     // #45 通用電子簽章 delegate。只加在這份 map，不進 EL
                     // 白名單 —— 它是 delegateExpression 的解析對象，不是
                     // 運算式可呼叫的函式（與 webhookTaskListener 同一條分界）。
-                    Map.entry("esignDelegate", eSignDelegate)));
+                    Map.entry("esignDelegate", eSignDelegate),
+                    // #46 ERP 同步 delegate。與 #49 同一條安全相依
+                    // （WebhookUrlPolicy＋SafeRestClients），錯誤碼是
+                    // ERP_SYNC_*；同樣只加在這份 map，不進 EL 白名單。
+                    Map.entry("erpSyncDelegate", erpSyncDelegate)));
         };
     }
 }
