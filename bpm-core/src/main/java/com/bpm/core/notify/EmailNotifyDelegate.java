@@ -22,7 +22,7 @@ import java.util.List;
  * <pre>{@code
  * <serviceTask id="notifyEmail" flowable:delegateExpression="${emailNotifyDelegate}">
  *   <extensionElements>
- *     <flowable:field name="to" stringValue="mgr001@company.com,${applicantEmail}"/>
+ *     <flowable:field name="to" stringValue="mgr001,${applicantEmail}"/>
  *     <flowable:field name="subject" stringValue="案件 ${processInstanceId} 已受理"/>
  *     <flowable:field name="body" stringValue="您好，案件已進入審核。"/>
  *   </extensionElements>
@@ -31,10 +31,12 @@ import java.util.List;
  *
  * <h2>欄位</h2>
  * <ul>
- *   <li>{@code to}（必填）：逗號分隔的收件人。支援 {@code ${var}} 替換
- *       （規則見 {@link BpmnFieldSupport}）。<b>空白／全部替換後為空
- *       → log warn + 不寄</b>：沒有收件人的信不是信，而且空 {@code To}
- *       會讓 SMTP 端拒絕或寄給退信位址。</li>
+ *   <li>{@code to}（必填）：逗號分隔的收件人，每項可以是完整 email 或
+ *       userId（不含 {@code @} 時自動補 {@code @company.com}，見下方
+ *       「收件人解析」）。支援 {@code ${var}} 替換（規則見
+ *       {@link BpmnFieldSupport}）。<b>空白／全部替換後為空 → log warn
+ *       + 不寄</b>：沒有收件人的信不是信，而且空 {@code To} 會讓 SMTP
+ *       端拒絕或寄給退信位址。</li>
  *   <li>{@code subject}：選填；空白時用預設主旨。</li>
  *   <li>{@code body}：選填；空白時寄空內文（純提醒信仍成立）。</li>
  * </ul>
@@ -46,12 +48,36 @@ import java.util.List;
  * delegate 在 Flowable 的 job 裡執行，例外往外丟會讓 job 失敗、重試，
  * 甚至讓案件卡在寄不出去的那一步 —— 而信寄不出去不是業務錯誤。
  *
- * <h2>收件人解析：與 DLQ 告警同一條規則</h2>
+ * <h2>收件人解析：DLQ 告警的形狀 + userId 自動補網域</h2>
  *
- * <p>逗號分隔 → trim → 去空白項 → 去重，與
- * {@code DeadLetterConsumer.parseRecipients} 的形狀一致。收件人<b>原樣</b>
- * 使用，不補 {@code @company.com}（那是 {@code EmailConsumer} 給
- * assignee id 的舊慣例；本 delegate 的 {@code to} 是完整 email）。
+ * <p>逗號分隔 → trim → 去空白項 → 補網域 → 去重。逗號／trim／去空／
+ * 去重的形狀與 {@code DeadLetterConsumer.parseRecipients} 一致，補網域
+ * 是本 delegate 額外的一步：
+ *
+ * <ul>
+ *   <li><b>值不含 {@code @} → 視為 userId，補 {@code @company.com}</b>，
+ *       與 {@code EmailConsumer} 對 assignee／candidateUsers 的慣例相同
+ *       （{@code to + "@company.com"}）。</li>
+ *   <li><b>值含 {@code @} → 原樣使用</b>，不補、不改寫。</li>
+ * </ul>
+ *
+ * <p><b>歷史：為什麼先前刻意不補，為什麼現在改。</b>本 delegate 初版把
+ * {@code to} 當完整 email 原樣送出，理由是「不替設計師猜」——怕把打錯的
+ * 字串變成另一個錯誤位址。但平台其他地方的收件人慣例是 userId
+ * （assignee／candidateUsers 都只存 {@code user001}），設計師照慣例在
+ * {@code to} 填 {@code user001} 時，舊版會把 {@code user001} 原樣交給
+ * SMTP：被拒收還算好的，寬鬆的 SMTP／MailHog 會收下 {@code To: user001}
+ * 而無人察覺——沒有例外、log 還記「已寄出」，正是最貴的靜默錯誤
+ * （2026-10-03 實測）。現在不含 {@code @} 一律補網域：就算設計師填錯，
+ * 補出來的位址也是可預期、可從 log 追的形狀。
+ *
+ * <p>「含 {@code @}」採最寬鬆的判斷：{@code a@} 這類位置怪異的值也原樣
+ * 放行——補成 {@code a@@company.com} 更不可能是設計師要的，丟掉又是另一
+ * 種靜默錯誤。壞位址交給 SMTP 拒收，失敗照 {@link #execute} 的 fail-open
+ * 語意只記 log。
+ *
+ * <p>去重發生在補網域<b>之後</b>：{@code user001,user001@company.com}
+ * 會塌成同一個位址，同一封信不寄兩次。
  *
  * <h2>⚠️ 不依賴 {@code flowable:field} 的 setter 注入</h2>
  *
@@ -67,6 +93,16 @@ public class EmailNotifyDelegate implements JavaDelegate {
 
     /** 與 {@code DeadLetterConsumer}／{@code EmailConsumer} 同一個寄件者。 */
     private static final String FROM = "bpm-noreply@company.com";
+
+    /**
+     * userId 收件人自動補的網域：與 {@code EmailConsumer.sendEmail}
+     * （{@code mail.setTo(to + "@company.com")}）同一慣例。
+     *
+     * <p>刻意不抽共用常數：{@code EmailConsumer} 是 #43 範圍外的既有程式
+     * （本工項不動它），而 {@link #FROM} 目前也和兩個 consumer 各寫一份；
+     * 改網域時要連同 {@code EmailConsumer} 一起改。
+     */
+    private static final String COMPANY_MAIL_DOMAIN = "@company.com";
 
     /** {@code subject} 未設定或空白時的主旨。 */
     static final String DEFAULT_SUBJECT = "【BPM】流程通知";
@@ -128,16 +164,34 @@ public class EmailNotifyDelegate implements JavaDelegate {
     }
 
     /**
-     * 逗號分隔的收件人解析：trim、去空白項、去重。
-     * 與 {@code DeadLetterConsumer.parseRecipients} 同一條規則。
+     * 逗號分隔的收件人解析：trim、去空白項、補網域、去重。
+     *
+     * <p>逗號／trim／去空／去重的形狀與
+     * {@code DeadLetterConsumer.parseRecipients} 一致；差別是多一步
+     * {@link #normalizeRecipient}。順序是<b>先補網域再 distinct</b>：
+     * {@code user001,user001@company.com} 會塌成同一個位址，不寄兩次。
      */
     static List<String> parseRecipients(String raw) {
         if (raw == null || raw.isBlank()) return List.of();
         return Arrays.stream(raw.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isBlank())
+                .map(EmailNotifyDelegate::normalizeRecipient)
                 .distinct()
                 .toList();
+    }
+
+    /**
+     * 收件人正規化：不含 {@code @} 視為 userId → 補
+     * {@code @company.com}；含 {@code @} → 原樣。
+     *
+     * <p>「含 {@code @}」是最寬鬆的判斷：{@code a@} 這種位置怪異的值也
+     * 原樣放行（補成 {@code a@@company.com} 更不可能是設計師要的；丟掉
+     * 又是另一種靜默錯誤）。壞位址由 SMTP 拒收，失敗照 {@link #execute}
+     * 的 fail-open 語意只記 log。完整契約見類別註解。
+     */
+    private static String normalizeRecipient(String value) {
+        return value.contains("@") ? value : value + COMPANY_MAIL_DOMAIN;
     }
 
     /**
