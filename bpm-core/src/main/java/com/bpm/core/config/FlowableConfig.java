@@ -74,6 +74,9 @@ public class FlowableConfig {
             OrgService orgService,
             com.bpm.core.service.InitialAssigneeResolver assigneeResolver,
             com.bpm.core.service.ApplicantResolver applicantResolver,
+            // #47：任何 UserTask 的執行期動態審核人。與 assigneeResolver 的
+            // 分工是「第一個任務 vs 所有任務」，且套代理人、找不到人時拋例外。
+            com.bpm.core.service.DynamicAssigneeResolver dynamicAssignee,
             BpmPermissionService permService,
             BpmQueryService bpmQueryService,
             NotifyTaskListener notifyTaskListener,
@@ -108,6 +111,9 @@ public class FlowableConfig {
                     // 全部不命中，沒有任何人能簽，案件靜默卡死。
                     // 必須與 BpmnLintService.EL_WHITELIST 同一份內容。
                     Map.entry("applicantResolver", applicantResolver),
+                    // #47 執行期動態審核人（任何 UserTask）。三個方法都套代理人、
+                    // 找不到人時拋例外；與 EL_WHITELIST 必須同步。
+                    Map.entry("dynamicAssignee", dynamicAssignee),
                     // ⚠️ 不可移除：purchase-approval 的 delegateExpression 依賴它
                     Map.entry("notifyTaskListener", notifyTaskListener),
                     // ⚠️ 不可移除（#23）：設計師在流程的 UserTask 上掛
