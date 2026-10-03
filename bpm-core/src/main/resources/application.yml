@@ -268,6 +268,22 @@ bpm:
     # 寧可快速失敗也不要把執行緒與 DB 交易一起卡住。
     connect-timeout-ms: 2000
     read-timeout-ms: 3000
+    # ── 認證注入（#8／#9 正式化）────────────────────────────────────
+    #
+    # 真實的組織／權限系統需要認證時，把 token 放進這個 header 名稱底下。
+    # 預設 Authorization 是 Bearer 與 Sa-Token 兩種體系最常見的 header。
+    auth-header: Authorization
+    # token 以「設定值原樣」送出，本服務不解析、不重組、不加前綴：
+    #   org-auth-token: "Bearer eyJ..."   （Bearer 形式）
+    #   org-auth-token: "satoken abc123"  （Sa-Token 形式）
+    #
+    # 預設空字串＝完全不送出 auth-header。dev mock 不驗證身分，
+    # 空值讓加入本功能前的行為逐位元不變。
+    #
+    # prod 由 ORG_AUTH_TOKEN／PERM_AUTH_TOKEN 注入（見本檔末端 prod profile）。
+    # ⚠️ token 只進 request header：不得寫進日誌、例外訊息或稽核。
+    org-auth-token: ""
+    perm-auth-token: ""
 
 management:
   endpoints:
@@ -336,6 +352,17 @@ bpm:
     # （ExternalSystemUrlValidator 會擋）。
     org-service-url: ${ORG_SERVICE_URL:}
     perm-service-url: ${PERM_SERVICE_URL:}
+    # 真實系統的認證 token。未設定＝空＝不送 auth-header：
+    # 真實系統若要求認證，第一次查詢會回 401，錯誤訊息會帶服務名與路徑
+    # （不會帶 token），足以判斷是「沒設 token」還是「token 錯了」。
+    #
+    # 值以「原樣」放進 auth-header（預設 Authorization），所以：
+    #   ORG_AUTH_TOKEN="Bearer eyJhbGci..."   → Authorization: Bearer eyJhbGci...
+    #   ORG_AUTH_TOKEN="satoken abc123"       → Authorization: satoken abc123
+    # 若真實系統用的不是 Authorization（例如 X-Auth-Token），
+    # 由 BPM_EXTERNAL_AUTH_HEADER 覆蓋 header 名稱，不必改程式。
+    org-auth-token: ${ORG_AUTH_TOKEN:}
+    perm-auth-token: ${PERM_AUTH_TOKEN:}
 
 # API 文件（OpenAPI／Swagger UI）在 prod 一律關閉（#65）。
 #

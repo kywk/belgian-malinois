@@ -2,6 +2,7 @@ package com.bpm.core.controller;
 
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.audit.model.OperationType;
+import com.bpm.core.client.ExternalApiException;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.external.ExternalActorIdentity;
 import com.bpm.core.notify.NotifyPublisher;
@@ -194,6 +195,19 @@ public class SubstituteForwardController {
                 String substitute;
                 try {
                     substitute = orgService.resolveEffective(assignee);
+                } catch (ExternalApiException e) {
+                    // 正式 client（#8）把 404 映射成 ExternalApiException：
+                    // 組織系統明確回答查無此人 → 他不可能有代理人。
+                    // 跳過這一筆，不讓整個批次失敗（歷史任務可能有離職者）。
+                    if (!e.isNotFound()) {
+                        // 其他狀態碼（401／5xx）與逾時都是故障 —— 與下面的
+                        // RestClientException 同一條規則，見 catch 區塊的說明。
+                        throw orgSystemUnavailable(task, assignee, e);
+                    }
+                    log.warn("任務 {} 的受理人 {} 不是組織系統認識的人員，跳過轉派",
+                            task.getId(), assignee);
+                    skipped++;
+                    continue;
                 } catch (HttpClientErrorException.NotFound e) {
                     // 組織系統明確回答查無此人 → 他不可能有代理人。
                     // 跳過這一筆，不讓整個批次失敗（歷史任務可能有離職者）。
@@ -204,11 +218,7 @@ public class SubstituteForwardController {
                 } catch (RestClientException e) {
                     // 故障與拒絕分開（ExternalActorGuard 的同一組政策）：
                     // 無法判定時 fail-closed —— 整批 503 並回滾，重試安全。
-                    log.error("組織系統查詢失敗，本輪轉派中止（交易將回滾）。"
-                            + "taskId={} assignee={} 原因={}",
-                            task.getId(), assignee, e.getMessage(), e);
-                    throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                            "組織系統目前無法查詢，本輪未轉派任何任務，請稍後重試", e);
+                    throw orgSystemUnavailable(task, assignee, e);
                 }
 
                 if (substitute == null || substitute.equals(assignee)) {
@@ -228,6 +238,21 @@ public class SubstituteForwardController {
         log.info("代理人轉派完成：operator={} scanned={} forwarded={} skipped={}",
                 operatorId, scanned, forwarded, skipped);
         return new ForwardResult(scanned, forwarded, skipped);
+    }
+
+    /**
+     * 組織系統故障（非「查無此人」）→ 503 並中止本輪。
+     *
+     * <p>抽出來只為了讓兩個 catch（正式 client 的 {@code ExternalApiException}
+     * 與其他來源的 {@code RestClientException}）走同一條處置 ——
+     * 「故障一律 fail-closed、重試安全」的訊息只寫一份。
+     */
+    private ResponseStatusException orgSystemUnavailable(Task task, String assignee, Exception cause) {
+        log.error("組織系統查詢失敗，本輪轉派中止（交易將回滾）。"
+                + "taskId={} assignee={} 原因={}",
+                task.getId(), assignee, cause.getMessage(), cause);
+        return new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                "組織系統目前無法查詢，本輪未轉派任何任務，請稍後重試", cause);
     }
 
     /**
