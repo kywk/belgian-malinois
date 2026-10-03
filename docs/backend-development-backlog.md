@@ -1,7 +1,7 @@
 # Greyhound BPM 平台 — 後端開發工項清單
 
 > 產出日期：2026-06-08
-> 最後更新：2026-10-03（Wave F：待決策六項落實 —— #22 topic 白名單、#58 版本化、#56 動態選項、#65 OpenAPI、#43 to 補網域；Wave E：#43/#48/#49 delegate、#50 JVM；Wave D：#22/#24/#20、小殘餘；Wave C：#55/#59/#7 通知/#21 UI；Wave B：#4/#21/#5；Wave A：#23/#1/#7/#51；同日稍早：#96/#51 告警/#3/#6/taskId）
+> 最後更新：2026-10-03（Wave G：#97 重導收斂、#44 Teams、#45 ESign、#46 ErpSync、#47 動態審核人；Wave F：待決策六項落實；Wave E：delegate 三件組／#50；Wave D：#22／#24／#20；Wave C：#55／#59／#7 通知／#21 UI；Wave B：#4／#21／#5；Wave A：#23／#1／#7／#51；同日稍早：#96／#51 告警／#3／#6／taskId）
 > 基於規格文件 vs 實際程式碼差異分析
 >
 > 狀態：✅ 完成　🟡 部分完成（說明欄寫缺什麼）　⬜ 未開始
@@ -114,10 +114,10 @@
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
 | 43 | EmailNotifyDelegate | 流程節點中觸發 Email 通知 | 1d | ✅ **2026-10-03 完成**（`3dfea85`，merge `894102f`）。`flowable:field`：`to`（必填、逗號分隔、支援 `${var}`、**完整 email 地址**——與 EmailConsumer 的 userId 慣例刻意不同，javadoc 明示）、`subject`／`body`；`JavaMailSender` 直寄、FROM 同既有；**fail-open**（寄失敗不擋流程）；共用 `BpmnFieldSupport`（不依賴單例 setter 注入）。線上實測：MailHog 收到「E2E Delegate 通知」。✅ **同日收尾**（`ec52679`，merge `f845756`）：`to` 無 `@` 自動補 `@company.com`（完整 email 原樣；去重移到補網域後）。線上實測：`to=user001` → MailHog 收到 `user001@company.com`（+1） |
-| 44 | TeamsNotifyDelegate | 流程節點中觸發 Teams 通知 | 1d | ⬜ |
-| 45 | ESignDelegate | 觸發電子簽章 + 等待 Callback 喚醒 | 3d | ⬜ |
-| 46 | ErpSyncDelegate | 同步資料到 ERP 系統 | 2d | ⬜ |
-| 47 | DynamicAssigneeDelegate | 運行時動態計算審核人 | 2d | 🟡 無 Delegate，但 `assigneeResolver`／`getManagerAtLevel` 已涵蓋部分需求 |
+| 44 | TeamsNotifyDelegate | 流程節點中觸發 Teams 通知 | 1d | ✅ **2026-10-03 完成**（`395f470`，merge 自動）。`webhookUrl`／`title`／`message`（支援 `${var}`）；payload `{"text": title+message}`；🔴 URL 過 `WebhookUrlPolicy`（拒絕 → warn＋no-op）；**fail-open**；client 用 `SafeRestClients`。線上實測：loopback 被拒且零請求、流程照樣完成 |
+| 45 | ESignDelegate | 觸發電子簽章 + 等待 Callback 喚醒 | 3d | ✅ **2026-10-03 完成**（`19c91c6`，merge `f974c10`）。POST 觸發（`url`／`payload`／`resultVariable`＝回應 body）；🔴 URL 過 `WebhookUrlPolicy`（`ESIGN_BLOCKED` 零請求）；失敗 `BpmnError("ESIGN_FAILED")`；**不等待**——BPMN 停在 message catch event，外部完成走 #21 callback 喚醒（javadoc＋spec 有片段）。線上實測：loopback → boundary 走替代路徑 |
+| 46 | ErpSyncDelegate | 同步資料到 ERP 系統 | 2d | ✅ **2026-10-03 完成**（`53380c7`／`8be43b4`，merge `52a8795`）。`url`／`method`（POST/PUT；**PATCH 實測 `HttpURLConnection` 不支援，擋在驗證層**）／`payload`／`resultVariable`；🔴 URL 過 `WebhookUrlPolicy`（`ERP_SYNC_BLOCKED` 零請求）；失敗 `BpmnError("ERP_SYNC_FAILED")`。獨立實作而非薄包裝 #49（契約差異大；共用 `BpmnFieldSupport`／`WebhookUrlPolicy`／`SafeRestClients` 三個安全縫）。線上實測：loopback → boundary |
+| 47 | DynamicAssigneeDelegate | 運行時動態計算審核人 | 2d | ✅ **2026-10-03 完成**（`5a0514b`，merge 自動）。**走 EL bean 而非 delegate**（時機在同一個 command、受 lint 規則涵蓋、與 `assigneeResolver` 同形）：`@Service("dynamicAssignee")` 三方法 `managerAtLevel`／`firstAvailable`／`managerWithPermission`，都套代理人、找不到人拋 `IllegalStateException`（不靜默卡死）、拒收 `system:*`；註冊 `setBeans`＋`EL_WHITELIST` 兩份同步。線上實測：`managerAtLevel(initiator,1)` → 任務落 mgr001。⚠️ 前端設計器仍產生舊運算式（新 bean 需手改 BPMN，列殘餘） |
 | 48 | DataValidationDelegate | 流程中資料驗證邏輯 | 1d | ✅ **2026-10-03 完成**（`e24bac9`，merge `894102f`）。`requiredVariables`（存在且非空白；0／false 算有值）＋`condition`（引擎 JUEL）；失敗 `BpmnError("DATA_VALIDATION_FAILED")` 可被 boundary error 接住；**兩個欄位都沒設定也是 BpmnError**（不讓「什麼都不驗」靜默通過）。線上實測：`days=1` 通過續行；缺 `days` → log 指名擋下、走替代路徑 |
 | 49 | ExternalApiDelegate | 通用外部 API 呼叫（可配置 URL/method/payload） | 2d | ✅ **2026-10-03 完成**（`bd5478b`，merge `894102f`）。`url`／`method`（GET/POST/PUT）／`body`／`resultVariable`；🔴 **URL 先過 `WebhookUrlPolicy`**（唯一 SSRF 閘門，拒絕則 `EXTERNAL_API_BLOCKED` 且零請求）；逾時沿用 `bpm.webhook.*-timeout-ms`；非 2xx／逾時 → `EXTERNAL_API_FAILED`（可建模，訊息不含 response body）。線上實測：loopback URL 被拒且零請求、boundary 接住走替代路徑 |
 
@@ -233,7 +233,7 @@
 
 | # | 工項 | 說明 | 估時 | 狀態 |
 |---|------|------|------|------|
-| 97 | 外部 HTTP 客戶端不跟隨重導（SSRF） | `WebhookConsumer` 與 `ExternalApiDelegate` 目前跟隨 3xx 重導，而 `WebhookUrlPolicy` 只檢查原始 URL → 通過政策的主機可 302 到 loopback／內網。`FormOptionsService`（#56）已明確不跟隨；本項把三個客戶端統一收斂（共用「不跟隨重導」的 client 設定） | 0.5d | ⬜ **2026-10-03 Wave F 發現**（`FormOptionsService` 實作時揭露） |
+| 97 | 外部 HTTP 客戶端不跟隨重導（SSRF） | `WebhookConsumer` 與 `ExternalApiDelegate` 目前跟隨 3xx 重導，而 `WebhookUrlPolicy` 只檢查原始 URL → 通過政策的主機可 302 到 loopback／內網。`FormOptionsService`（#56）已明確不跟隨；本項把三個客戶端統一收斂（共用「不跟隨重導」的 client 設定） | 0.5d | ✅ **2026-10-03 完成**（`7ead930`，merge `08c0d7b`）。新 `SafeRestClients.create()`（不跟隨 3xx＋timeout）收斂三客戶端。⚠️ **實測修正工項前提**：Spring 的 `SimpleClientHttpRequestFactory` 只對 **GET** 跟隨重導（POST/PUT 本來就不跟）——真正缺口是 GET（delegate 預設／動態選項）；webhook 原本會把 302 靜默記成 delivered（false-success），順帶修為「非 2xx 即失敗 → 重試 → DLQ」 |
 
 ---
 
@@ -314,14 +314,14 @@
 | 通知服務 | 5 | 4 | 0 | 1 | 2d |
 | BPMN Lint | 5 | 4 | 1 | 0 | 1d |
 | 稽核 Log | 4 | 3 | 0 | 1 | 3d |
-| 通用 Delegate | 7 | 3 | 1 | 3 | 8d |
+| 通用 Delegate | 7 | 7 | 0 | 0 | 0d |
 | 基礎設施 | 4 | 3 | 0 | 1 | 1d |
 | Form Service | 6 | 6 | 0 | 0 | 0d |
 | 跨服務整合 | 6 | 2 | 4 | 0 | 15d |
-| 2026-09-29 新增 | 29 | 28 | 0 | 1 | 12.5d |
+| 2026-09-29 新增 | 29 | 28 | 0 | 1 | 22d |
 | 2026-10-02 新增 | 2 | 2 | 0 | 0 | 0d |
-| 2026-10-03 新增 | 1 | 0 | 0 | 1 | 0.5d |
-| **合計** | **97** | **80** | **7** | **8** | **~50 人天** |
+| 2026-10-03 新增 | 1 | 1 | 0 | 0 | 0d |
+| **合計** | **97** | **85** | **7** | **5** | **~51 人天** |
 
 原始 65 項的估計總量為 ~125.5 人天（2026-06-08）。
 
@@ -533,6 +533,18 @@
 > 統計：✅ 80、🟡 7、⬜ 7；剩餘上限 ~49.5 人天。
 > ⚠️ dev 庫新增探測殘留：`probe-43-49`（3 版）；已停用外部系統 `e2e-topic`。
 > ⚠️ 新發現待開工項：**既有 `WebhookConsumer`／`ExternalApiDelegate` 跟隨 3xx**（SSRF 重導缺口）。
+>
+> **2026-10-03（Wave G，Delegate 收尾＋安全小項）—— #97／#44／#45／#46／#47 完成；後端 1230、前端 200 全綠。**
+> 兩階段並行（#97 的 `SafeRestClients` 是三個 HTTP delegate 的共同基礎）：
+> #97（`7ead930`→`08c0d7b`）：`SafeRestClients` 不跟隨 3xx 收斂三客戶端；⚠️ 實測修正前提
+> （Spring 只對 GET 跟隨；webhook 302 原本是 false-success，順帶修）。
+> #44（`395f470`）Teams／#45（`19c91c6`→`f974c10`）ESign／#46（`53380c7`＋`8be43b4`→`52a8795`）ErpSync／
+> #47（`5a0514b`）dynamicAssignee EL bean。通用 Delegate 類別清零。
+> 線上實測：Teams loopback 被拒零請求＋fail-open 完成；ESign／ERP 被拒走 boundary；
+> `managerAtLevel(initiator,1)` → 任務落 mgr001。`acceptance-test` PASS 7 / FAIL 0。
+> 統計：✅ 85、🟡 7、⬜ 5；剩餘上限 ~51 人天。
+> ⚠️ **統計更正**：2026-09-29 類別的剩餘誤記為 12.5d（漏計 #70 的 22d），且合計 🟡／⬜ 各少 1 —— 本次一併修正。
+> ⚠️ dev 庫新增探測殘留：`probe-waveG`（4 個 process）。
 >
 > 🔴 **`mvn verify` 失敗但 `mvn test-compile` 成功 —— 記在這裡因為它極難診斷。**
 > 2026-10-01 實測：`mvn verify` 報 **53 errors**，訊息是

@@ -1,5 +1,8 @@
 # 接手文件 — 2026-10-03 Wave F 完成（待決策六項落實）
 
+> ⚠️ **同日稍晚另有 Wave G（#97／#44／#45／#46／#47），見
+> `docs/handoff/2026-10-03-round14-handoff.md`（最新）。** 本檔內容仍然有效。
+
 **寫給下一個接手的 PM Agent。** 撰寫時間 2026-10-03（同日，接續 round12）。
 上一輪交接見 `docs/handoff/2026-10-03-round12-handoff.md`（**仍然有效**：Wave E）、
 `round11`（Wave D）、`round10`（Wave C）、`round9`（Wave B）、`round8`（Wave A）、
