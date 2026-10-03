@@ -4,6 +4,7 @@ import com.bpm.core.model.NotifyConfig;
 import com.bpm.core.model.NotifyTemplate;
 import com.bpm.core.repository.NotifyConfigRepository;
 import com.bpm.core.repository.NotifyTemplateRepository;
+import com.bpm.core.webhook.WebhookUrlPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -11,6 +12,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.HashMap;
 import java.util.List;
@@ -54,7 +56,8 @@ class NotificationTemplateTest {
         mailSender = Mockito.mock(JavaMailSender.class);
         configRepo = Mockito.mock(NotifyConfigRepository.class);
         templateRepo = Mockito.mock(NotifyTemplateRepository.class);
-        consumer = new EmailConsumer(mailSender, configRepo, templateRepo);
+        consumer = new EmailConsumer(mailSender, configRepo, templateRepo,
+                new WebhookUrlPolicy(""), new ObjectMapper(), 2000, 2000);
     }
 
     private static Map<String, Object> msg(String key, String assignee) {

@@ -7,6 +7,7 @@ import com.bpm.core.model.NotifyConfig;
 import com.bpm.core.model.NotifyTemplate;
 import com.bpm.core.repository.NotifyConfigRepository;
 import com.bpm.core.repository.NotifyTemplateRepository;
+import com.bpm.core.webhook.WebhookUrlPolicy;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -42,13 +43,16 @@ public class NotifyAdminController {
     private final NotifyTemplateRepository templateRepo;
     private final NotifyConfigRepository configRepo;
     private final ConfigChangeAuditor auditor;
+    private final WebhookUrlPolicy urlPolicy;
 
     public NotifyAdminController(NotifyTemplateRepository templateRepo,
                                  NotifyConfigRepository configRepo,
-                                 ConfigChangeAuditor auditor) {
+                                 ConfigChangeAuditor auditor,
+                                 WebhookUrlPolicy urlPolicy) {
         this.templateRepo = templateRepo;
         this.configRepo = configRepo;
         this.auditor = auditor;
+        this.urlPolicy = urlPolicy;
     }
 
     /** 模板內容的摘要。見類別註解說明為什麼不記全文。 */
@@ -70,6 +74,12 @@ public class NotifyAdminController {
         m.put("eventType", c.getEventType() == null ? "" : c.getEventType());
         m.put("channel", c.getChannel() == null ? "" : c.getChannel());
         m.put("templateId", c.getTemplateId() == null ? "" : c.getTemplateId());
+        // webhookUrl 是可張貼到 Teams 頻道的 bearer token：記全文等於把
+        // token 複製進稽核庫（與模板 body 記摘要同一條理由）。記 sha256
+        // 前綴＋長度，足以證明「投遞目標被改過」與「改了多少」。
+        String webhookUrl = c.getWebhookUrl() == null ? "" : c.getWebhookUrl();
+        m.put("webhookUrlSha256Prefix", sha256Prefix(webhookUrl));
+        m.put("webhookUrlChars", webhookUrl.length());
         // enabled 從 true 變 false 就是「讓相關人員不再收到通知」。
         m.put("enabled", String.valueOf(c.getEnabled()));
         return m;
@@ -217,12 +227,50 @@ public class NotifyAdminController {
         }
     }
 
+    /**
+     * {@code channel=teams} 的 {@code webhookUrl} 規則（#32）。
+     *
+     * <p>Teams 設定沒有 URL 就沒有投遞目標，而 {@code NotifyConfig.webhookUrl}
+     * 是可空的（email 設定不需要它）—— 唯一擋得住「teams 但沒有 URL」的地方
+     * 就是寫入端。消費端遇到空值只會記 warn 並略過，管理員在後台看到的卻是
+     * 「設定成功」，與 P1-13 的「模板被靜默忽略」是同一種失敗形狀。
+     *
+     * <p>通過必填之後先過 {@link WebhookUrlPolicy#rejectionReason(String)}：
+     * 這個 URL 是伺服器會主動 POST 的目標，不擋的話管理端就成為 SSRF 的
+     * 寫入點（消費端仍會再過一次，那是第二道）。被拒 → 400 並帶上原因，
+     * 呼叫端才知道要改什麼。
+     *
+     * <p>⚠️ 刻意<b>不</b>加 channel 白名單。現行測試
+     * （{@code NotifyConfigTargetValidationTest} 的 tamper 用
+     * {@code teams-<uuid>} 這種值並期待 200）與資料都允許自訂 channel
+     * 字串，加白名單會是這個工項範圍外的行為變更；只有 {@code teams}
+     * 這個精確值會被本方法檢查。
+     *
+     * <p>update 端也套用同一條規則：只在 create 檢查的話，管理員可以先
+     * 建一筆合法的 teams 設定，再 PUT 一個內網 URL 繞過閘門（消費端仍會
+     * 擋，但寫入端就不該放行）。
+     */
+    private void requireValidTeamsWebhook(NotifyConfig c) {
+        if (!"teams".equals(c.getChannel())) return;
+        String webhookUrl = c.getWebhookUrl();
+        if (webhookUrl == null || webhookUrl.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "channel=teams 時 webhookUrl 為必填");
+        }
+        String reason = urlPolicy.rejectionReason(webhookUrl);
+        if (reason != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "webhookUrl 被拒絕: " + reason);
+        }
+    }
+
     @PostMapping("/notify-configs")
     @Transactional("primaryTransactionManager")
     public NotifyConfig createConfig(@RequestBody NotifyConfig c,
                                      @CallerId String operatorId) {
         c.setId(null);
         requireExistingTemplate(c.getTemplateId());
+        requireValidTeamsWebhook(c);
         NotifyConfig saved = configRepo.save(c);
         auditor.record(operatorId, CONFIG, "create", saved.getId(), configDigest(saved));
         return saved;
@@ -260,10 +308,14 @@ public class NotifyAdminController {
         NotifyConfig existing = configRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
         requireExistingTemplate(c.getTemplateId());
+        // #32：與 create 同一條規則（見 requireValidTeamsWebhook）——
+        // 順序同樣是「先驗證再碰 entity」，被擋下時交易回捲且零 save。
+        requireValidTeamsWebhook(c);
         var before = configDigest(existing);
         existing.setProcessDefinitionKey(c.getProcessDefinitionKey());
         existing.setEventType(c.getEventType());
         existing.setChannel(c.getChannel());
+        existing.setWebhookUrl(c.getWebhookUrl());
         existing.setTemplateId(c.getTemplateId());
         existing.setEnabled(c.getEnabled());
         NotifyConfig saved = configRepo.save(existing);

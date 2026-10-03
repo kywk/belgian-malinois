@@ -189,12 +189,12 @@ public class TeamsNotifyDelegate implements JavaDelegate {
      * 組出 Teams Incoming Webhook 的 payload（package-private 供單元測試
      * 釘住 JSON 形狀與跳脫）。
      *
-     * <p>形狀固定是單一欄位 {@code text}；{@code title} 非空白時以換行
-     * 接在前面。用 {@link ObjectMapper} 而不是字串串接 —— 內容來自 BPMN
-     * 與流程變數，可能含引號／反斜線／換行，手寫跳脫是 bug 溫床。
+     * <p>形狀的唯一定義在 {@link TeamsWebhookPayload}（#32 的
+     * {@code EmailConsumer} 走同一份）：單一欄位 {@code text}；
+     * {@code title} 非空白時以換行接在前面。這裡保留方法本身作為既有
+     * 測試的入口，實作不再自己拼 JSON。
      */
     String payload(String title, String message) {
-        String text = title == null || title.isBlank() ? message : title + "\n" + message;
-        return objectMapper.createObjectNode().put("text", text).toString();
+        return TeamsWebhookPayload.json(objectMapper, title, message);
     }
 }
