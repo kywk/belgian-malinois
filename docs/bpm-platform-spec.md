@@ -238,6 +238,28 @@ POST /runtime/tasks
 
 子流程模板由流程管理員預先設計並部署，業務人員在 BPMN Editor 中透過 Call Activity 節點選擇使用。
 
+**出廠模板 `countersign-review`（backlog #4，2026-10-03）**
+
+平台隨附一支預定義加簽子流程 `bpm-core/src/main/resources/processes/countersign-review.bpmn20.xml`
+（process key：`countersign-review`，單一 UserTask），由 `scripts/seed-data.sh` 部署。變數進出契約
+（同時宣告在 `bpm_process_variable_spec`，migration `V5__seed_countersign_review_variable_specs.sql`）：
+
+| 方向 | 變數 | 必填 | 說明 |
+|------|------|------|------|
+| in | `countersignAssignee` | 是 | 子流程任務的受理人，父流程以 `flowable:in` 映射帶入 |
+| in | `countersignTaskName` | 否 | 覆寫任務名稱；未提供時為「加簽複核」 |
+| out | `countersignApproved` | — | 子流程任務完成時的 `approved`，經 `flowable:out` 改名帶回父流程 |
+| out | `countersignRejected` | — | 子流程任務完成時的 `rejected`，經 `flowable:out` 改名帶回父流程 |
+
+- out 刻意改名（`approved` → `countersignApproved`）：父流程自己也用 `approved`／`rejected`
+  當關卡條件，同名帶回會用子流程結果覆寫父流程當下的關卡變數。
+- `countersignAssignee` 在規格中是 `required=false`（它由 in 映射提供，不是外部 API 的啟動參數），
+  因此部署模板時 lint 會發一條 `optional-assignee` warning；warning 不擋部署，取捨理由見 migration 註解。
+- 子流程任務的 `processDefinitionKey` 是 `countersign-review`；外部系統若要完成它，
+  子流程 key 必須在該系統的 `allowedProcessKeys` 內（R-19）。
+- 回歸測試：`bpm-core/src/test/java/com/bpm/core/acceptance/CallActivityCountersignTest.java`；
+  設計器面板：`bpm-frontend/src/bpmn/CallActivityProps.js`。
+
 ### 4.5 批註機制
 
 批註（Comment）為任務留言功能，不影響流程走向：

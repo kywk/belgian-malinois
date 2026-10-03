@@ -65,6 +65,14 @@ deploy_bpmn() {
 deploy_bpmn "bpm-core/src/main/resources/processes/leave-approval.bpmn20.xml"    "leave-approval"
 deploy_bpmn "bpm-core/src/main/resources/processes/purchase-approval.bpmn20.xml" "purchase-approval"
 
+# 特定子流程加簽模板（#4，spec §4.4.2）。
+# ⚠️ name 必須含 .bpmn20.xml：Flowable 只把 .bpmn20.xml／.bpmn 後綴的資源
+# 當 BPMN 解析（ResourceNameUtil.BPMN_RESOURCE_SUFFIXES），少了後綴會
+# 「部署成功」但不產生流程定義 —— 設計器的 Call Activity 下拉就看不到
+# countersign-review。上面兩支是靠 classpath 自動部署才有定義，這裡刻意
+# 讓部署本身產生定義。
+deploy_bpmn "bpm-core/src/main/resources/processes/countersign-review.bpmn20.xml" "countersign-review.bpmn20.xml"
+
 # ── 驗證表單定義（form-service 已透過 data.sql 初始化）────────
 echo "Verifying form definitions..."
 for formKey in leave-request leave-review purchase-request purchase-review; do
@@ -89,5 +97,5 @@ echo "  主管:   mgr001 (dept001), mgr002 (dept002)"
 echo "  總監:   dir001"
 echo "  管理員: admin001"
 echo ""
-echo "Deployed processes: leave-approval, purchase-approval"
+echo "Deployed processes: leave-approval, purchase-approval, countersign-review"
 echo "Form definitions:   leave-request, leave-review, purchase-request, purchase-review"

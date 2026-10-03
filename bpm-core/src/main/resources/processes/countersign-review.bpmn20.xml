@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="http://bpm.com/countersign">
+
+  <!--
+    特定子流程加簽（Call Activity）的預定義模板（spec §4.4.2、backlog #4）。
+
+    用法：父流程以 Call Activity 呼叫 calledElement="countersign-review"，
+    用 flowable:in 傳入受理人與任務名稱、用 flowable:out 取回結果：
+
+      <callActivity id="legalReview" name="法務加簽"
+                    calledElement="countersign-review"
+                    flowable:inheritVariables="false">
+        <extensionElements>
+          <flowable:in source="legalReviewer" target="countersignAssignee"/>
+          <flowable:in source="legalTaskName" target="countersignTaskName"/>
+          <flowable:out source="approved" target="countersignApproved"/>
+          <flowable:out source="rejected" target="countersignRejected"/>
+        </extensionElements>
+      </callActivity>
+
+    ⚠️ 變數契約（in／out 的變數名就是這裡的介面，改名等於破壞相容）。
+    規格宣告在 db/migration/core/V5__seed_countersign_review_variable_specs.sql
+    —— BpmnLintService 的 undeclared-variable 是 error，沒有那份宣告本模板
+    會被部署端點 400 擋下（seed-data.sh 也部署不了）。
+
+      輸入（父流程 → 子流程）
+        countersignAssignee  必要。子流程 UserTask 的受理人。兩種失敗型態：
+                             呼叫端忘了 flowable:in 時，建立任務的 assignee
+                             運算式會拋 Unknown property used in expression
+                             （啟動回滾，吵鬧地失敗）；有映射但值為 null／
+                             空白時，任務會建立成功卻沒有有效受理人 ——
+                             沒有人看得到它，案件靜默卡死。lint 規則 k 對
+                             本模板發 optional-assignee warning 描述的正是
+                             後者（規格上 required=false，見 migration 註解）。
+        countersignTaskName  選填。覆寫任務名稱；未提供時為「加簽複核」。
+
+      輸出（子流程 → 父流程）
+        approved / rejected  子流程任務完成時由平台的完成路徑寫入
+                             （TaskController 對每一次 complete 都
+                             putIfAbsent），out 映射改名成
+                             countersignApproved／countersignRejected
+                             帶回父流程。
+                             ⚠️ 刻意改名而不是同名帶回：父流程自己也用
+                             approved／rejected 當關卡條件（兩支出廠 BPMN
+                             都是），同名 out 映射會用子流程的結果覆寫
+                             父流程當下的關卡變數，而症狀是父流程走錯分支。
+
+    為什麼任務名稱是運算式而不是固定字串：Flowable 的
+    UserTaskActivityBehavior.handleName 對 name 做 EL 求值，所以任務名稱
+    可以由呼叫端覆寫；未提供時走三元式的預設值。
+
+    ⚠️ 運算式用 execution.getVariable(...) 而不是裸的 countersignTaskName：
+    裸變數在變數缺席時，Flowable 的 JUEL 會拋 PropertyNotFoundException，
+    handleName 把它 catch 起來後會把「運算式字面」直接當成任務名稱
+    （已實測：任務名稱變成 ${...} 整串，而不是預設值）。透過 execution
+    取值時缺席就是 null，三元式才真的走得到預設分支。name 不在
+    BpmnLintService 的指派欄位規則範圍內，所以 execution 不會觸發
+    EL 白名單檢查（assignee 仍必須用裸變數 + 變數規格宣告）。
+
+    為什麼是獨立的 process 而不是 SubProcess：spec §4.4.2 的場景是
+    「由流程管理員預先設計並部署、業務人員在設計器選擇使用」—— 獨立部署的
+    定義才能被多支父流程共用，也才會出現在設計器 Call Activity 下拉
+    （GET /api/process-definitions）裡。
+
+    ⚠️ R-19：子流程任務的 processDefinitionKey 是 countersign-review（不是
+    父流程的 key）。外部系統若要完成這個子任務，子流程 key 必須在該系統的
+    allowedProcessKeys 內 —— 授權程式刻意不改：子流程可能有自己的關卡與
+    變數規格，用父流程的授權放行等於繞過它們（見 ExternalApiController
+    completeTask 的同一段說明）。
+
+    為什麼兩個 taskListener 與出廠 BPMN 一致：通知與 webhook 都是
+    「有設定才發生」——沒有 bpm_notify_config／extensionElements 設定時，
+    listener 查不到就直接不發。少了 listener，管理員為 countersign-review
+    設定的通知會永遠不觸發，而且沒有任何錯誤訊息（本 repo 反覆對付的
+    靜默失效）。
+  -->
+  <process id="countersign-review" name="加簽複核子流程" isExecutable="true">
+
+    <startEvent id="start" name="開始"/>
+
+    <sequenceFlow id="flow1" sourceRef="start" targetRef="countersignReview"/>
+
+    <userTask id="countersignReview"
+              name="${execution.getVariable('countersignTaskName') != null ? execution.getVariable('countersignTaskName') : '加簽複核'}"
+              flowable:assignee="${countersignAssignee}"
+              flowable:formKey="purchase-review">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
+        <flowable:taskListener event="all" delegateExpression="${webhookTaskListener}"/>
+      </extensionElements>
+    </userTask>
+
+    <sequenceFlow id="flow2" sourceRef="countersignReview" targetRef="end"/>
+
+    <endEvent id="end" name="結束"/>
+
+  </process>
+</definitions>
