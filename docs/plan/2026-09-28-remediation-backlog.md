@@ -350,10 +350,14 @@ R-09 修掉了白名單的兩個實作 bug（重複值 500、元素未 trim）�
 | R-11 | 刪除根目錄 `backend-development-backlog.md`（與 `docs/` 那份位元完全相同，漂移風險） | 0.1 |
 | R-12 | `bpm-frontend/dist/` 移出版控，加入 `.gitignore` | 0.1 |
 | R-13 | `docs/README-testing.md` 移除 audit-log-service :8082 的錯誤記載，integrity-check 改指 bpm-core | 0.2 |
-| R-14 | `docker-compose.prod.yml` 移除已淘汰的 `version: '3.8'`；為 JVM 服務加 heap 上限（既有 backlog #50） | 0.5 |
+| R-14 | ✅ **已完成（2026-10-04 複驗）**：`version: '3.8'` 已移除、JVM heap 上限由 #50（Wave E）完成 | ~~0.5~~ |
 | R-15 | 加入 Spotless（Java）+ ESLint/Prettier（前端）與 `.editorconfig`，納入 CI | 1 |
 | R-16 | 補根目錄 `README.md`（現在只有 `docs/README-testing.md` 與 `cicd/README.md`） | 0.5 |
-| R-17 | 補 Swagger/OpenAPI（既有 backlog #65）—— 對外部系統整合尤其重要，目前外部廠商只能讀原始碼 | 2 |
+| R-17 | ✅ **已完成（＝功能 backlog #65，Wave F）**：springdoc 3.1.1、prod 關閉文件 UI | ~~2~~ |
+
+> **2026-10-04 複驗**：R-14（heap 由 #50 完成、compose `version` 已移除）與 R-17（#65）已完成。
+> 剩餘開放項：**R-04 步驟 2–5、R-07、R-08、R-15、R-16、R-21、R-22、R-24、R-25（約 8 人日）**；
+> 派工 prompt 見 `docs/handoff/2026-10-04-next-agent-prompt.md` §B～E。
 
 ---
 

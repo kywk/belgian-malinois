@@ -1,5 +1,8 @@
 # 接手文件 — 2026-10-04 #8／#9 外圍 client 正式化（Wave L）—— **97 項全清**
 
+> 📌 **交接入口已整理**：`docs/handoff/README.md`（全部輪次索引＋未完成事項總表）與
+> `docs/handoff/2026-10-04-next-agent-prompt.md`（未完成事項的可直接派工 prompt）。
+
 **寫給下一個接手的 PM Agent。** 撰寫時間 2026-10-04（接續 round20，同日）。
 上一輪交接見 `docs/handoff/2026-10-04-round20-handoff.md`（**仍然有效**：#63／#64）、
 `round19`（#41／#53）、`round18`（#60／#61）、`round17`（走查＋#28／#32／#35）、

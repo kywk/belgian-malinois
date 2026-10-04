@@ -6,21 +6,24 @@
 
 > 📌 **先讀這兩份**
 >
-> 1. [`2026-09-28-handover.md`](2026-09-28-handover.md) —— 重構交接。分支 `feature/tech-debt-remediation`
->    有 11 個 commit **未經編譯驗證**（當時環境無 javac/maven/docker），回來後第一件事是跑 `mvn verify`。
-> 2. [`2026-09-28-security-audit.md`](2026-09-28-security-audit.md) —— 全系統安全審查，**40+ 項發現**。
->    其中一項有明確 RCE 路徑（附件上傳 path traversal + 容器以 root 執行），另有兩項推翻了
->    CLAUDE.md 原本的結論（EL 白名單、稽核不可篡改性實際上都不成立）。
+> 1. [`2026-09-28-handover.md`](2026-09-28-handover.md) —— 重構交接。✅ **已驗證並併入 main（2026-09-28～29）**；僅供回溯。
+> 2. [`2026-09-28-security-audit.md`](2026-09-28-security-audit.md) —— 全系統安全審查，**40+ 項發現；P0～P2 已修**。
+>    文末「其他功能缺失」殘餘見該檔與 `2026-09-28-remediation-backlog.md`。
+>
+> ⚠️ **新接手的人請先讀 [`docs/handoff/README.md`](../handoff/README.md)**（交接索引＋未完成總表）與最新的
+> [`2026-10-04-round21-handoff.md`](../handoff/2026-10-04-round21-handoff.md)；本目錄的文件是「計畫／審查」的原始記錄。
 
 | 文件 | 內容 | 狀態 | 剩餘人日 |
 |---|---|---|---|
 | [`2026-09-28-handover.md`](2026-09-28-handover.md) | 重構交接：commit 清單、待決策事項、審查發現 | ✅ 已驗證並併入 main（2026-09-28～29） | — |
-| [`2026-09-28-security-audit.md`](2026-09-28-security-audit.md) | 全系統安全與正確性審查（4 個 reviewer，40+ 項） | P0～P2 已修（第八節 #93～#95、#100）；文末「其他功能缺失」殘餘待估 | 待估 |
-| [`2026-09-28-springboot4-upgrade.md`](2026-09-28-springboot4-upgrade.md) | Spring Boot 3.5 → 4.1.1 + Flowable 6.8.1 → 8.0.x 分階段升級 | Stage 0–4 ✅／Stage 5 起待開工 | 8 |
+| [`2026-09-28-security-audit.md`](2026-09-28-security-audit.md) | 全系統安全與正確性審查（4 個 reviewer，40+ 項） | P0～P2 已修；文末「其他功能缺失」殘餘待估 | 待估 |
+| [`2026-09-28-springboot4-upgrade.md`](2026-09-28-springboot4-upgrade.md) | Spring Boot 3.5 → 4.1.1 + Flowable 6.8.1 → 8.0.x 分階段升級 | ✅ **Stage 0–6 全部完成（2026-10-03，#70 結案）** | 0 |
 | [`2026-09-28-adr-001-form-service-consolidation.md`](2026-09-28-adr-001-form-service-consolidation.md) | form-service 併入 bpm-core 的決策紀錄 | ✅ 已完成（＝升級 Stage 3，2026-09-28） | 0 |
-| [`2026-09-28-remediation-backlog.md`](2026-09-28-remediation-backlog.md) | 工程品質與安全性改進項（R-01 ~ R-25） | R-01／02／03／05／06／09／10／11／12／13／18／19／20／23 ✅；R-04 步驟 1 ✅（剩 0.5）；R-07／08／14～17／21／22／24／25 待開工 | 10.5 |
+| [`2026-09-28-remediation-backlog.md`](2026-09-28-remediation-backlog.md) | 工程品質與安全性改進項（R-01 ~ R-25） | R-01／02／03／05／06／09／10／11／12／13／14／17／18／19／20／23 ✅；R-04 步驟 1 ✅（剩 0.5）；**R-07／08／15／16／21／22／24／25 待開工** | **~8** |
 
-剩餘約 **19.5 人日**（升級 Stage 5–6 共 8 ＋ remediation 未完成項約 11.5；不含 security-audit 文末殘餘待估與 `docs/backend-development-backlog.md` 的功能待辦 —— 後者 2026-10-02 統計為 94 項／剩餘估時上限 ~96 人天）。ADR-001 的 3 人日已含在升級計畫的 22 人日內，且已完成，勿重複計算。
+剩餘約 **8 人日**（全部在 remediation；升級已結案）。功能 backlog `docs/backend-development-backlog.md`
+已於 **2026-10-04 結清：97 項 ✅ 97／🟡 0／⬜ 0**。security-audit 文末殘餘待估。
+**交接入口：`docs/handoff/README.md`（索引＋未完成總表）＋ `docs/handoff/2026-10-04-next-agent-prompt.md`（派工 prompt）。**
 
 ## 已完成
 
@@ -40,9 +43,14 @@
 - **R-09／R-10／R-20**：外部 API 精確比對、Redis 改用 `SCAN`、`initiator` 由 server 決定
 - **R-11／R-12／R-13**：根目錄重複 backlog 刪除、`bpm-frontend/dist/` 移出版控、README-testing 更正
 
-**下一個開工點：升級 Stage 5（Boot 4.1.1 + Flowable 8.0.x）。Boot 與 Flowable 必須同步跳，不要只升其中一個。**
+**下一個開工點：remediation 開放項（R-07／08／15／16／21／22／24／25，~8 人日）與部署前檢查清單。
+功能 backlog 已於 2026-10-04 全數結清（97/97）；派工 prompt 見 `docs/handoff/2026-10-04-next-agent-prompt.md`。**
 
 ## 三個必須知道的結論
+
+> ✅ **2026-10-03 更新**：以下三個結論均已落實 —— Boot **4.1.1**＋Flowable **8.0.0** 已上 `main`
+> （升級 Stage 0–6 全部完成，#70 結案；見 `docs/handoff/2026-10-03-round15/16-handoff.md`）。
+> 本節保留作為決策脈絡。
 
 ### 1. Spring Boot 3.5 已 EOL，升級是 P0 安全性阻斷項
 
