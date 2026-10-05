@@ -140,3 +140,5 @@ worktree 與 feature 分支已全部清除。`main` = `04f70c5`（B1）＋`64dff
 - **2026-10-06 續**：**T1 ✅（`d921742`）**——repo `bpmn-definitions/` 就位、seed 路徑與 `name` 修正；
   testResources 映射因雙 root same-key 失敗**延後至 T4**。**Q1／Q2 拍板**：CI 先用閘道密鑰過渡
   （IdP JWT 為退出條件）、prod 走 CI 專用權限碼（O2 併入 T2，T2 估時 0.75→1d）。ADR-002 已修訂。
+- **PM 驗收（2026-10-06）**：merged main `mvn clean verify` **1656 綠**（0 失敗）；
+  dev `seed-data.sh`（新路徑＋`name`）＋`acceptance-test.sh` **PASS 7 / FAIL 0**。
