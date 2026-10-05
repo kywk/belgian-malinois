@@ -312,6 +312,26 @@ bpm:
     org-auth-token: ""
     perm-auth-token: ""
 
+    # ── API Key 認證（R-25）────────────────────────────────────────
+    security:
+      api-key:
+        # ⚠️ 無預設值：未設定（空白）即啟動失敗（ApiKeyHasher 建構子）。
+        #
+        # 這個 secret 是 v2 落庫值（v2: + HMAC-SHA256）的 HMAC 密鑰。
+        # 給一個 repo 內的開發預設值就等於公開密鑰 —— value 是 DB 外洩時的
+        # 最後一道防線，公開它就等於沒有 HMAC（對照 bpm.webhook.hmac-secret
+        # 的歷史教訓）。dev 要能直接開工，值由 docker-compose.dev.yml 注入；
+        # test 由 application-test.yml；prod 由 API_KEY_HMAC_SECRET 注入。
+        hmac-secret: ${BPM_API_KEY_HMAC_SECRET:}
+        # rotate-key 後舊金鑰的寬限期。0 = 立即失效。
+        grace-period: ${BPM_API_KEY_GRACE_PERIOD:24h}
+      throttle:
+        # 同一（systemId＋來源 IP）在窗口內允許的認證失敗次數，達到即 429。
+        # 10 的選擇：正常整合不該連續失敗；而 10 次遠低於線上字典攻擊需要的
+        # 嘗試量。無上限或關閉會讓失敗猜測免費 —— 那正是 R-25 要修掉的狀態。
+        max-failures: ${BPM_EXTERNAL_AUTH_MAX_FAILURES:10}
+        window: ${BPM_EXTERNAL_AUTH_WINDOW:1m}
+
 management:
   endpoints:
     web:

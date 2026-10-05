@@ -278,4 +278,37 @@ class ExternalSystemPolicyTest {
             assertThat(policy.isWorkerTopicAllowed(withTopics("[\"demo-topic\"]"), null)).isFalse();
         }
     }
+
+    @Nested
+    @DisplayName("解析快取（R-25 的效能項）")
+    class ParseCache {
+
+        @Test
+        @DisplayName("同一 raw 只解析一次；不同 raw 各自快取；null／空白不佔快取")
+        void sameRawParsedOnce() {
+            policy.parse("[\"a\"]");
+            policy.parse("[\"a\"]");
+            assertThat(policy.cachedParseEntries())
+                    .as("同一個設定字串重複解析是純粹的重工 —— 快取必須命中")
+                    .isEqualTo(1);
+
+            policy.parse("[\"b\"]");
+            assertThat(policy.cachedParseEntries()).isEqualTo(2);
+
+            policy.parse(null);
+            policy.parse("  ");
+            assertThat(policy.cachedParseEntries())
+                    .as("null／空白直接回 UNRESTRICTED，不進快取")
+                    .isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("快取不得改變判定結果（含 INVALID 的 fail-closed）")
+        void cacheDoesNotChangeOutcomes() {
+            assertThat(policy.isActionAllowed(withActions("[\"a\"]"), "a")).isTrue();
+            assertThat(policy.isActionAllowed(withActions("[\"a\"]"), "b")).isFalse();
+            assertThat(policy.isActionAllowed(withActions("[not json"), "a")).isFalse();
+            assertThat(policy.isActionAllowed(withActions("[not json"), "a")).isFalse();
+        }
+    }
 }

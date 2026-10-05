@@ -20,6 +20,9 @@
 #   GATEWAY_SHARED_SECRET  啟用閘道時必填。沒有密鑰的話任何能連到應用 port
 #                          的人都能用 X-User-Id 偽造身分。
 #   GATEWAY_TRUSTED_PROXIES 選用的來源位址白名單（逗號分隔）。
+#   API_KEY_HMAC_SECRET    API key v2 雜湊（HMAC-SHA256）的 server secret（R-25）。
+#                          未設定即啟動失敗（ApiKeyHasher）。這個值讓 DB 外洩
+#                          不足以離線驗證或偽造金鑰，絕不可使用範例值上線。
 #   GITHUB_REPO / IMAGE_TAG  映像來源。
 #
 # 啟動：docker compose -f docker-compose.prod.yml up -d
@@ -129,6 +132,9 @@ services:
       SPRING_RABBITMQ_PASSWORD: "${RABBITMQ_PASS}"
       SPRING_DATA_REDIS_PASSWORD: "${REDIS_PASSWORD}"
       BPM_WEBHOOK_HMAC_SECRET: "${WEBHOOK_HMAC_SECRET}"
+      # R-25：API key v2 雜湊的 HMAC secret。空值會讓 ApiKeyHasher
+      # 在啟動時直接失敗 —— 這條路徑沒有「先用舊格式跑」的降級選項。
+      BPM_API_KEY_HMAC_SECRET: "${API_KEY_HMAC_SECRET}"
     volumes:
       # 見 docker-compose.yml 同段註解（security-audit P1-6）。
       # prod 尤其不能少：附件是簽核案件的證據，容器重建就遺失等於紀錄消失。

@@ -102,13 +102,17 @@ public class CallbackAuthFilter extends OncePerRequestFilter {
     private final ExternalSystemRepository repo;
     private final ExternalSystemAccessGuard accessGuard;
     private final ObjectMapper objectMapper;
+    /** lastUsedAt 的寫入節流（R-09 效能債，R-25 收）——與 API key 端共用同一份。 */
+    private final ExternalSystemUsageTracker usageTracker;
 
     public CallbackAuthFilter(ExternalSystemRepository repo,
                               ExternalSystemAccessGuard accessGuard,
-                              ObjectMapper objectMapper) {
+                              ObjectMapper objectMapper,
+                              ExternalSystemUsageTracker usageTracker) {
         this.repo = repo;
         this.accessGuard = accessGuard;
         this.objectMapper = objectMapper;
+        this.usageTracker = usageTracker;
     }
 
     @Override
@@ -184,9 +188,9 @@ public class CallbackAuthFilter extends OncePerRequestFilter {
             return;
         }
 
-        // 與 ExternalApiAuthFilter 相同的 lastUsedAt 維護（R-09 的已知效能債）。
-        sys.setLastUsedAt(Instant.now());
-        repo.save(sys);
+        // 與 ExternalApiAuthFilter 相同的 lastUsedAt 維護（R-09 的已知效能債，
+        // R-25 收：改為分鐘級寫入，見 ExternalSystemUsageTracker）。
+        usageTracker.touch(sys);
 
         request.setAttribute("externalSystem", sys);
         request.setAttribute("externalSystemId", systemId);

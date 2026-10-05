@@ -55,7 +55,10 @@ class CallbackAuthFilterTest {
     void setUp() {
         repo = mock(ExternalSystemRepository.class);
         accessGuard = mock(ExternalSystemAccessGuard.class);
-        filter = new CallbackAuthFilter(repo, accessGuard, new ObjectMapper());
+        // tracker 用真的：它設定的 lastUsedAt 是本測試的斷言對象之一，
+        // 只有 repo 是 mock（寫入不需要真的 DB）。門檻/窗口不是這裡的重點。
+        filter = new CallbackAuthFilter(repo, accessGuard, new ObjectMapper(),
+                new ExternalSystemUsageTracker(repo));
 
         system = new ExternalSystem();
         system.setSystemId(SYSTEM_ID);

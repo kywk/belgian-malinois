@@ -15,6 +15,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -106,15 +107,23 @@ public class ExternalSystemAdminController {
      * create／update 都必須在<b>變更實體之前</b>呼叫，400 才不會有副作用。
      */
     private final ExternalSystemAuthorizationValidator authorizationValidator;
+    /** v2 金鑰雜湊（R-25）。舊格式的驗證在 filter，這裡只負責產生新值。 */
+    private final ApiKeyHasher apiKeyHasher;
+    /** rotate-key 的寬限期設定（R-25）。 */
+    private final ExternalSecurityProperties securityProperties;
 
     public ExternalSystemAdminController(ExternalSystemRepository repo,
                                          AuditEventPublisher auditPublisher,
                                          AuditLogService auditLogService,
-                                         ExternalSystemAuthorizationValidator authorizationValidator) {
+                                         ExternalSystemAuthorizationValidator authorizationValidator,
+                                         ApiKeyHasher apiKeyHasher,
+                                         ExternalSecurityProperties securityProperties) {
         this.repo = repo;
         this.auditPublisher = auditPublisher;
         this.auditLogService = auditLogService;
         this.authorizationValidator = authorizationValidator;
+        this.apiKeyHasher = apiKeyHasher;
+        this.securityProperties = securityProperties;
     }
 
     @PostMapping
@@ -138,7 +147,9 @@ public class ExternalSystemAdminController {
         authorizationValidator.validate(sys);
 
         String plainKey = ApiKeyUtil.generateKey();
-        sys.setApiKey(ApiKeyUtil.hash(plainKey));
+        // R-25：新金鑰一律以 v2（HMAC-SHA256）儲存。舊系統的 legacy 雜湊
+        // 不受影響 —— 驗證端雙讀，第一次通過驗證時由 filter 透明升級。
+        sys.setApiKey(apiKeyHasher.hash(plainKey));
         // 回呼密鑰與 API key 同時產生（工項 #21）：明文只在這個回應出現一次。
         // ⚠️ 存的是密鑰本身而非雜湊 —— HMAC 驗簽需要原始密鑰，見
         // ExternalSystem.callbackSecret 與 V5 migration 的說明。
@@ -248,6 +259,29 @@ public class ExternalSystemAdminController {
         return Map.of("status", "disabled");
     }
 
+    /**
+     * 輪換 API key（R-25 起支援寬限期）。
+     *
+     * <h2>改動前：輪替即中斷</h2>
+     *
+     * <p>舊金鑰在 {@code sys.setApiKey(newHash)} 寫入的瞬間失效，呼叫端
+     * 到換設定之間的請求全部 401 —— 每一次輪替都是計畫性中斷。實務上的
+     * 結果是「不敢輪替」，而不敢輪替的金鑰比有寬限期的輪替更危險。
+     *
+     * <h2>現在：上一把進 previous，新舊並存到到期</h2>
+     *
+     * <p>舊值移入 {@code previousApiKey}，到期時間 = 現在 +
+     * {@code bpm.external.security.api-key.grace-period}（預設 24h）。
+     * filter 在 current 不匹配時才檢查 previous，且只在未到期時放行。
+     * 寬限期設 0（或負）＝維持改動前的立即失效行為，供「金鑰疑似外洩、
+     * 必須立刻切斷」使用。
+     *
+     * <p>⚠️ 一次只有一個 previous：寬限期內再輪替一次，前一把會立刻失效。
+     * 這是刻意的 —— 多槽並存會讓「哪把才是現行」失去單一答案。
+     *
+     * <p>稽核除了新舊雜湊前綴，加記舊金鑰的到期時間：事故調查問
+     * 「當時舊金鑰還能用到什麼時候」時，設定檔的當下值已經不可考。
+     */
     @PostMapping("/{systemId}/rotate-key")
     @Transactional("primaryTransactionManager")
     public Map<String, String> rotateKey(@PathVariable String systemId,
@@ -256,17 +290,40 @@ public class ExternalSystemAdminController {
         ExternalSystem sys = find(systemId);
         String oldHashPrefix = hashPrefix(sys.getApiKey());
         String plainKey = ApiKeyUtil.generateKey();
-        String newHash = ApiKeyUtil.hash(plainKey);
+        String newHash = apiKeyHasher.hash(plainKey);
+
+        Duration grace = securityProperties.getApiKey().getGracePeriod();
+        Instant previousExpiresAt = null;
+        if (grace != null && !grace.isZero() && !grace.isNegative()) {
+            sys.setPreviousApiKey(sys.getApiKey());
+            previousExpiresAt = Instant.now().plus(grace);
+            sys.setPreviousApiKeyExpiresAt(previousExpiresAt);
+        } else {
+            // 立即失效：連更早一次輪替留下、仍在寬限期的 previous 也一併清掉。
+            // 「0 天寬限」的語意必須是「現在起只有這把新的能用」。
+            sys.setPreviousApiKey(null);
+            sys.setPreviousApiKeyExpiresAt(null);
+        }
         sys.setApiKey(newHash);
         repo.save(sys);
 
         // ⚠️ 只記雜湊前綴，不記明文。見類別註解。
-        // 輪換會讓原持有者的金鑰立刻失效，所以這筆紀錄同時是「服務中斷」的線索。
-        audit(operatorId, "rotate-key", systemId, Map.of(
-                "oldKeyHashPrefix", oldHashPrefix,
-                "newKeyHashPrefix", hashPrefix(newHash)));
+        // 輪換會讓原持有者的金鑰在寬限期後失效，所以這筆紀錄同時是
+        // 「服務中斷（可預期時間點）」的線索。
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("oldKeyHashPrefix", oldHashPrefix);
+        detail.put("newKeyHashPrefix", hashPrefix(newHash));
+        detail.put("previousKeyValidUntil",
+                previousExpiresAt != null ? previousExpiresAt.toString() : "(none)");
+        audit(operatorId, "rotate-key", systemId, detail);
 
-        return Map.of("systemId", systemId, "apiKey", plainKey);
+        Map<String, String> result = new HashMap<>();
+        result.put("systemId", systemId);
+        result.put("apiKey", plainKey); // 明文，僅此一次
+        // 空字串＝沒有寬限期。Map.of 不接受 null，而管理頁需要一個穩定形狀。
+        result.put("previousKeyValidUntil",
+                previousExpiresAt != null ? previousExpiresAt.toString() : "");
+        return result;
     }
 
     /**
@@ -312,7 +369,7 @@ public class ExternalSystemAdminController {
      * 「有人改了這個系統的授權」，屬於系統的<b>設定史</b>而不是它的<b>使用史</b>
      * —— 事故調查時兩者回答的是不同問題。
      *
-     * <p>被拒絕的呼叫（{@code ExternalApiAuthFilter} 的 401／403）也在這個交集裡：
+     * <p>被拒絕的呼叫（{@code ExternalApiAuthFilter} 的 401／403／429）也在這個交集裡：
      * 它們以請求標頭的 {@code X-System-Id} 歸戶，所以「金鑰輪換後舊金鑰還在打」
      * 這類訊號看得出來。代價是未認證的呼叫端也能用別人的 systemId 產生紀錄
      * —— 這是既有稽核寫入路徑的性質，查詢結果不宜當成「對方確實持有金鑰」的證據。
@@ -400,6 +457,10 @@ public class ExternalSystemAdminController {
         m.setSystemId(s.getSystemId());
         m.setSystemName(s.getSystemName());
         m.setApiKey("***");
+        // R-25：previous 金鑰與 apiKey 同一條規則 —— 絕不可回傳可用的值。
+        // 到期時間則保留：管理頁要靠它顯示「舊金鑰還能用多久」。
+        m.setPreviousApiKey(s.getPreviousApiKey() == null ? null : "***");
+        m.setPreviousApiKeyExpiresAt(s.getPreviousApiKeyExpiresAt());
         // callbackSecret 是「有／沒有」的狀態，不是值：null 保持 null（管理頁顯示
         // 尚未設定），有值才遮蔽成 ***。⚠️ 同 apiKey，絕不可在 entity 上遮蔽。
         m.setCallbackSecret(s.getCallbackSecret() == null ? null : "***");
@@ -460,6 +521,10 @@ public class ExternalSystemAdminController {
      *
      * <p>⚠️ 回呼密鑰以可還原形式儲存（HMAC 需要），所以<b>不能</b>像 apiKey
      * 那樣直接截前 8 碼 —— 那會把密鑰的一部分寫進可查詢的稽核庫。先雜湊再截。
+     *
+     * <p>這裡刻意用 {@link ApiKeyUtil#hash}（SHA-256）而不是 v2 HMAC：
+     * 它只是一個「足以對帳、不足以使用」的單向指紋，不需要 server secret；
+     * 換成 HMAC 也買不到額外保護（指紋本來就不可用於驗簽）。
      */
     private static String secretHashPrefix(String secret) {
         return secret == null ? "(none)" : hashPrefix(ApiKeyUtil.hash(secret));

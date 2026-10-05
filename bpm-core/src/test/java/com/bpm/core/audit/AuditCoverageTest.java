@@ -106,6 +106,12 @@ class AuditCoverageTest extends IntegrationTestBase {
                                 + "\"allowedActions\":\"[\\\"start_process\\\"]\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         String plainKey = created.replaceAll(".*\"apiKey\":\"([^\"]*)\".*", "$1");
+        // R-25：create 現在存的是 v2（HMAC）格式。這個測試要驗的是
+        // 「update 的回應遮蔽不得寫回 DB」，所以比對「PUT 前後的值相同」，
+        // 而不是綁定某一種雜湊演算法（那會讓每次格式演進都誤紅）。
+        String storedHashBeforeUpdate = externalSystemRepo.findBySystemId(sid)
+                .orElseThrow().getApiKey();
+        assertThat(storedHashBeforeUpdate).startsWith("v2:");
         truncateAuditLog();
 
         mockMvc.perform(put("/api/admin/external-systems/" + sid)
@@ -121,7 +127,7 @@ class AuditCoverageTest extends IntegrationTestBase {
 
         assertThat(externalSystemRepo.findBySystemId(sid).orElseThrow().getApiKey())
                 .as("回應遮蔽 apiKey 不得寫回 DB —— 否則外部系統立即全部 401")
-                .isEqualTo(com.bpm.core.external.ApiKeyUtil.hash(plainKey));
+                .isEqualTo(storedHashBeforeUpdate);
 
         var details = awaitAuditDetails(OperationType.CONFIG_CHANGE, 1);
         assertThat(String.join("\n", details))

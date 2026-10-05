@@ -14,6 +14,10 @@ services:
   bpm-core:
     environment:
       SPRING_PROFILES_ACTIVE: docker
+      # R-25：v2 API key 雜湊的 HMAC secret。dev 專用、刻意放在 dev overlay ——
+      # base 檔（docker-compose.yml）不留值，單獨跑 base 會啟動失敗，
+      # 不會有「以為在 dev、其實用到公開預設密鑰」的靜默降級。
+      BPM_API_KEY_HMAC_SECRET: "bpm-dev-api-key-hmac-secret-do-not-use-in-production"
       SPRING_MAIL_HOST: mailhog
       SPRING_MAIL_PORT: 1025
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: "false"
