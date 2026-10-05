@@ -30,7 +30,9 @@ class ExternalApiAuthFilterActionTest {
 
     private final ExternalApiAuthFilter filter = new ExternalApiAuthFilter(
             mock(ExternalSystemRepository.class), mock(AuditEventPublisher.class),
-            new ObjectMapper(), mock(ExternalSystemAccessGuard.class));
+            new ObjectMapper(), mock(ExternalSystemAccessGuard.class),
+            mock(ApiKeyHasher.class), mock(ExternalAuthThrottle.class),
+            mock(ExternalSystemUsageTracker.class));
 
     private static MockHttpServletRequest request(String method, String uri) {
         return new MockHttpServletRequest(method, uri);

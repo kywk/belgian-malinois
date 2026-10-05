@@ -23,6 +23,7 @@ import java.net.http.HttpResponse;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -486,6 +487,120 @@ class ExternalApiLifecycleTest extends IntegrationTestBase {
                 .contains("\"status\":\"completed\"")
                 .contains("\"result\":\"rejected\"")
                 .doesNotContain("\"result\":\"approved\"");
+    }
+
+    // ── ⑨ R-24：businessKey 查詢的擁有權來源 ────────────────────────
+
+    @Test
+    @DisplayName("R-24：initiator 不再是可見性來源 —— 偽造 system:別的系統 的列只屬於 owner")
+    void businessKeyQueryDoesNotGrantVisibilityByInitiator() throws Exception {
+        CreatedSystem owner = createSystem(uniqueSystemId("r24-own"),
+                List.of("start_process", "query_status"), List.of("leave-approval"), false);
+        CreatedSystem victim = createSystem(uniqueSystemId("r24-victim"),
+                List.of("start_process", "query_status"), List.of("leave-approval"), false);
+        String businessKey = "r24-forged-" + UUID.randomUUID();
+
+        // 模擬 R-20 之前留下的資料：initiator 被偽造成 victim，而擁有權標記
+        // 屬 owner（backfill 後應有的樣子）。讀取端不得因為 initiator 把它給 victim。
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("initiator", "system:" + victim.systemId());
+        vars.put("_externalSystemId", owner.systemId());
+        // 直接啟動繞過外部 API，但 managerReview 的受理人運算式仍要能求值 ——
+        // 與外部路徑一樣帶 firstTaskAssignee，避免查 fail-closed 的組織 mock。
+        vars.put("firstTaskAssignee", MANAGER);
+        vars.put("leaveType", "annual");
+        vars.put("days", 1);
+        String pid = runtimeService.startProcessInstanceByKey("leave-approval", businessKey, vars)
+                .getId();
+
+        HttpResponse<String> seenByVictim = send("GET",
+                "/api/external/process-instances?businessKey=" + businessKey,
+                victim.systemId(), victim.apiKey(), null);
+        assertThat(seenByVictim.statusCode()).isEqualTo(200);
+        assertThat(seenByVictim.body())
+                .as("initiator 不得授予可見性 —— 否則 R-20 之前偽造的列會出現在受害者清單")
+                .doesNotContain(pid);
+
+        HttpResponse<String> seenByOwner = send("GET",
+                "/api/external/process-instances?businessKey=" + businessKey,
+                owner.systemId(), owner.apiKey(), null);
+        assertThat(seenByOwner.statusCode()).isEqualTo(200);
+        assertThat(seenByOwner.body()).contains(pid);
+    }
+
+    @Test
+    @DisplayName("R-24：variables 夾帶 initiator=system:別的系統 會被 server 覆寫，受害者清單看不到")
+    void smuggledInitiatorInVariablesCannotLeakIntoVictimList() throws Exception {
+        CreatedSystem attacker = createSystem(uniqueSystemId("r24-atk"),
+                List.of("start_process", "query_status"), List.of("leave-approval"), false);
+        CreatedSystem victim = createSystem(uniqueSystemId("r24-victim2"),
+                List.of("start_process", "query_status"), List.of("leave-approval"), false);
+        String businessKey = "r24-smuggle-" + UUID.randomUUID();
+
+        // R-20 之後 body.initiator 直接 400，但 variables 是自由 map ——
+        // server 必須在啟動前覆寫同名變數，且 R-24 的可見性不得再信任它。
+        String body = "{\"processDefinitionKey\":\"leave-approval\","
+                + "\"businessKey\":\"" + businessKey + "\","
+                + "\"firstTaskAssignee\":\"" + MANAGER + "\","
+                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1,"
+                + "\"initiator\":\"system:" + victim.systemId() + "\"}}";
+        HttpResponse<String> started = send("POST", "/api/external/process-instances",
+                attacker.systemId(), attacker.apiKey(), body);
+        assertThat(started.statusCode()).as("body=%s", started.body()).isEqualTo(200);
+        String pid = pidOf(started);
+        assertThat(runtimeService.getVariable(pid, "initiator"))
+                .as("server 覆寫：initiator 永遠是呼叫系統自己")
+                .isEqualTo("system:" + attacker.systemId());
+        assertThat(runtimeService.getVariable(pid, "_externalSystemId"))
+                .isEqualTo(attacker.systemId());
+
+        HttpResponse<String> seenByVictim = send("GET",
+                "/api/external/process-instances?businessKey=" + businessKey,
+                victim.systemId(), victim.apiKey(), null);
+        assertThat(seenByVictim.body())
+                .as("受害者不得因為別人夾帶的 initiator 而看到這張單")
+                .doesNotContain(pid);
+
+        HttpResponse<String> seenByAttacker = send("GET",
+                "/api/external/process-instances?businessKey=" + businessKey,
+                attacker.systemId(), attacker.apiKey(), null);
+        assertThat(seenByAttacker.body())
+                .as("自己的單仍然查得到 —— 拒絕的是偽造的可見性，不是正常查詢")
+                .contains(pid);
+    }
+
+    @Test
+    @DisplayName("R-24：沒有 _externalSystemId 的舊實例在 backfill 前對任何外部系統都查不到")
+    void legacyInstanceWithoutOwnerMarkerIsNotVisible() throws Exception {
+        CreatedSystem erp = createSystem(uniqueSystemId("r24-legacy"),
+                List.of("start_process", "query_status"), List.of("leave-approval"), false);
+        String businessKey = "r24-legacy-" + UUID.randomUUID();
+
+        // 改動前外部系統可在 body 指定任意 initiator；這種列的擁有者無從證明。
+        // 列表以擁有權標記過濾 → backfill 前查不到（決策見 R-24 報告）。
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("initiator", APPLICANT);
+        // 同上：managerReview 需要一個可求值的受理人。
+        vars.put("firstTaskAssignee", MANAGER);
+        vars.put("leaveType", "annual");
+        vars.put("days", 1);
+        String pid = runtimeService.startProcessInstanceByKey("leave-approval", businessKey, vars)
+                .getId();
+
+        HttpResponse<String> listed = send("GET",
+                "/api/external/process-instances?businessKey=" + businessKey,
+                erp.systemId(), erp.apiKey(), null);
+        assertThat(listed.statusCode()).isEqualTo(200);
+        assertThat(listed.body())
+                .as("initiator 不給任何系統可見性；backfill 由 PM／維運決定")
+                .doesNotContain(pid);
+
+        // 連 /status 也不通：initiator=user001 不是任何 system:<id> 身分。
+        // 這證明「查不到」不是授權設定的副作用，而是這列確實沒有外部擁有者。
+        HttpResponse<String> status = send("GET",
+                "/api/external/process-instances/" + pid + "/status",
+                erp.systemId(), erp.apiKey(), null);
+        assertThat(status.statusCode()).isEqualTo(403);
     }
 
     // ── 對照組：admin 建立的系統被停用後，金鑰立即失效 ──────────────

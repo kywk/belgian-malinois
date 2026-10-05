@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 外部系統的授權判定。
@@ -62,6 +63,23 @@ public class ExternalSystemPolicy {
 
     private final ObjectMapper objectMapper;
 
+    /**
+     * 解析結果的快取（R-25 順手收的效能債）。
+     *
+     * <p>改動前每個請求都對同一組設定值做 1～3 次 Jackson 解析：
+     * 一次請求要過 allowedActions、allowedProcessKeys、IP 白名單等多道檢查，
+     * 而這些字串在管理員改設定之前<b>完全沒有變化</b>。parse 是純函式
+     * （只依賴 raw 字串），所以按 raw 快取不需要任何失效邏輯 ——
+     * 管理員改值時 key 自然不同，舊條目無害。
+     *
+     * <p>鍵的數量＝admin 歷史上寫過的不同設定字串數，量級極小；
+     * 仍然設一個上限自我保護（見 {@link #MAX_CACHE_ENTRIES}）。
+     */
+    private final ConcurrentHashMap<String, Parsed> parseCache = new ConcurrentHashMap<>();
+
+    /** 快取條目上限；超過就整體清空（純函式快取，清空永遠安全）。 */
+    static final int MAX_CACHE_ENTRIES = 256;
+
     public ExternalSystemPolicy(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
@@ -75,6 +93,15 @@ public class ExternalSystemPolicy {
      */
     Parsed parse(String raw) {
         if (raw == null || raw.isBlank()) return UNRESTRICTED;
+        Parsed cached = parseCache.get(raw);
+        if (cached != null) return cached;
+        if (parseCache.size() >= MAX_CACHE_ENTRIES) parseCache.clear();
+        // computeIfAbsent 讓同一 raw 的併發解析也只留一份；
+        // 極端競爭下可能多算一次，結果相同，無副作用。
+        return parseCache.computeIfAbsent(raw, this::parseUncached);
+    }
+
+    private Parsed parseUncached(String raw) {
         String trimmed = raw.trim();
 
         if (trimmed.startsWith("[")) {
@@ -87,6 +114,11 @@ public class ExternalSystemPolicy {
         }
 
         return toParsed(List.of(trimmed.split(",")));
+    }
+
+    /** 快取目前有幾筆（測試用；快取命中與否不影響對外行為）。 */
+    int cachedParseEntries() {
+        return parseCache.size();
     }
 
     private Parsed toParsed(List<String> values) {

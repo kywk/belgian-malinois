@@ -43,10 +43,43 @@ public class ExternalSystem {
      * 還不至於被利用。但「請求可以指定金鑰雜湊」本身就是個陷阱 ——
      * 只要哪天有人加一條會複製它的路徑，就變成「自帶雜湊即可通過驗證」。
      * 序列化（回應）仍保留，list/get 會把它改成 *** 再回傳。
+     *
+     * <p>格式有兩代（R-25，見 {@link com.bpm.core.external.ApiKeyUtil}）：
+     * {@code v2:} 前綴＝HMAC-SHA256(server secret, key)，無前綴＝舊版單輪
+     * SHA-256。驗證端雙讀，舊值在成功驗證後透明升級。長度 128 是為了
+     * 同時容納兩代（v2 為 3＋64 字元，見 V9 migration）。
      */
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)
-    @Column(nullable = false, length = 64)
-    private String apiKey; // SHA-256 hash
+    @Column(nullable = false, length = 128)
+    private String apiKey; // v2:<HMAC hex> 或舊版 SHA-256 hex
+
+    /**
+     * 輪替後仍在寬限期內的「上一把」金鑰（R-25）。
+     *
+     * <p>沒有它，{@code rotate-key} 一寫入新金鑰就讓呼叫端立即斷線 ——
+     * 每次輪替都是計畫性中斷，實務上導致「不敢輪替」。有它之後新舊並存到
+     * {@link #previousApiKeyExpiresAt}，呼叫端有時間換設定。
+     *
+     * <p>⚠️ 只保留一把：寬限期內連續輪替兩次，第一把會立刻失效
+     * （被第二次輪替覆蓋）。這是刻意的取捨 —— 多槽並存會讓「哪把才是現行」
+     * 變得不明確，而 `previousApiKeyExpiresAt` 無法再回答任何問題。
+     *
+     * <p>⚠️ READ_ONLY：與 {@link #apiKey} 同一個理由，雜湊值絕不可由請求指定。
+     * 回應不揭露內容（遮蔽或 null），只揭露到期時間供運維判斷。
+     */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Column(length = 128)
+    private String previousApiKey; // 寬限期內的上一把；null = 沒有
+
+    /**
+     * {@link #previousApiKey} 的有效期限（R-25）。null 或已過期 = 舊金鑰不再受理。
+     *
+     * <p>READ_ONLY：由 server 決定，請求不可指定。管理頁需要它來回答
+     * 「舊金鑰還可以用到什麼時候」，所以回應保留。
+     */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Column
+    private Instant previousApiKeyExpiresAt;
 
     /**
      * 回呼（{@code POST /api/callback/{type}}）用的密鑰（工項 #21）。
@@ -166,6 +199,10 @@ public class ExternalSystem {
     public void setSystemName(String systemName) { this.systemName = systemName; }
     public String getApiKey() { return apiKey; }
     public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+    public String getPreviousApiKey() { return previousApiKey; }
+    public void setPreviousApiKey(String previousApiKey) { this.previousApiKey = previousApiKey; }
+    public Instant getPreviousApiKeyExpiresAt() { return previousApiKeyExpiresAt; }
+    public void setPreviousApiKeyExpiresAt(Instant previousApiKeyExpiresAt) { this.previousApiKeyExpiresAt = previousApiKeyExpiresAt; }
     public String getCallbackSecret() { return callbackSecret; }
     public void setCallbackSecret(String callbackSecret) { this.callbackSecret = callbackSecret; }
     public String getContactEmail() { return contactEmail; }

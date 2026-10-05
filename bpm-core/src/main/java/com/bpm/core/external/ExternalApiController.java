@@ -429,14 +429,56 @@ public class ExternalApiController {
         return buildStatusResponse(processInstanceId, systemId);
     }
 
+    /**
+     * 以 businessKey 查詢流程實例（含執行中與已結案）。
+     *
+     * <h2>R-24：篩選改用擁有權標記，並與授權分離</h2>
+     *
+     * <p>改動前這裡是
+     * {@code variableValueEquals("initiator", "system:" + systemId)}：
+     * <ul>
+     *   <li><b>漏查</b>：以自訂 initiator 啟動的舊實例查不到，而同一資源的
+     *       {@code /status} 走的是 {@code verifyOwnership} 的向後相容讀法
+     *       —— 同一資源兩個端點兩種答案。</li>
+     *   <li><b>篩選兼任授權</b>：這個查詢條件同時是唯一的隔離機制，
+     *       拿掉它就是資料洩漏；改成 {@code _externalSystemId} 之後，
+     *       擁有權檢查仍由下面逐筆的 {@link #verifyOwnership} 把關
+     *       （授權與篩選分離，各自獨立）。</li>
+     * </ul>
+     *
+     * <h2>⚠️ 舊實例的語意（backfill 前）</h2>
+     *
+     * <p>R-20 之後 {@code _externalSystemId} 由 server 在啟動時寫入；
+     * 在那之前啟動的實例沒有這個標記，因此<b>在 backfill 完成前不會出現在
+     * 這個列表</b>。{@code /status} 的向後相容讀法（initiator 相符）仍在，
+     * 所以那段期間兩個端點對舊實例可能不一致 —— 這是刻意的過渡狀態：
+     * backfill 由 PM／維運決定（見 remediation backlog R-24），
+     * 應用層不自動推測「哪個系統才是舊實例的擁有者」。
+     *
+     * <p>反過來，{@code initiator} <b>不再能讓別人的案件出現在你的列表</b>：
+     * 惡意系統在 R-20 之前可以偽造 {@code initiator: "system:victim"}，
+     * 寫入端現在直接 400；讀取端也不再以它判定可見性，即使舊資料裡存在
+     * 這樣的列，victim 的清單也不會因此看到它。
+     *
+     * <h2>為什麼逐筆再驗一次擁有權</h2>
+     *
+     * <p>篩選條件與 {@code verifyOwnership} 對同一批列都要求
+     * {@code _externalSystemId} 相符，看似重複。但兩者防的是不同的失誤：
+     * 篩選是查詢效率與範圍，驗證是授權規則。若哪天有人改錯（或拿掉）篩選，
+     * 授權仍在；若驗證被改壞，篩選仍擋住大部分情境。這兩層各自獨立，
+     * 正是 R-24 對「篩選剛好也起到授權作用」的修正。
+     * businessKey 查詢的結果量本來就小，逐筆多一次變數查詢是可接受的代價。
+     */
     @GetMapping("/process-instances")
     public List<Map<String, Object>> queryByBusinessKey(@RequestParam String businessKey,
                                                          @RequestAttribute("externalSystemId") String systemId) {
         // Search in history (covers both running and completed)
-        return historyService.createHistoricProcessInstanceQuery()
+        List<HistoricProcessInstance> hits = historyService.createHistoricProcessInstanceQuery()
                 .processInstanceBusinessKey(businessKey)
-                .variableValueEquals("initiator", ExternalActorIdentity.of(systemId))
-                .orderByProcessInstanceStartTime().desc().list().stream()
+                .variableValueEquals(OWNER_VAR, systemId)
+                .orderByProcessInstanceStartTime().desc().list();
+        hits.forEach(hp -> verifyOwnership(hp.getId(), systemId));
+        return hits.stream()
                 .map(hp -> buildStatusFromHistory(hp))
                 .toList();
     }
