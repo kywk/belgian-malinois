@@ -286,7 +286,13 @@
 
 修法：`initiator` 一律由 server 寫成 `system:<systemId>`；body 的欄位改名 `onBehalfOf` 並以 `orgService` 驗證帳號存在；`firstTaskAssignee` / `candidateGroups` 同樣驗證；`BpmnLintService` rule h 升為 `error`。
 
-### R-21 授權設定的驗證在讀取端而非寫入端（1 人日）
+### ✅ R-21 授權設定的驗證在寫入端（已完成 2026-10-05；原 1 人日）
+
+> **✅ 已完成（2026-10-05，`d3a8584`／merge `04f70c5`，round22）。** 新增
+> `ExternalSystemAuthorizationValidator`：create／update 在任何 mutation 之前驗證四個授權欄位
+> （JSON 格式；`allowedProcessKeys` 必填且必須是已部署流程 key）→ 400 零副作用；前端改多選＋required。
+> ⚠️ 契約變更：POST／PUT 必須帶 `allowedProcessKeys`（partial PUT 400）；既有資料列讀取不受影響，
+> 但下一次編輯必須重填。部署前 DB 盤點仍必辦（見本節與 round22 §5）。
 
 `allowedProcessKeys` 空值 = 不限制，而 admin UI 該欄位是自由文字、無必填驗證、`resetForm()` 預設空字串 → **照 UI 正常流程建立的外部系統預設可啟動任何流程**，R-09 的檢查在預設路徑上是 no-op。
 
@@ -298,7 +304,12 @@
 
 ⚠️ **上線前必辦**：`bpm_external_system` 表沒有任何 seed SQL，資料只能來自 admin UI，因此正式/SIT 環境的實際內容無法從 repo 判定 —— **部署前必須撈一次 DB 盤點**，否則 R-09 的 fail-closed 可能造成服務中斷。
 
-### R-22 IP 白名單在容器部署下失效（0.5 人日）
+### ✅ R-22 IP 白名單在容器部署下失效（已完成 2026-10-05；原 0.5 人日）
+
+> **✅ 已完成（2026-10-05，同 B1 merge）。** `server.forward-headers-strategy: native`
+> （Tomcat `RemoteIpValve`；只有 TCP peer 位於私有／loopback 網段才採用 XFF；prod bpm-core 無公開
+> port）。白名單判定與稽核 ip 皆為真實 client IP；`CallbackAuthFilter`／`GatewayAuthenticationFilter`
+> 同樣受惠。⚠️ 既有 `ipWhitelist` 若填 nginx 容器 IP，上線後由「全放行」變「全擋」，部署前必須盤點。
 
 `ExternalApiAuthFilter` 用 `request.getRemoteAddr()`，在 nginx 後方取到的是 **nginx 容器位址**。`infra/nginx/nginx.conf` 有設 `X-Real-IP` / `X-Forwarded-For`，但 `application.yml` 沒有 `server.forward-headers-strategy`。兩種下場都不好：填真實 IP → 全擋；填 nginx IP → **對所有系統一律放行**。稽核記錄的 `ip` 同樣是 nginx IP，鑑識價值為零。
 
@@ -318,7 +329,13 @@ R-09 修掉了白名單的兩個實作 bug（重複值 500、元素未 trim）�
 
 `_externalSystemId` 比 `initiator` 好，但要真正可信需寫在外部系統無法觸及的地方（獨立資料表），或在所有 variable 寫入路徑把 `_` 前綴列為保留字拒絕。
 
-### R-24 `queryByBusinessKey` 與新擁有權模型不一致（0.5 人日）
+### ✅ R-24 `queryByBusinessKey` 與新擁有權模型一致（已完成 2026-10-05；原 0.5 人日）
+
+> **✅ 已完成（2026-10-05，`fa249d2`／merge `64dff59`，round22）。** 列表改用
+> `_externalSystemId` 篩選＋逐筆 `verifyOwnership`（授權與篩選分離）。**backfill 前**舊實例
+> （自訂 initiator／R-20 前寫入）列表查不到，`/status` 仍有相容讀法 → 兩端點暫不一致；
+> backfill 由 PM／維運執行（建議以稽核庫 `EXTERNAL_API_CALL` 的系統歸屬回填）。惡意
+> `system:victim` 注入已有測試釘住。
 
 `ExternalApiController.java` 的 `GET /api/external/process-instances` 仍以 `variableValueEquals("initiator", "system:" + systemId)` 篩選，未改用 `_externalSystemId`：
 
@@ -331,7 +348,13 @@ R-09 修掉了白名單的兩個實作 bug（重複值 500、元素未 trim）�
 > - **「以自訂 initiator 啟動的舊實例查不到」仍在**（改動前的舊資料）。
 > - **「可注入他人列表」已不成立**：body 的 `initiator` 直接 400，且 `variables` 裡的同名值會被 server 在啟動前覆寫（R-20），外部系統無法再讓案件掛上 `system:victim`。
 
-### R-25 API Key 機制強化（1 人日）
+### ✅ R-25 API Key 機制強化（已完成 2026-10-05；原 1 人日）
+
+> **✅ 已完成（2026-10-05，同 B2 merge）。** 落庫 `v2:`＋HMAC-SHA256(server secret)；舊格式雙讀＋
+> 首次驗證成功透明升級；rotate 寬限期（預設 24h）；失敗節流 10 次／分鐘 → 429；migration V9
+> （`api_key` 加寬＋previous 欄位；已對既有 dev DB 實測套用）。連帶效能項（`lastUsedAt` 分鐘級、
+> `ExternalSystemPolicy.parse` 快取）一併完成。⚠️ `BPM_API_KEY_HMAC_SECRET` 未設即啟動失敗；
+> 節流為記憶體單實例；callback 路徑無節流；前端未顯示寬限期（API 欄位已備）。
 
 `external/ApiKeyUtil.java` 為無 salt 單輪 SHA-256。客觀評估：`UUID.randomUUID()` 走 `SecureRandom`（122 bits 熵），離線暴力破解不構成實際風險。真正的問題是：
 
@@ -355,9 +378,9 @@ R-09 修掉了白名單的兩個實作 bug（重複值 500、元素未 trim）�
 | R-16 | 補根目錄 `README.md`（現在只有 `docs/README-testing.md` 與 `cicd/README.md`） | 0.5 |
 | R-17 | ✅ **已完成（＝功能 backlog #65，Wave F）**：springdoc 3.1.1、prod 關閉文件 UI | ~~2~~ |
 
-> **2026-10-04 複驗**：R-14（heap 由 #50 完成、compose `version` 已移除）與 R-17（#65）已完成。
-> 剩餘開放項：**R-04 步驟 2–5、R-07、R-08、R-15、R-16、R-21、R-22、R-24、R-25（約 8 人日）**；
-> 派工 prompt 見 `docs/handoff/2026-10-04-next-agent-prompt.md` §B～E。
+> **2026-10-05 更新**：R-21／R-22／R-24／R-25 已完成（round22）。剩餘開放項：
+> **R-04 步驟 2–5、R-07、R-08、R-15、R-16（約 5 人日）**；
+> 派工 prompt 見 `docs/handoff/2026-10-04-next-agent-prompt.md` §C～E（C 平台決策＝GitLab CI）。
 
 ---
 

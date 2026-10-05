@@ -19,9 +19,9 @@
 | [`2026-09-28-security-audit.md`](2026-09-28-security-audit.md) | 全系統安全與正確性審查（4 個 reviewer，40+ 項） | P0～P2 已修；文末「其他功能缺失」殘餘待估 | 待估 |
 | [`2026-09-28-springboot4-upgrade.md`](2026-09-28-springboot4-upgrade.md) | Spring Boot 3.5 → 4.1.1 + Flowable 6.8.1 → 8.0.x 分階段升級 | ✅ **Stage 0–6 全部完成（2026-10-03，#70 結案）** | 0 |
 | [`2026-09-28-adr-001-form-service-consolidation.md`](2026-09-28-adr-001-form-service-consolidation.md) | form-service 併入 bpm-core 的決策紀錄 | ✅ 已完成（＝升級 Stage 3，2026-09-28） | 0 |
-| [`2026-09-28-remediation-backlog.md`](2026-09-28-remediation-backlog.md) | 工程品質與安全性改進項（R-01 ~ R-25） | R-01／02／03／05／06／09／10／11／12／13／14／17／18／19／20／23 ✅；R-04 步驟 1 ✅（剩 0.5）；**R-07／08／15／16／21／22／24／25 待開工** | **~8** |
+| [`2026-09-28-remediation-backlog.md`](2026-09-28-remediation-backlog.md) | 工程品質與安全性改進項（R-01 ~ R-25） | R-01／02／03／05／06／09／10／11／12／13／14／17／18／19／20／23 ✅；R-04 步驟 1 ✅（剩 0.5）；**R-21／22／24／25 ✅（2026-10-05）**；R-07／08／15／16 待開工 | **~5** |
 
-剩餘約 **8 人日**（全部在 remediation；升級已結案）。功能 backlog `docs/backend-development-backlog.md`
+剩餘約 **5 人日**（全部在 remediation；升級已結案）。功能 backlog `docs/backend-development-backlog.md`
 已於 **2026-10-04 結清：97 項 ✅ 97／🟡 0／⬜ 0**。security-audit 文末殘餘待估。
 **交接入口：`docs/handoff/README.md`（索引＋未完成總表）＋ `docs/handoff/2026-10-04-next-agent-prompt.md`（派工 prompt）。**
 
@@ -43,8 +43,14 @@
 - **R-09／R-10／R-20**：外部 API 精確比對、Redis 改用 `SCAN`、`initiator` 由 server 決定
 - **R-11／R-12／R-13**：根目錄重複 backlog 刪除、`bpm-frontend/dist/` 移出版控、README-testing 更正
 
-**下一個開工點：remediation 開放項（R-07／08／15／16／21／22／24／25，~8 人日）與部署前檢查清單。
-功能 backlog 已於 2026-10-04 全數結清（97/97）；派工 prompt 見 `docs/handoff/2026-10-04-next-agent-prompt.md`。**
+**2026-10-05（remediation B 批次，3 人日）**
+
+- **R-21／R-22**：外部系統授權設定寫入端驗證（400 零副作用、UI 多選）＋反向代理後真實 client IP
+- **R-24／R-25**：擁有權查詢與授權分離（`_externalSystemId`）＋API key v2（HMAC、寬限期、失敗節流）
+
+**下一個開工點：remediation 開放項（R-04 步驟 2–5／R-07／R-08／R-15／R-16，~5 人日）與部署前檢查清單
+（round22 §5）。CI/CD 平台決策已定：保留 GitLab CI。功能 backlog 已於 2026-10-04 全數結清（97/97）；
+派工 prompt 見 `docs/handoff/2026-10-04-next-agent-prompt.md`（B 批次已勾消，C～E 仍有效）。**
 
 ## 三個必須知道的結論
 

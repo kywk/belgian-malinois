@@ -1,8 +1,8 @@
 # docs/handoff — 交接文件索引
 
-**最後更新**：2026-10-04（backlog 97 項全清；本日完成 Wave A～L）
-**最新交接**：`2026-10-04-round21-handoff.md`
-**下一批工作 prompt**：`2026-10-04-next-agent-prompt.md`（未完成事項的可直接派工版本）
+**最後更新**：2026-10-05（remediation B 批次：R-21／R-22／R-24／R-25 完成）
+**最新交接**：`2026-10-05-round22-handoff.md`
+**下一批工作 prompt**：`2026-10-04-next-agent-prompt.md`（B 批次已勾消；C 平台決策＝GitLab CI）
 
 ---
 
@@ -12,14 +12,14 @@
 |---|---|
 | 後端 | Spring Boot **4.1.1** + Flowable **8.0.0** + Jackson **3** + JGit **7.8**（#70 全數完成，EOL 安全債清償） |
 | 前端 | Vue 3.4 + Vite 5 + Element Plus |
-| 測試 | 後端 **1617**（`mvn clean verify`）、前端 **206**（Vitest）、`acceptance-test.sh` **PASS 7 / FAIL 0** |
-| `main` | `a3cf48e`（本機；`nsl` 主機不可達，約 **120 顆 commit 待推**） |
-| dev DB | core schema **v8**、Flowable schema **8.0.0.0**（不可逆）；audit 鏈 broken=19／unverifiable=123 為歷史債 |
+| 測試 | 後端 **1656**（`mvn clean verify`）、前端 **211**（Vitest）、`acceptance-test.sh` **PASS 7 / FAIL 0** |
+| `main` | `64dff59`（本輪 2 merge；`nsl` 主機不可達，約 **140 顆** commit 待推） |
+| dev DB | core schema **v9**、Flowable schema **8.0.0.0**（不可逆）；audit 鏈 broken=19／unverifiable=123 為歷史債 |
 | dev 容器 | compose project `greyhound`；跑最新 build、預設設定（mock 組織/權限、Git 版控關閉） |
 | 功能 backlog | **97 項：✅ 97、🟡 0、⬜ 0** |
-| remediation backlog | 開放 **~8 人日**（見 §3.B） |
+| remediation backlog | 開放 **~5 人日**（見 §3.B；R-21／R-22／R-24／R-25 已於 2026-10-05 完成） |
 
-**閱讀順序**：① 最新 round（21）→ ② 本 README 的「未完成總表」→ ③ `2026-10-04-next-agent-prompt.md` →
+**閱讀順序**：① 最新 round（22）→ ② 本 README 的「未完成總表」→ ③ `2026-10-04-next-agent-prompt.md` →
 ④ 需要時回讀對應輪次 → ⑤ 環境陷阱總表（`round4`＋`round6/13/14` 增補，動手前必讀）。
 
 ---
@@ -51,12 +51,16 @@
 | `2026-10-04-round19-handoff.md` | #41（異常偵測）／#53（環境變數替換） |
 | `2026-10-04-round20-handoff.md` | #63（+198 單元）／#64（端到端＋flake 修復＋`PROCESS_COMPLETE result` 真 bug 修復） |
 | `2026-10-04-round21-handoff.md` | **#8／#9 外圍 client 正式化——97 項全清**；含部署前檢查清單 |
-| `2026-10-04-next-agent-prompt.md` | **未完成事項的派工 prompt（本檔的下一步）** |
+| `2026-10-05-round22-handoff.md` | **remediation B 批次：R-21／R-22／R-24／R-25**；含部署清單增補 |
+| `2026-10-04-next-agent-prompt.md` | 未完成事項的派工 prompt（B 批次已完成；C／D／E 仍有效） |
 
 ---
 
-## 2. 已完成大事記（2026-10-03～04）
+## 2. 已完成大事記（2026-10-03～05）
 
+- **remediation B 批次（2026-10-05）**：R-21（授權設定寫入端驗證＋UI 多選）、R-22（反向代理後真實
+  client IP）、R-24（擁有權查詢與篩選分離）、R-25（API key v2／寬限期／失敗節流）；後端 1656、前端
+  211、acceptance 7/0（round22）。
 - **#70 升級結案**：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3（EOL 安全債清償）；Security 7 鏈序、`FACTOR_BEARER` 兩條安全回歸修復。
 - **前端瀏覽器走查**（升級驗收最後一項）：4 身分 × 10 路線；抓到並修復 `#56` 的 `DynamicForm` v-else-if 鏈斷裂回歸。
 - **功能補齊**：#28（webhook payloadTemplate）、#32（Teams 通知）、#35（EL 逐方法白名單）、#60（formData 原子啟動）、#61（BPMN Git 版控）、#41（異常偵測）、#53（`${ENV_*}` 替換）、#63（+198 單元測試）、#64（端到端＋真 bug 修復）、#8／#9（外圍 client 正式化）。
@@ -72,21 +76,19 @@
 |---|---|
 | **push `nsl`** | `nsl`（10.127.42.141）不可達；恢復後 `git push nsl main`（**唯一允許的 push**，永不裸 push） |
 | **部署前檢查清單** | 見 `round21 §4`：prod secrets（含 `ORG_AUTH_TOKEN`／`PERM_AUTH_TOKEN`）、Teams webhook、`BPM_BPMN_GIT_ENABLED`、backfill、表單 schema 修復、權限碼指派等 |
-| **R-21 部署前 DB 盤點** | `bpm_external_system` 無 seed SQL，正式環境部署前必須撈 DB 盤點 `allowedProcessKeys`，否則 fail-closed 可能中斷服務（remediation backlog R-21） |
+| **部署前 DB／secrets 盤點** | `bpm_external_system` 無 seed SQL：撈 `allowedProcessKeys`（fail-closed 恐中斷）與 `ipWhitelist`（nginx IP 語意翻轉）；prod 必須注入 `API_KEY_HMAC_SECRET`（未設即啟動失敗）。見 round22 §5 |
 
-### B. Remediation backlog 開放項（~8 人日；見 `docs/plan/2026-09-28-remediation-backlog.md`）
+### B. Remediation backlog 開放項（~5 人日；見 `docs/plan/2026-09-28-remediation-backlog.md`）
 
 | 編號 | 項目 | 人日 | 備註 |
 |---|---|---|---|
 | R-04 | Secrets 治理（步驟 2–5） | 0.5 | `application.yml`／`docker-compose.yml` 仍有 dev 密碼與 `bpm-webhook-secret` 字面值；dev 預設可接受，但驗收要求 git 追蹤檔零命中＋prod 由 env 注入 |
-| R-07 | CI/CD 收斂成單軌 | 2 | GH Actions／GitLab CI 並存、deploy job 是 `echo`；需先決定平台 |
+| R-07 | CI/CD 收斂成單軌 | 2 | 平台已定：**保留 GitLab CI、刪 GitHub Actions**；deploy job 仍是 `echo` |
 | R-08 | `bpmn-definitions/` no-op | 1 | CI 掃不存在的目錄；#61 已做「部署時 Git commit」，但 BPMN-as-code pipeline 仍缺（A：移出 jar；B：刪 job） |
-| R-15 | Spotless＋ESLint/Prettier＋`.editorconfig` | 1 | 目前皆無 |
+| R-15 | Spotless＋ESLint/Prettier＋`.editorconfig` | 1 | 目前皆無；格式化會產生巨大 diff，建議獨立 commit 離峰做 |
 | R-16 | 根目錄 `README.md` | 0.5 | 目前不存在 |
-| R-21 | 外部系統授權設定改寫入端驗證＋UI | 1 | 見上表 A |
-| R-22 | IP 白名單在 nginx 後失效 | 0.5 | `server.forward-headers-strategy` 未設；`getRemoteAddr()` 取到 nginx |
-| R-24 | `queryByBusinessKey` 與擁有權模型一致＋backfill | 0.5 | 舊實例查不到仍在；R-20 backfill 未做 |
-| R-25 | API Key 強化 | 1 | 無 salt、無 grace period、無速率限制；另有 `lastUsedAt` 每請求寫入／`ExternalSystemPolicy.parse` 無快取的效能 TODO |
+
+> ✅ **2026-10-05 完成**：R-21／R-22（B1）、R-24／R-25（B2）——詳見 `2026-10-05-round22-handoff.md`。
 
 ### C. 功能殘餘（非 backlog 編號；來自各輪「已知殘餘」）
 

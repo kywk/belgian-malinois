@@ -1,5 +1,10 @@
 # 下一批工作 — 可直接派工的 prompt（2026-10-04）
 
+> **2026-10-05 狀態更新**：**B 批次已完成並合併**（R-21／R-22／R-24／R-25，見
+> `2026-10-05-round22-handoff.md`）。**C 平台決策＝保留 GitLab CI**（派工時把 `<平台>` 換成
+> GitLab CI、刪除 GitHub Actions）。A 批次除 push 外仍為部署前人為項（`nsl` 仍不可達）；
+> C／D／E 的 prompt 維持有效。
+
 本檔把 `docs/handoff/README.md` §3 的未完成事項整理成**可直接貼給 subagent 的 prompt**。
 建議順序：**A（PM 營運）→ B（remediation P1）→ C（CI/CD，先問平台）→ D（功能殘餘）→ E（工程衛生）**。
 每個 prompt 都假設「一工項＝一 worktree／一分支」；共通規範見 §0，派工時**整段貼進 prompt 開頭**。
