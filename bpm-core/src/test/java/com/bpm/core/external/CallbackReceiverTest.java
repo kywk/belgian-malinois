@@ -295,7 +295,9 @@ class CallbackReceiverTest extends IntegrationTestBase {
         String body = mockMvc.perform(post("/api/admin/external-systems")
                         .header("X-User-Id", "admin001")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"systemId\":\"" + sid + "\",\"systemName\":\"T21\"}"))
+                        // R-21：授權欄位必填（本測試的重點是回呼密鑰，不是驗證）。
+                        .content("{\"systemId\":\"" + sid + "\",\"systemName\":\"T21\","
+                                + "\"allowedProcessKeys\":\"[\\\"leave-approval\\\"]\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.callbackSecret").exists())
                 .andReturn().getResponse().getContentAsString();

@@ -179,7 +179,10 @@ class AuditCoverageTest extends IntegrationTestBase {
         String createBody = mockMvc.perform(post("/api/admin/external-systems")
                         .header("X-User-Id", "admin001")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"systemId\":\"" + sid + "\",\"systemName\":\"測試\"}"))
+                        // R-21：新建立的系統必須帶至少一個已部署的流程 key，
+                        // 否則寫入端直接 400（本測試的重點是輪換稽核，不是驗證）。
+                        .content("{\"systemId\":\"" + sid + "\",\"systemName\":\"測試\","
+                                + "\"allowedProcessKeys\":\"[\\\"leave-approval\\\"]\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         String firstKey = createBody.replaceAll(".*\"apiKey\":\"([^\"]+)\".*", "$1");
@@ -208,7 +211,9 @@ class AuditCoverageTest extends IntegrationTestBase {
     void duplicateSystemIdIsRejected() throws Exception {
         String sid = "audit-dup-" + UUID.randomUUID().toString().substring(0, 8);
         createdSystems.add(sid);
-        String body = "{\"systemId\":\"" + sid + "\",\"systemName\":\"第一次\"}";
+        // R-21：第一次建立必須合法（含已部署的流程 key），第二次才測得到 409。
+        String body = "{\"systemId\":\"" + sid + "\",\"systemName\":\"第一次\","
+                + "\"allowedProcessKeys\":\"[\\\"leave-approval\\\"]\"}";
 
         mockMvc.perform(post("/api/admin/external-systems")
                         .header("X-User-Id", "admin001")

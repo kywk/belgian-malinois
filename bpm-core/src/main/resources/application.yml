@@ -1,5 +1,32 @@
 server:
   port: 8080
+  # ── R-22：讓 request.getRemoteAddr() 在反向代理後方取得真實 client IP ──
+  #
+  # 現況（改動前）：ExternalApiAuthFilter 用 request.getRemoteAddr() 判定
+  # IP 白名單，而容器部署只有 nginx 對外（docker-compose.prod.yml 沒有公開
+  # bpm-core 的 port），nginx 又設了 X-Forwarded-For／X-Real-IP。Boot 未設
+  # forward-headers-strategy 時，Servlet 容器的 remoteAddr 是 nginx 容器位址：
+  # 填真實 IP → 全擋；填 nginx IP → 對所有系統一律放行；稽核的 ip 也失去鑑識價值。
+  #
+  # native = Tomcat RemoteIpValve。信任邊界由 Valve 把關，不是無條件信任：
+  # 只有「直接連線者（TCP peer）」位在 RemoteIpValve 預設的 internalProxies
+  # （10.0.0.0/8、172.16.0.0/12、192.168.0.0/16、169.254.0.0/16、100.64.0.0/10、
+  # 127.0.0.0/8 與對應 IPv6 範圍）時，才採用 X-Forwarded-For 的值。
+  # 因此：
+  #   - prod：bpm-core 只在私有 Docker 網路上，唯一能連到它的是 nginx
+  #     （私有位址）→ XFF 被採用，remoteAddr = 真實 client IP。公網直連
+  #     打不到 bpm-core，無法用偽造的 XFF 冒充白名單來源。
+  #   - dev 直連：本機連 localhost:8080 沒有 XFF，remoteAddr 仍是 127.0.0.1，
+  #     行為與改動前相同，不會被誤擋。
+  #
+  # ⚠️ 不用 framework：ForwardedHeaderFilter 不看來電位址、無條件採用
+  # X-Forwarded-*，任何能連到應用程式的人都能用一個 header 冒充身分。
+  # nginx 的設定（X-Forwarded-For: $proxy_add_x_forwarded_for）與此互補：
+  # Valve 從 header 右端（最近一跳）往左解析，偽造在前面的項目不會被採用。
+  #
+  # 這同時覆蓋 CallbackAuthFilter 的白名單與 GatewayAuthenticationFilter 的
+  # trusted-proxies 判定 —— 三者都讀同一個 remoteAddr。
+  forward-headers-strategy: native
 
 spring:
   application:

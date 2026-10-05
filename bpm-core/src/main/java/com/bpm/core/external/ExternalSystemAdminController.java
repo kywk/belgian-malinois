@@ -43,15 +43,30 @@ import java.util.Objects;
  *
  * <h2>⚠️ PUT 是整欄覆寫，而多數授權欄位的「空值」語意是「不限制」</h2>
  *
- * <p>{@code allowedProcessKeys}／{@code allowedActions}／{@code ipWhitelist}／
- * {@code allowedCandidateGroups}／{@code allowedWorkerTopics} 全部是自由文字的欄位，PUT 沒帶就是 {@code null}，
+ * <p>{@code allowedActions}／{@code ipWhitelist}／
+ * {@code allowedCandidateGroups}／{@code allowedWorkerTopics} 是自由文字的欄位，PUT 沒帶就是 {@code null}，
  * 而 {@code null} 在 {@link ExternalSystemPolicy} 的規則裡是
  * <b>{@code UNRESTRICTED}（不限制）</b>。也就是說
  * <b>「PUT 少帶一個欄位 = 把該項授權放寬」</b>。
  *
  * <p>這是既有行為（{@code allowOnBehalfOf} 之所以顯式轉 boolean，是因為它
- * 刻意選了相反的方向：欄位缺席 = 失去能力）。真正的修法是管理頁必須讓人
- * 設定這些欄位 —— 見 {@code ExternalSystemAdmin.vue}。既有條目見 backlog R-21。
+ * 刻意選了相反的方向：欄位缺席 = 失去能力）。
+ *
+ * <h2>R-21：授權設定改在寫入端驗證</h2>
+ *
+ * <p>改動前 {@code allowedProcessKeys} 完全沒有寫入端檢查，空值又等於
+ * 「不限制」—— 照 UI 正常流程建立的系統預設可以啟動任何流程。現在
+ * {@link ExternalSystemAuthorizationValidator} 會在 create／update 的最前面
+ * （任何 mutation 之前）做四件事：
+ * <ul>
+ *   <li>四個欄位都必須是 JSON 字串陣列，格式錯誤 → 400 並指名欄位；</li>
+ *   <li>{@code allowedProcessKeys} 強制非空（缺席／{@code ""}／{@code "[]"} → 400）；</li>
+ *   <li>每個流程 key 必須是目前已部署的流程定義；</li>
+ *   <li>屆時才進到下面的套用流程，所以 400 保證零副作用。</li>
+ * </ul>
+ * <p>另外三個欄位仍允許空值＝不限制，且 {@code "[]"}（拒絕全部）與
+ * {@code null}（不限制）維持兩種不同意義 —— 不要把它們互相轉換。
+ * 管理頁的多選入口見 {@code ExternalSystemAdmin.vue}。
  *
  * <h2>⚠️ 明文金鑰絕不可進稽核庫</h2>
  *
@@ -86,13 +101,20 @@ public class ExternalSystemAdminController {
     private final ExternalSystemRepository repo;
     private final AuditEventPublisher auditPublisher;
     private final AuditLogService auditLogService;
+    /**
+     * R-21：四個授權欄位的寫入端驗證（格式、必填、流程 key 存在性）。
+     * create／update 都必須在<b>變更實體之前</b>呼叫，400 才不會有副作用。
+     */
+    private final ExternalSystemAuthorizationValidator authorizationValidator;
 
     public ExternalSystemAdminController(ExternalSystemRepository repo,
                                          AuditEventPublisher auditPublisher,
-                                         AuditLogService auditLogService) {
+                                         AuditLogService auditLogService,
+                                         ExternalSystemAuthorizationValidator authorizationValidator) {
         this.repo = repo;
         this.auditPublisher = auditPublisher;
         this.auditLogService = auditLogService;
+        this.authorizationValidator = authorizationValidator;
     }
 
     @PostMapping
@@ -110,6 +132,10 @@ public class ExternalSystemAdminController {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "外部系統已存在: " + sys.getSystemId() + "（要修改請用 PUT，要換金鑰請用 rotate-key）");
         }
+
+        // R-21：授權欄位在寫入前驗證（格式錯誤／流程 key 未部署 → 400）。
+        // 放在這裡是刻意的：此時還沒有任何 mutation，400 保證零副作用。
+        authorizationValidator.validate(sys);
 
         String plainKey = ApiKeyUtil.generateKey();
         sys.setApiKey(ApiKeyUtil.hash(plainKey));
@@ -161,6 +187,10 @@ public class ExternalSystemAdminController {
                                  String operatorId) {
         ExternalSystem sys = find(systemId);
 
+        // R-21：先驗證請求的授權欄位再套用。順序反了的話，一個格式錯誤的
+        // PUT 會在回 400 之前先把欄位覆寫成 null（＝放寬授權）並 flush。
+        authorizationValidator.validate(req);
+
         // 先記下舊值再套用 —— 順序反了就拿不到差異了。
         Map<String, Object> before = snapshot(sys);
         sys.setSystemName(req.getSystemName());
@@ -172,10 +202,11 @@ public class ExternalSystemAdminController {
         sys.setEnabled(req.getEnabled());
         // #88 政策 B：候選群組白名單。
         //
-        // ⚠️ 與 allowedProcessKeys／allowedActions 同一個方向，這裡刻意
+        // ⚠️ 與 allowedActions 同一個方向，這裡刻意
         // <b>不做「未帶就保留舊值」的處理</b>：欄位缺席 → null → 不限制。
         // 也就是說「PUT 少帶一個欄位 = 把授權放寬」，這是整欄覆寫語意的
-        // 必然結果，也是 R-21（寫入端應強制必填）記錄的既有風險。
+        // 必然結果。R-21 只強制了 allowedProcessKeys 必填；本欄位仍允許
+        // 空值＝不限制（見類別註解），管理頁負責讓人設定它。
         //
         // 為什麼不在這裡把它改成「方向固定為失去能力」（像 allowOnBehalfOf 那樣
         // 明確轉 boolean）：因為「不限制」是這個欄位的預設語意（見
