@@ -19,6 +19,15 @@ spring:
 
 flowable:
   database-schema-update: true
+  # R-08／ADR-002 §4.1：測試是最需要「開機就有出廠流程」的環境（65 個測試檔
+  # 以 key 啟動流程、9 處直接讀 classpath processes/），所以這裡<b>明確</b>設 true
+  # —— 不能只吃 Flowable 的預設值，否則哪天 prod 設定改動或有人複製設定進來，
+  # 測試會靜默地再也沒有出廠定義。
+  # ⚠️ 檔案現階段仍來自 main resources（jar 內副本）。ADR §4.3 的 testResources
+  # 映射<b>延後到 T4</b>，與 src/main/resources/processes/ 退場同一批：T1 已實測
+  # main＋映射雙 root 會讓同一 BPMN 的兩份進同一個 deployment，Flowable 以
+  # same key 拒絕（The deployment contains process definitions with the same key）。
+  check-process-definitions: true
   # 測試中關掉 async executor：它會起背景執行緒輪詢 job，
   # 讓測試的時序變成不確定（timer／async task 可能在斷言之後才跑）。
   async-executor-activate: false
