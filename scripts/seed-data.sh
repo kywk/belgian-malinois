@@ -55,15 +55,22 @@ wait_for "$FORM_URL" "form-service"
 deploy_bpmn() {
   local file="$1" name="$2"
   echo "Deploying $name..."
+  # ⚠️ 參數名是 `name`：DeploymentController.deploy() 讀 @RequestParam(defaultValue = "")
+  # String name（DeploymentController.java:147）。原本送 `deploymentName` 會被忽略，
+  # name 留空後 fallback 到上傳檔名 —— 結果意外正確，但意圖與實作不符，也讓
+  # 「name 為空才 fallback」這條規則永遠被觸發。改後 name 明確生效。
   resp=$(curl -sf -X POST "$BPM_URL/api/deployments" \
     -H "$(auth_header admin001)" \
     -F "file=@$file" \
-    -F "deploymentName=$name") || fail "Failed to deploy $name"
+    -F "name=$name") || fail "Failed to deploy $name"
   ok "Deployed $name: $(echo "$resp" | grep -o '"id":"[^"]*"' | head -1)"
 }
 
-deploy_bpmn "bpm-core/src/main/resources/processes/leave-approval.bpmn20.xml"    "leave-approval"
-deploy_bpmn "bpm-core/src/main/resources/processes/purchase-approval.bpmn20.xml" "purchase-approval"
+# R-08／ADR-002：部署來源改指 repo 根真實來源 bpmn-definitions/。main resources
+# 的副本與 ADR §4.3 的 testResources 映射都延後到 T4、與退場同一批 ——
+# 在雙份來源並存期間，映射會讓同一 BPMN 進同一個 deployment 被 Flowable 拒絕。
+deploy_bpmn "bpmn-definitions/leave-approval.bpmn20.xml"    "leave-approval"
+deploy_bpmn "bpmn-definitions/purchase-approval.bpmn20.xml" "purchase-approval"
 
 # 特定子流程加簽模板（#4，spec §4.4.2）。
 # ⚠️ name 必須含 .bpmn20.xml：Flowable 只把 .bpmn20.xml／.bpmn 後綴的資源
@@ -71,7 +78,7 @@ deploy_bpmn "bpm-core/src/main/resources/processes/purchase-approval.bpmn20.xml"
 # 「部署成功」但不產生流程定義 —— 設計器的 Call Activity 下拉就看不到
 # countersign-review。上面兩支是靠 classpath 自動部署才有定義，這裡刻意
 # 讓部署本身產生定義。
-deploy_bpmn "bpm-core/src/main/resources/processes/countersign-review.bpmn20.xml" "countersign-review.bpmn20.xml"
+deploy_bpmn "bpmn-definitions/countersign-review.bpmn20.xml" "countersign-review.bpmn20.xml"
 
 # ── 驗證表單定義（form-service 已透過 data.sql 初始化）────────
 echo "Verifying form definitions..."

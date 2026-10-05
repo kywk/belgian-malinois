@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:flowable="http://flowable.org/bpmn"
+             targetNamespace="http://bpm.com/leave">
+
+  <!--
+    ⚠️ 兩個 taskListener 的順序有意義：先 notify（寄信）再 webhook（通知外部系統）。
+    兩者都是把訊息丟進 RabbitMQ 就算完成，不阻塞簽核，所以順序只影響
+    「兩邊的到達順序」，不影響可靠性。
+
+    event="all" 的理由（#67）：節點層 webhook 的設定在設計器裡可以選
+    create／complete／timeout／reject，其中 timeout 只有在節點上掛了
+    邊界計時器時才真的會發生。若這裡只宣告 create 與 complete，
+    使用者在設計器選「timeout」會得到一個永遠不會觸發的設定 ——
+    設定成功、畫面正常、沒有任何錯誤。這正是本專案反覆在對付的
+    「靜默失效」，所以寧可多掛一個 all 也要讓四個選項都真的能通。
+    沒有設定 webhook 的節點，listener 讀不到設定就直接不發訊息（見
+    WebhookTaskListener.notify），成本只有一次 map 查表。
+  -->
+  <process id="leave-approval" name="請假審核流程" isExecutable="true">
+
+    <startEvent id="start" flowable:initiator="initiator"
+                flowable:formKey="leave-request"/>
+
+    <sequenceFlow id="flow1" sourceRef="start" targetRef="managerReview"/>
+
+    <userTask id="managerReview" name="主管審核"
+              flowable:assignee="${assigneeResolver.resolve(execution)}"
+              flowable:formKey="leave-review">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
+        <flowable:taskListener event="all" delegateExpression="${webhookTaskListener}"/>
+      </extensionElements>
+    </userTask>
+
+    <sequenceFlow id="flow2" sourceRef="managerReview" targetRef="gw1"/>
+
+    <exclusiveGateway id="gw1" name="審核結果" default="flowReturn"/>
+
+    <sequenceFlow id="flowApproved" sourceRef="gw1" targetRef="endApproved">
+      <conditionExpression>${approved == true}</conditionExpression>
+    </sequenceFlow>
+
+    <sequenceFlow id="flowRejected" sourceRef="gw1" targetRef="endRejected">
+      <conditionExpression>${rejected != null &amp;&amp; rejected == true}</conditionExpression>
+    </sequenceFlow>
+
+    <sequenceFlow id="flowReturn" sourceRef="gw1" targetRef="applicantRevision"/>
+
+    <userTask id="applicantRevision" name="申請者補件"
+              flowable:assignee="${applicantResolver.resolve(execution)}"
+              flowable:formKey="leave-request">
+      <extensionElements>
+        <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
+        <flowable:taskListener event="all" delegateExpression="${webhookTaskListener}"/>
+      </extensionElements>
+    </userTask>
+
+    <sequenceFlow id="flowResubmit" sourceRef="applicantRevision" targetRef="managerReview"/>
+
+    <endEvent id="endApproved" name="核准"/>
+    <endEvent id="endRejected" name="拒絕"/>
+
+  </process>
+</definitions>
