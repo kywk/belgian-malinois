@@ -116,8 +116,10 @@ public class ExternalSystem {
      *   <li>migration 之後既有資料列一律為 null，而<b>不需要回填</b>
      *       （見 V4__external_system_allowed_candidate_groups.sql）。</li>
      *   <li>⚠️ 反過來說，<b>對既有系統而言這個檢查完全沒有效果</b>，直到管理員
-     *       逐一設定。與 {@code allowedProcessKeys} 是同一個已知狀況（R-21：
-     *       寫入端應強制必填），本工項刻意不順手改那個政策。</li>
+     *       逐一設定。與 {@code allowedProcessKeys} 是同一個已知狀況 ——
+     *       差別在於 R-21 已讓 <b>{@code allowedProcessKeys} 新寫入必填</b>
+     *       （見 {@code ExternalSystemAuthorizationValidator}），而本欄位
+     *       仍可留空＝不限制，管理頁必須讓人明確設定它（{@code ExternalSystemAdmin.vue}）。</li>
      * </ul>
      *
      * <p>格式與 {@code allowedProcessKeys} 同樣是 JSON array 字串
@@ -142,7 +144,8 @@ public class ExternalSystem {
      * migration 之後既有資料列一律為 null，而<b>不需要回填</b>
      * （見 V7__external_system_allowed_worker_topics.sql）；反過來說，
      * 對既有系統而言這個檢查完全沒有效果，直到管理員逐一設定 ——
-     * 與 {@code allowedProcessKeys} 是同一個已知狀況（R-21）。
+     * 與 {@code allowedProcessKeys} 是同一個已知狀況（後者已由 R-21
+     * 在寫入端強制必填，本欄位仍以空值＝不限制為預設）。
      *
      * <p>格式與 {@code allowedProcessKeys} 同樣是 JSON array 字串
      * （{@code ExternalSystemPolicy} 另外容忍逗號分隔格式）。

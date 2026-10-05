@@ -125,9 +125,11 @@ public class ExternalSystemPolicy {
      * <p>⚠️ 改動前這個欄位<b>完全沒有任何程式碼在檢查</b> —— 外部系統即使
      * 只被授權 leave-approval，也能啟動任何流程。
      *
-     * <p>⚠️ 注意：欄位為空代表「不限制」，而 admin UI 的此欄位是自由文字且
-     * 無必填驗證，因此照 UI 正常流程建立的系統預設是「可啟動任何流程」。
-     * 要讓這項檢查真正生效，需在寫入端強制必填，見 backlog R-21。
+     * <p>⚠️ 注意：欄位為空代表「不限制」。R-21 之後，寫入端
+     * （{@link ExternalSystemAuthorizationValidator}）強制 {@code allowedProcessKeys}
+     * 非空且每個 key 必須已部署，因此<b>新建立的系統</b>不再能靠預設值取得
+     * 「可啟動任何流程」；本方法仍保留 {@code UNRESTRICTED} 是為了 migration
+     * 之前既有的資料列（不回填、不鎖死既有整合）。
      */
     public boolean isProcessKeyAllowed(ExternalSystem sys, String processDefinitionKey) {
         return allowed(sys.getAllowedProcessKeys(), processDefinitionKey,
@@ -137,8 +139,10 @@ public class ExternalSystemPolicy {
     /**
      * IP 是否在白名單內。白名單為逗號分隔字串。
      *
-     * <p>⚠️ 呼叫端目前傳入的是 {@code request.getRemoteAddr()}，在 nginx 後方
-     * 取到的是 nginx 容器位址而非真實 client IP，見 backlog R-22。
+     * <p>⚠️ 呼叫端傳入的是 {@code request.getRemoteAddr()}。R-22 之後應用程式
+     * 設了 {@code server.forward-headers-strategy: native}，在 nginx 後方
+     * 取到的是<b>真實 client IP</b>（RemoteIpValve 只在直接連線者為內網位址時
+     * 才採用 X-Forwarded-For，見 {@code application.yml} 的說明）。
      */
     public boolean isIpAllowed(ExternalSystem sys, String clientIp) {
         return allowed(sys.getIpWhitelist(), clientIp == null ? null : clientIp.trim(),

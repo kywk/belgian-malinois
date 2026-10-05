@@ -93,8 +93,33 @@
         <el-form-item label="聯絡信箱" required>
           <el-input v-model="form.contactEmail" />
         </el-form-item>
-        <el-form-item label="允許流程 (JSON array)">
-          <el-input v-model="form.allowedProcessKeys" placeholder='["leave-approval","purchase-approval"]' />
+        <!--
+          ⚠️ R-21：這個欄位是必選的多選清單。
+          改動前它是自由文字且無必填，空的 allowedProcessKeys 在後端語意是
+          「不限制」—— 於是照 UI 正常流程建立的外部系統預設可以啟動任何流程，
+          授權檢查在預設路徑上等於不存在。
+
+          選項來自 GET /api/process-definitions；後端寫入時會再驗一次
+          「每個 key 都是已部署的流程定義」，所以這裡刻意不開 allow-create：
+          建立一個後端一定拒絕的選項，只會把錯誤延後到儲存。
+        -->
+        <el-form-item label="允許流程" required>
+          <el-select
+            v-model="form.allowedProcessKeys"
+            multiple
+            filterable
+            :loading="loadingProcesses"
+            placeholder="請選擇此系統可發起的流程（至少一個）"
+            style="width:100%">
+            <el-option v-for="p in processDefinitions" :key="p.key"
+              :label="p.name ? p.name + ' (' + p.key + ')' : p.key"
+              :value="p.key" />
+          </el-select>
+          <div style="color:#909399;font-size:13px;line-height:1.6;margin-top:4px">
+            這份清單是此系統可發起的流程白名單，<b>至少要選一個</b>。
+            後端只接受已部署的流程定義 key，且空值在授權層代表「不限制」，
+            因此未選擇時無法儲存。
+          </div>
         </el-form-item>
         <!--
           ⚠️ 這個欄位<b>必須</b>在 blankForm() 裡，否則會製造一個比 #68a 更難察覺的
@@ -235,6 +260,9 @@ import { ref, reactive, onMounted } from 'vue'
 import { formatDateTime } from '../utils/datetime.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getExternalSystems, createExternalSystem, updateExternalSystem, deleteExternalSystem, rotateKey, rotateCallbackSecret } from '../services/externalApi.js'
+// R-21：「允許流程」的選項來源。後端會再驗一次已部署的 key，這裡只是把
+// 正確的候選值給人挑，避免自由文字打錯字後才在儲存時被 400。
+import { getProcessDefinitions } from '../services/flowableApi.js'
 
 const systems = ref([])
 const showCreate = ref(false)
@@ -244,6 +272,8 @@ const showCallbackSecret = ref(false)
 const newCallbackSecret = ref('')
 const editingId = ref(null)
 const actions = ref([])
+const processDefinitions = ref([])
+const loadingProcesses = ref(false)
 
 /**
  * 表單的空白值。
@@ -260,7 +290,11 @@ function blankForm() {
     systemId: '',
     systemName: '',
     contactEmail: '',
-    allowedProcessKeys: '',
+    // ⚠️ R-21：表單裡是陣列（el-select multiple 綁的就是陣列），送出時
+    // 序列化成後端要的 JSON 陣列字串（見 submitForm）。預設必須是空陣列：
+    // 空值在後端代表「不限制所有流程」，那是 required 要擋下的狀態，
+    // 不可以有任何「沒選＝全開」的預設路徑。
+    allowedProcessKeys: [],
     // ⚠️ #88 政策 B：必須在這裡（見模板裡同一個欄位的註解）。
     // 少了它，編輯任一系統都會讓 payload 沒有這個鍵，而後端 PUT 是整欄覆寫
     // → 儲存一次就把白名單靜默清成「不限制」。
@@ -291,6 +325,26 @@ const fmt = (t) => formatDateTime(t, '-')
 const parseJson = (s) => { try { return JSON.parse(s || '[]') } catch { return [] } }
 
 async function load() { systems.value = await getExternalSystems() }
+
+/**
+ * 載入「允許流程」的選項（R-21）。
+ *
+ * <p>失敗時只留空清單：錯誤提示由 {@code services/http.js} 的攔截器負責
+ * （view 不重複 toast），而空清單會讓 required 擋住送出 —— 比拿著一份
+ * 殘缺的選項清單去儲存安全。成功後即使後端重新部署流程，重新開啟頁面
+ * 就會拿到新清單。
+ */
+async function loadProcessDefinitions() {
+  loadingProcesses.value = true
+  try {
+    const data = await getProcessDefinitions({ latestVersion: true })
+    processDefinitions.value = data.data ?? data
+  } catch {
+    /* 錯誤已由攔截器顯示；沒有選項時 submitForm 的 required 會擋下 */
+  } finally {
+    loadingProcesses.value = false
+  }
+}
 
 /**
  * 把表單整份換成 {@link values} 指定的內容。
@@ -326,6 +380,11 @@ function applyForm(values) {
     for (const key of Object.keys(form)) {
       if (values[key] !== undefined) form[key] = values[key]
     }
+    // R-21：allowedProcessKeys 在列資料裡是 JSON 字串，在表單裡是
+    // el-select 的陣列。parseJson 對 null（舊系統未設定）與無法解析的
+    // 舊逗號格式都回 [] —— 讓「未選擇」如實呈現並被 required 擋下，
+    // 而不是把舊格式原樣帶進送出、或不聲不響地選了錯的東西。
+    form.allowedProcessKeys = parseJson(values.allowedProcessKeys)
   }
 }
 
@@ -355,7 +414,19 @@ function openCreate() {
 }
 
 async function submitForm() {
-  const data = { ...form, allowedActions: JSON.stringify(actions.value) }
+  // R-21：允許流程是必填。後端對 allowedProcessKeys 缺席／空陣列會回 400，
+  // 但來回一趟才發現不如在前端講清楚；這裡擋下的正是「照 UI 正常流程建立
+  // 一個可啟動任何流程的系統」那條預設路徑。
+  if (!form.allowedProcessKeys || form.allowedProcessKeys.length === 0) {
+    ElMessage.error('請至少選擇一個允許流程')
+    return
+  }
+  const data = {
+    ...form,
+    // 後端存的是 JSON 陣列字串，與 allowedActions 同一個格式。
+    allowedProcessKeys: JSON.stringify(form.allowedProcessKeys),
+    allowedActions: JSON.stringify(actions.value),
+  }
   if (editingId.value) {
     await updateExternalSystem(editingId.value, data)
     ElMessage.success('已更新')
@@ -453,5 +524,8 @@ function clearCallbackSecret() {
   newCallbackSecret.value = ''
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadProcessDefinitions()
+})
 </script>

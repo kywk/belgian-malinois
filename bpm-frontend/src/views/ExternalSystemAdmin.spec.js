@@ -64,9 +64,17 @@ vi.mock('../services/externalApi.js', () => ({
   rotateCallbackSecret: vi.fn(async () => ({ callbackSecret: 'cs-rotated' })),
 }))
 
+// R-21：「允許流程」的選項來自後端的流程定義清單。這裡與 externalApi 分開
+// mock，因為兩者來源不同 —— 選項載入失敗時畫面只會是空清單，而 required
+// 必須仍然擋下送出。
+vi.mock('../services/flowableApi.js', () => ({
+  getProcessDefinitions: vi.fn(async () => []),
+}))
+
 const Admin = (await import('./ExternalSystemAdmin.vue')).default
 const { getExternalSystems, createExternalSystem, updateExternalSystem, rotateCallbackSecret } =
   await import('../services/externalApi.js')
+const { getProcessDefinitions } = await import('../services/flowableApi.js')
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -144,6 +152,8 @@ describe('ExternalSystemAdmin 的代發授權開關（#68a）', () => {
     clickCreate(s)
     s.form.systemId = 'new-erp'
     s.form.systemName = '新系統'
+    // R-21：允許流程是必填（前端 required 會擋下未選的送出）。
+    s.form.allowedProcessKeys = ['leave-approval']
     await s.submitForm()
     await flush()
 
@@ -173,6 +183,8 @@ describe('ExternalSystemAdmin 的代發授權開關（#68a）', () => {
 
     s.form.systemId = 'brand-new'
     s.form.systemName = '全新系統'
+    // R-21：允許流程是必填。
+    s.form.allowedProcessKeys = ['leave-approval']
     await s.submitForm()
     await flush()
 
@@ -217,6 +229,8 @@ describe('ExternalSystemAdmin 的代發授權開關（#68a）', () => {
 
     s.form.systemId = 'brand-new'
     s.form.systemName = '全新系統'
+    // R-21：允許流程是必填。
+    s.form.allowedProcessKeys = ['leave-approval']
     await s.submitForm()
     await flush()
 
@@ -383,6 +397,8 @@ describe('ExternalSystemAdmin 的候選群組白名單（#88 政策 B）', () =>
 
     s.form.systemId = 'brand-new'
     s.form.systemName = '全新系統'
+    // R-21：允許流程是必填。
+    s.form.allowedProcessKeys = ['leave-approval']
     await s.submitForm()
     await flush()
 
@@ -507,6 +523,8 @@ describe('ExternalSystemAdmin 的 worker topic 白名單（#22 收尾）', () =>
 
     s.form.systemId = 'brand-new'
     s.form.systemName = '全新系統'
+    // R-21：允許流程是必填。
+    s.form.allowedProcessKeys = ['leave-approval']
     await s.submitForm()
     await flush()
 
@@ -833,6 +851,8 @@ describe('ExternalSystemAdmin 建立時的一次性密鑰（#21 遺留）', () =
     const s = state(wrapper)
     s.form.systemId = 'brand-new'
     s.form.systemName = '新系統'
+    // R-21：允許流程是必填（本組驗的是建立後的一次性密鑰呈現）。
+    s.form.allowedProcessKeys = ['leave-approval']
     await s.submitForm()
     await flush()
     return s
@@ -886,5 +906,112 @@ describe('ExternalSystemAdmin 建立時的一次性密鑰（#21 遺留）', () =
     const values = secretDialog(wrapper).findAll('input').map((i) => i.element.value)
     expect(values).toContain('sk-only')
     expect(values, '沒有 callbackSecret 就不該多一個空欄位').toHaveLength(1)
+  })
+})
+
+/**
+ * R-21：允許流程（{@code allowedProcessKeys}）改為必選的多選清單。
+ *
+ * <h3>缺陷形狀：預設路徑就是「不限制」</h3>
+ *
+ * <p>改動前這欄位是自由文字、無必填、{@code resetForm()} 預設空字串。
+ * 而後端把空值解讀成 {@code UNRESTRICTED} —— 於是<b>照 UI 正常流程建立的
+ * 外部系統預設可以啟動任何流程</b>，授權檢查在預設路徑上等於不存在。
+ *
+ * <h3>兩件事必須同時成立</h3>
+ *
+ * <ol>
+ *   <li><b>選項是後端的已部署流程</b>：多選清單由
+ *       {@code GET /api/process-definitions} 填入，而不是又一個自由文字框
+ *       ——否則打錯字的 key 會到儲存時才被 400 拒絕。</li>
+ *   <li><b>送出前擋下空清單</b>：後端也會擋（400），但前端這道防線擋的是
+ *       「使用者照正常流程按了建立」那條路徑；少了它，使用者只會得到一個
+ *       錯誤 toast，而畫面上沒有任何欄位告訴他要選什麼。</li>
+ * </ol>
+ *
+ * <h3>負向控制組（實測）</h3>
+ *
+ * <p>把 {@code submitForm()} 的必填 guard 拿掉後重跑：本組
+ * 「建立時未選任何流程」<b>紅 1 條</b>（API 被呼叫、且沒有提示），其餘綠 ——
+ * 其餘四條驗的是載入、選項來源與序列化，不經過那道 guard。
+ * 把 {@code applyForm()} 的 {@code parseJson} 拿掉：載入與舊格式兩條紅
+ * （表單拿到字串而不是陣列）；序列化那條綠，因為它直接對 {@code s.form}
+ * 賦值，不經過 {@code applyForm}。
+ */
+describe('ExternalSystemAdmin 的允許流程必選（R-21）', () => {
+  beforeEach(() => {
+    getExternalSystems.mockClear()
+    getExternalSystems.mockResolvedValue([])
+    createExternalSystem.mockClear()
+    createExternalSystem.mockResolvedValue({ apiKey: 'sk-new', callbackSecret: 'cs-new' })
+    updateExternalSystem.mockClear()
+    updateExternalSystem.mockResolvedValue({})
+    // 選項來源：兩筆已部署流程（其中一筆沒有 name，label 要能退回 key）。
+    getProcessDefinitions.mockClear()
+    getProcessDefinitions.mockResolvedValue([
+      { key: 'leave-approval', name: '請假申請' },
+      { key: 'purchase-approval', name: '' },
+    ])
+    document.body.innerHTML = ''
+  })
+
+  it('編輯既有系統時把 JSON 字串載成多選陣列', async () => {
+    const wrapper = await mountAdmin()
+    const s = state(wrapper)
+
+    s.editSystem(erpRow)
+    expect(s.form.allowedProcessKeys,
+      'el-select 綁的是陣列；字串會讓選取狀態與畫面上顯示的不一致')
+      .toEqual(['leave-approval'])
+  })
+
+  it('選項來自 GET /api/process-definitions（latestVersion），只列已部署流程', async () => {
+    const wrapper = await mountAdmin()
+    await flush()
+
+    expect(getProcessDefinitions).toHaveBeenCalledWith({ latestVersion: true })
+    expect(state(wrapper).processDefinitions.map((p) => p.key))
+      .toEqual(['leave-approval', 'purchase-approval'])
+  })
+
+  it('建立時未選任何流程：不得呼叫 API，且必須明確提示', async () => {
+    const errorSpy = vi.spyOn(ElMessage, 'error')
+    const wrapper = await mountAdmin()
+    const s = state(wrapper)
+
+    clickCreate(s)
+    s.form.systemId = 'brand-new'
+    s.form.systemName = '全新系統'
+    await s.submitForm()
+    await flush()
+
+    expect(createExternalSystem,
+      '空清單在後端等於「可啟動任何流程」——無論如何不得送出').not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('允許流程'))
+  })
+
+  it('送出時把所選流程序列化成 JSON 字串（後端存的是陣列字串）', async () => {
+    const wrapper = await mountAdmin()
+    const s = state(wrapper)
+
+    s.editSystem(erpRow)
+    s.form.allowedProcessKeys = ['leave-approval', 'purchase-approval']
+    await s.submitForm()
+    await flush()
+
+    expect(updateExternalSystem.mock.calls[0][1].allowedProcessKeys)
+      .toBe('["leave-approval","purchase-approval"]')
+  })
+
+  it('舊的逗號分隔格式載入後視為未選擇，不得原樣送出無效格式', async () => {
+    // 寫入端只接受 JSON 陣列；舊資料即使被讀取端容忍，管理頁也不能把
+    // 無法解析的字串原樣送回去 —— 那會在儲存時 400，而使用者當下只看到
+    // 一個錯誤，不知道是哪個欄位、也不知道正確格式是什麼。
+    const legacyRow = { ...erpRow, allowedProcessKeys: 'leave-approval' }
+    const wrapper = await mountAdmin([legacyRow])
+    const s = state(wrapper)
+
+    s.editSystem(legacyRow)
+    expect(s.form.allowedProcessKeys).toEqual([])
   })
 })
