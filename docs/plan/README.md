@@ -19,10 +19,10 @@
 | [`2026-09-28-security-audit.md`](2026-09-28-security-audit.md) | 全系統安全與正確性審查（4 個 reviewer，40+ 項） | P0～P2 已修；文末「其他功能缺失」殘餘待估 | 待估 |
 | [`2026-09-28-springboot4-upgrade.md`](2026-09-28-springboot4-upgrade.md) | Spring Boot 3.5 → 4.1.1 + Flowable 6.8.1 → 8.0.x 分階段升級 | ✅ **Stage 0–6 全部完成（2026-10-03，#70 結案）** | 0 |
 | [`2026-09-28-adr-001-form-service-consolidation.md`](2026-09-28-adr-001-form-service-consolidation.md) | form-service 併入 bpm-core 的決策紀錄 | ✅ 已完成（＝升級 Stage 3，2026-09-28） | 0 |
-| [`2026-10-05-adr-002-bpmn-as-code.md`](2026-10-05-adr-002-bpmn-as-code.md) | R-08 選項 A：BPMN-as-code（repo 單一來源、`POST /api/deployments` 單一入口、classpath 退場） | 📝 **設計完成、待實作**（T1–T5 ~2.5 人日；IdP／維運前置不計） | **~2.5** |
-| [`2026-09-28-remediation-backlog.md`](2026-09-28-remediation-backlog.md) | 工程品質與安全性改進項（R-01 ~ R-25） | R-01／02／03／05／06／09／10／11／12／13／14／17／18／19／20／23 ✅；R-04 步驟 1 ✅（剩 0.5）；**R-21／22／24／25 ✅（2026-10-05）**；**R-08 選項 A 設計完成（ADR-002）、實作待派**；R-07／15／16 待開工 | **~6.5** |
+| [`2026-10-05-adr-002-bpmn-as-code.md`](2026-10-05-adr-002-bpmn-as-code.md) | R-08 選項 A：BPMN-as-code（repo 單一來源、`POST /api/deployments` 單一入口、classpath 退場） | 📝 **設計完成；T1 ✅（2026-10-06）、T2–T5 進行中**（閘道過渡＋CI 專用權限碼已拍板） | **~2** |
+| [`2026-09-28-remediation-backlog.md`](2026-09-28-remediation-backlog.md) | 工程品質與安全性改進項（R-01 ~ R-25） | R-01／02／03／05／06／09／10／11／12／13／14／17／18／19／20／23 ✅；R-04 步驟 1 ✅（剩 0.5）；**R-21／22／24／25 ✅（2026-10-05）**；**R-08 實作進行中（T1 ✅）**；R-07／15／16 待開工 | **~6** |
 
-剩餘約 **6.5 人日**（全部在 remediation；R-08 依 ADR-002 上修至 ~2.5；升級已結案）。功能 backlog `docs/backend-development-backlog.md`
+剩餘約 **6 人日**（全部在 remediation；R-08 T1 ✅、T2–T5 剩 ~2；升級已結案）。功能 backlog `docs/backend-development-backlog.md`
 已於 **2026-10-04 結清：97 項 ✅ 97／🟡 0／⬜ 0**。security-audit 文末殘餘待估。
 **交接入口：`docs/handoff/README.md`（索引＋未完成總表）＋ `docs/handoff/2026-10-04-next-agent-prompt.md`（派工 prompt）。**
 
@@ -55,7 +55,13 @@
   runtime 目錄為帳本；CI 以服務帳號 JWT 部署、失敗大聲紅；classpath 退場「先關設定、再移檔案」；
   測試以 Maven `testResources` 映射零複本。實作票 T1–T5 約 2.5 人日（未決 7 條見 ADR-002 §8）。
 
-**下一個開工點：R-08 實作（T1 無相依可先派；T2 需 ADR-002 §8-Q1／Q2 拍板與 R-07 runner 前提）、
+**2026-10-06（R-08 實作起步，0.5 人日）**
+
+- **T1 ✅（`d921742`）**：repo `bpmn-definitions/` 三檔就位（byte-identical）、test profile 明示、
+  `seed-data.sh` 路徑與 `name` 修正；**testResources 映射依實測延後至 T4**（雙 root 會 same-key 起不來）。
+- **Q1／Q2 拍板**：CI 先用**閘道密鑰過渡**（IdP JWT 為退出條件）、prod 走 **CI 專用權限碼**（O2 併入 T2）。
+
+**下一個開工點：R-08 續作（T2 待 R-07 runner 前提；Q1／Q2 已拍板）、
 remediation 其餘（R-04 步驟 2–5／R-07／R-15／R-16）與部署前檢查清單（round22 §5）。
 CI/CD 平台決策已定：保留 GitLab CI。功能 backlog 已於 2026-10-04 全數結清（97/97）；
 派工 prompt 見 `docs/handoff/2026-10-04-next-agent-prompt.md`（B 批次已勾消；C～E 仍有效、R-08 以 ADR-002 為準）。**

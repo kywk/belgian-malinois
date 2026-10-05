@@ -137,6 +137,8 @@
 > 為單一來源、`POST /api/deployments` 為唯一部署入口、runtime 目錄為部署帳本（#61）；CI 用服務帳號
 > JWT、失敗大聲紅；classpath 退場「先關設定、再移檔案」；測試以 Maven `testResources` 映射零複本。
 > 實作票 T1–T5 約 **2.5 人日**（原估 1 人日上修，理由見 ADR-002 §7；IdP 開帳與維運前置不計）。
+> **2026-10-06 進度**：T1 ✅（`d921742`；testResources 映射延後 T4）；CI 認證拍板＝閘道密鑰過渡＋
+> CI 專用權限碼（O2 併入 T2）。
 > ⚠️ 原「env 替換改用 yq／Python」已被 #53（部署期替換、原始 XML 進版控）取代 —— **CI 不替換**。
 
 **現況**：`.github/workflows/bpmn-deploy.yml` 與 `.gitlab-ci.yml` 的 `bpmn:deploy` 都掃 `bpmn-definitions/**/*.bpmn*`，但**這個目錄在 repo 中不存在** —— 兩個 job 都是空轉。真正的 BPMN 在 `bpm-core/src/main/resources/processes/`（打包進 jar）。

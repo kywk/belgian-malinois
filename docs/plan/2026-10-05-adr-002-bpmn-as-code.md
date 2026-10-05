@@ -1,9 +1,10 @@
 # ADR-002：BPMN-as-code —— repo `bpmn-definitions/` 單一來源、`POST /api/deployments` 單一部署入口
 
 **日期**：2026-10-05
-**狀態**：📝 **提案（設計完成、待拍板細部選項）** —— R-08 選項 A（BPMN-as-code）已由使用者拍板；
-CI 平台已定為 **GitLab CI**（`docs/handoff/2026-10-05-round22-handoff.md:124`）。
-本檔是設計票產出，**尚未實作**；未決點見 §8。
+**狀態**：📝 **提案（設計完成；2026-10-06 已拍板 Q1／Q2，實作進行中）** —— R-08 選項 A（BPMN-as-code）
+已由使用者拍板；CI 平台已定為 **GitLab CI**（`docs/handoff/2026-10-05-round22-handoff.md:124`）。
+**修訂（2026-10-06）**：T1 實測發現 testResources 映射不可與 jar 內副本並存，映射延後至 T4
+（見 §4.3 修訂框）；T1 已完成、Q1／Q2 已拍板（見 §7／§8）。
 **決策者**：Bruce
 **預估**：設計（本票）0.5 人日；**實作約 2.5 人日**（原 R-08 估 1 人日，差異理由見 §7）
 **相依**：R-07（GitLab CI 單軌化、刪 GitHub Actions，2 人日，`docs/plan/2026-09-28-remediation-backlog.md:119`）；
@@ -256,10 +257,21 @@ push to dev / sit        push to uat / main
 | **3. 目標主機 SSH／`compose exec` 放檔＋觸發** | CI 取得主機存取後放檔到 runtime 目錄。 | ❌ 見 §2.2(c)。繞過 lint／替換／稽核、主機憑證過大、非原子。 |
 | **4. 新增部署專用 API key／權限碼** | 例如新權限碼 `bpm:bpmn:deploy`，或 `/api/deployments` 接受 API key。 | 不在現有程式碼內，需新授權面與測試；短期內沒有比方案 1 更好的安全性（JWT 已可做到最小權限與稽核）。只有當 IdP 無法發服務帳號 token 時才值得評估；屆時優先方案 2 過渡。 |
 
-**建議**：prod 走方案 1；dev 走 dev 密鑰；SIT/UAT 跟 prod 同路（它們同樣跑 prod profile，
-`JwtSecurityValidator.java:51-58` 會拒絕無 issuer 又有 dev-secret 的組合）。方案 2 明文列為
-IdP 未就緒時的過渡，且必須在 ticket 之後收回。無論哪個方案，**部署 job 使用的身分不得是
-一個可以互動登入的真人帳號**，稽核才答得出「這次部署是 pipeline 做的還是人做的」。
+**決策（2026-10-06，使用者拍板）**：**先用方案 2（閘道密鑰）過渡**，並搭配 **CI 專用權限碼**
+（§8-Q2：`/api/deployments` 改認該權限碼，CI 服務帳號不具其他管理權；sit/uat/prod 的人為部署
+只留 break-glass）。過渡要件與退出條件：
+
+- prod 開 `GATEWAY_AUTH_ENABLED=true`＋`GATEWAY_SHARED_SECRET`（`application.yml:384-385`）；
+  權限中心為 CI 服務帳號（`X-User-Id`）回新的部署權限碼（名稱 T2 定，例如 `bpm:bpmn:deploy`），
+  **不得**回 `*` 或 admin —— 否則又回到「一把鑰匙全權」。
+- 後端需調整 `/api/deployments` 的授權判定（目前只認 `ROLE_ADMIN`，`SecurityConfig.java:295`）
+  以接受該權限碼 —— 這是 O2 進入 T2 範圍的原因（T2 估時因此上調）。
+- 稽核：operatorId 為 CI 服務帳號；gateway 密鑰持有者可冒充任意 `X-User-Id`，過渡期以網路位置
+  與密鑰保管控制風險。**退出條件：IdP 服務帳號 JWT（方案 1）就緒後切回並關閉閘道**（另立收回票）。
+- dev：`scripts/dev-token.sh` 的 dev JWT（`ROLE_ADMIN`）繼續用於本機與驗收，不受上述影響。
+
+無論哪個方案，**部署 job 使用的身分不得是一個可以互動登入的真人帳號**，稽核才答得出
+「這次部署是 pipeline 做的還是人做的」。
 
 ### 3.3 Lint 在 CI 的位置
 
@@ -312,7 +324,14 @@ Flowable 的自動部署是**開機行為**（§1.1）。若先移除 jar 內 BP
 | `scripts/seed-data.sh:64-74` | 路徑改指 `bpmn-definitions/`。順帶修一個既存小缺陷：腳本送 `-F "deploymentName=…"`，而 controller 讀的是 `@RequestParam(defaultValue = "") String name`（`DeploymentController.java:147`）——目前是靠「name 空的就 fallback 原始檔名」意外正確，應改成 `name`。 |
 | `cicd/envs/*.yml` | **不在本票刪**（此檔唯讀）。BPMN 沒有佔位符、CI 不再替換，這些值已無消費者 → 交由 R-07 或後續清理票處置（§8-Q3）。 |
 
-### 4.3 測試 fixture：用 Maven testResources 映射，零複本（建議）
+### 4.3 測試 fixture：用 Maven testResources 映射，零複本（**映射延後至 T4，2026-10-06 修訂**）
+
+> ⚠️ **修訂（T1 實測）**：映射**不可**與 `src/main/resources/processes/` 並存。
+> `classpath*:/processes/` 會回兩個 root 的同名檔（`target/classes`＋`target/test-classes`）；
+> `DefaultAutoDeploymentStrategy` 把兩份放進**同一 deployment**，`verifyProcessDefinitionsDoNotShareKeys`
+> 直接拋 `same key 'leave-approval'` → Spring context 起不來（T1 全量：921 errors）。
+> 因此本節映射**與 §6 PR-4（移除 main 副本）同一批落地**；T4 啟用映射時，測試前必須
+> `clean`（殘留的 `target/test-classes/processes/` 會造成假性雙 root，T1 已踩過）。
 
 不要複製三份 BPMN 到 `src/test/resources/processes/`（複本就等於第二個真實來源）。
 在 `bpm-core/pom.xml` 把 `../bpmn-definitions` 加成 test resource，並映射到 classpath 的
@@ -401,18 +420,20 @@ volumes:
 
 1. **前置（R-07）**：GitLab CI 單軌化、runner 可連目標環境；建立 GitLab masked/protected 變數
    （`BPMN_DEPLOY_TOKEN`、per-env `BPMN_DEPLOY_URL`）。取得服務帳號 JWT 的來源（IdP 或 dev 密鑰）。
-2. **PR-1（repo 內容搬家，不動行為）**：新增 `bpmn-definitions/` 三檔（byte-identical）；
-   `pom.xml` 加 testResources 映射；`application-test.yml` 明確 `check-process-definitions: true`；
-   修 `seed-data.sh` 路徑與 `name` 參數。此時 jar 仍自動部署、CI 仍未啟用 ——
-   跑 `mvn -f bpm-core/pom.xml verify` 與 dev `seed-data.sh`＋`acceptance-test.sh` 全綠再進下一步。
+2. **PR-1（repo 內容搬家，不動行為；✅ T1 已完成 2026-10-06，`d921742`）**：新增 `bpmn-definitions/`
+   三檔（byte-identical）；`application-test.yml` 明確 `check-process-definitions: true`；修
+   `seed-data.sh` 路徑與 `name` 參數。**不含 `pom.xml` testResources 映射**（見 §4.3 修訂：必須與
+   PR-4 同批）。此時 jar 仍自動部署、CI 仍未啟用 —— 跑 `mvn -f bpm-core/pom.xml clean verify` 與
+   dev `seed-data.sh`＋`acceptance-test.sh` 全綠再進下一步。
 3. **PR-2（CI 真的會部署）**：改寫 `.gitlab-ci.yml` 的 `bpmn:deploy`（§3.1）；
    先手動在 dev 驗證一檔（可先用小改動觸發），確認 200＋`deploymentId`、稽核有記錄、
    runtime 目錄有檔案；再開 SIT。**負控**：把 glob 改錯／把 URL 指到不可達，job 必須紅。
 4. **PR-3（運維設定，無應用程式碼）**：prod compose 加 `bpmn-bpmn-definitions` volume、
    `FLOWABLE_CHECK_PROCESS_DEFINITIONS=false`、`BPM_BPMN_GIT_ENABLED=true`；部署後由 CI
    手動對 prod 部署一次（此時仍是舊 jar，但定義已進 DB），確認稽核與帳本。
-5. **PR-4（classpath 退場）**：刪 `src/main/resources/processes/`；`application.yml` 設
-   `check-process-definitions: false`。release 後驗證：重啟後三支流程仍在
+5. **PR-4（classpath 退場；含 testResources 映射）**：刪 `src/main/resources/processes/`；
+   `pom.xml` 加 `testResources` 映射（§4.3，零複本）；`application.yml` 設
+   `check-process-definitions: false`。測試前 `clean`。release 後驗證：重啟後三支流程仍在
    （`GET /api/process-definitions`）、`seed`＋acceptance 全綠、`mvn verify` 全綠。
    Rollback 若發生：回到舊 image，但 compose 的環境變數已關閉自動部署 → 不會把舊 BPMN
    重新部署成最新版。
@@ -430,12 +451,12 @@ volumes:
 
 | 票 | 一句話 | 相依 | 估時 |
 |---|---|---|---|
-| **T1** | 建立 repo `bpmn-definitions/`（3 檔 byte-identical）、Maven testResources 映射、`application-test.yml` 明確 true、修 `seed-data.sh` 路徑與 `name` 參數 | 無 | 0.5d |
-| **T2** | GitLab `bpmn:deploy` 改真實部署：branch 規則、服務帳號 JWT、逐檔部署、非空／HTTP／`deploymentId` 檢查、失敗大聲紅；取得 GitLab 變數與 token 來源 | T1、R-07 runner 前提 | 0.75d |
+| **T1** ✅ | 建立 repo `bpmn-definitions/`（3 檔 byte-identical）、`application-test.yml` 明確 true、修 `seed-data.sh` 路徑與 `name` 參數（**testResources 映射移 T4**）；完成 `d921742` | 無 | 0.5d ✅ |
+| **T2** | GitLab `bpmn:deploy` 改真實部署：branch 規則、**閘道密鑰過渡＋CI 專用權限碼（O2 後端授權調整）**、逐檔部署、非空／HTTP／`deploymentId` 檢查、失敗大聲紅；取得 GitLab 變數與身分來源 | T1、R-07 runner 前提、§8-Q1／Q2 已拍板 | 1d |
 | **T3** | prod compose：`bpmn-bpmn-definitions` volume＋`FLOWABLE_CHECK_PROCESS_DEFINITIONS=false`＋`BPM_BPMN_GIT_ENABLED=true`；文件化 rollback 程序 | T1 | 0.25d |
-| **T4** | classpath 退場：移 `src/main/resources/processes/`、`application.yml` 設 false、重啟驗證、`seed`＋acceptance | T2、T3 上線驗證後 | 0.5d |
+| **T4** | classpath 退場：移 `src/main/resources/processes/`、`application.yml` 設 false、**加 Maven testResources 映射（§4.3；測試前 clean）**、重啟驗證、`seed`＋acceptance | T2、T3 上線驗證後 | 0.5d |
 | **T5** | 驗收：負控（目錄空／URL 錯／token 錯 → job 紅）、正向（dev 部署成功、稽核有 `gitCommit`）、`mvn verify` 全綠、handoff 記錄 | T2、T4 | 0.25d |
-| | **小計** | | **2.25d** |
+| | **小計** | | **2.5d**（T1 ✅；剩 T2–T5 約 **2d**） |
 | **備用** | IdP client-credentials 未能及時提供 → 方案 2 閘道過渡（含 prod 開啟閘道與權限中心設定）＋後續收回票 | T2 | 0.25d～0.5d |
 
 **選配（另立票，不含在上表）**：
@@ -452,12 +473,12 @@ volumes:
 
 ## 8. 未決問題（需 PM／維運拍板）
 
-1. **IdP 服務帳號**：企業 IdP 能否發 client-credentials token？`roles` claim 的內容與
-   issuer／audience 是什麼？權限中心是否已有（或可建立）該帳號並回 `*`？
-   這決定 T2 走方案 1 或方案 2。
-2. **prod 部署權限邊界**：`/api/deployments` 是否維持 `ROLE_ADMIN`（設計器仍可直部署），
-   或改成 CI 専用權限碼、人為部署只留 break-glass 程序？這影響 O2 與 O5，也影響稽核
-   「pipeline vs 人」的可辨識度。
+1. ✅ **已拍板（2026-10-06）**：先用**閘道密鑰過渡**（方案 2）；IdP 服務帳號 JWT（方案 1）列為
+   退出條件，就緒後收回並關閉閘道（另立收回票）。仍待維運確認：權限中心可建立 CI 服務帳號、
+   `GATEWAY_SHARED_SECRET` 保管與網路限制。
+2. ✅ **已拍板（2026-10-06）**：**CI 專用權限碼**（O2 進入 T2 範圍；名稱 T2 定，例如
+   `bpm:bpmn:deploy`）；sit/uat/prod 的人為部署只留 break-glass。設計器在 dev 保留（O5 於 T2
+   一併處置 sit/uat/prod）。
 3. **`cicd/envs/*.yml` 處置**：BPMN 沒有佔位符、CI 不再替換——刪除、或保留為未來
    「把候選群組改成 `${ENV_*}`」的參考？若要真的啟用環境差異替換，那是 BPMN 內容工作
    （把 resolver 群組改成佔位符）＋各環境注入 `BPMN_VARIABLES_*`，需要另外排。

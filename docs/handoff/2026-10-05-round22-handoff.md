@@ -137,3 +137,6 @@ worktree 與 feature 分支已全部清除。`main` = `04f70c5`（B1）＋`64dff
 - 關鍵查證：測試套件依賴 classpath 自動部署（A/B 實驗）；classpath 退場順序「先關設定、再移檔案」；
   prod 缺 `/app/bpmn-definitions` volume；設計器是第二個部署呼叫端。
 - 實作 T1–T5 約 **2.5 人日**（原估 1 上修）；未決 7 條（IdP、權限邊界、冪等、bootstrap…）見 ADR-002 §8。
+- **2026-10-06 續**：**T1 ✅（`d921742`）**——repo `bpmn-definitions/` 就位、seed 路徑與 `name` 修正；
+  testResources 映射因雙 root same-key 失敗**延後至 T4**。**Q1／Q2 拍板**：CI 先用閘道密鑰過渡
+  （IdP JWT 為退出條件）、prod 走 CI 專用權限碼（O2 併入 T2，T2 估時 0.75→1d）。ADR-002 已修訂。
