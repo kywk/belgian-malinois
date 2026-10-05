@@ -125,3 +125,15 @@ worktree 與 feature 分支已全部清除。`main` = `04f70c5`（B1）＋`64dff
 - 後端 **1656**；前端 **211**；`acceptance-test` PASS 7 / FAIL 0。
 - 本輪 merge：`04f70c5`、`64dff59`（2 個 feature 分支各 1 commit、已清除）。
 - 待推：`nsl` 恢復後 `git push nsl main`；本輪結束時距 `nsl/main` 約 **140 顆**（含文件收尾）。
+
+---
+
+## 7. 追加（同日晚）：R-08 設計票 — ADR-002（選項 A 拍板）
+
+- 使用者拍板 R-08 走**選項 A（BPMN-as-code）**，設計票產出
+  `docs/plan/2026-10-05-adr-002-bpmn-as-code.md`（merge `c6789c3`；設計 0.5 人日）。
+- 核心決策：repo `bpmn-definitions/` 是「應該上線什麼」的真實來源；`POST /api/deployments` 是唯一
+  部署入口；runtime 目錄（#61）是只寫不讀的部署帳本；CI 用服務帳號 JWT、失敗大聲紅、不做 env 替換。
+- 關鍵查證：測試套件依賴 classpath 自動部署（A/B 實驗）；classpath 退場順序「先關設定、再移檔案」；
+  prod 缺 `/app/bpmn-definitions` volume；設計器是第二個部署呼叫端。
+- 實作 T1–T5 約 **2.5 人日**（原估 1 上修）；未決 7 條（IdP、權限邊界、冪等、bootstrap…）見 ADR-002 §8。

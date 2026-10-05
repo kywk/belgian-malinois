@@ -105,25 +105,24 @@ docs/plan/2026-09-28-remediation-backlog.md）。
 
 ---
 
-## C. CI/CD（R-07＋R-08）— **先問平台再開工**
+## C. CI/CD（R-07＋R-08）— **平台已定：GitLab CI；R-08 設計完成（ADR-002）**
 
-> 決策點：保留 GitHub Actions 還是 GitLab CI？（目前兩套並存、deploy job 都是 `echo`。）
-> 問到答案後，把下面的 `<平台>` 換掉再派工。估時 3d。
+> 平台決策：**保留 GitLab CI、刪除 GitHub Actions**（已拍板）。
+> R-08 選項 A 已拍板，設計見 `docs/plan/2026-10-05-adr-002-bpmn-as-code.md`（實作 T1–T5 ~2.5d）。
+> R-07 開工前仍需拍板「真實 deploy 的目標與憑證」（k8s／目標機 compose＋SSH／其他）。
 
 ```
-你是 Greyhound BPM 平台的實作 agent，負責 remediation **R-07＋R-08**（CI/CD 收斂）。
+你是 Greyhound BPM 平台的實作 agent，負責 remediation **R-07（＋R-08 依 ADR-002）**（CI/CD 收斂）。
 
 ## R-07：CI/CD 收斂成單軌（2d）
-- 保留 <平台>，刪除另一套；補上真實 deploy 步驟（非 echo）；registry 命名與
-  docker-compose.prod.yml 一致；修掉 GitLab 若保留時 build/test 重複跑 mvn 的問題。
+- 保留 GitLab CI，刪除 .github/workflows 全套；補上真實 deploy 步驟（非 echo）；registry 命名與
+  docker-compose.prod.yml 一致；修掉 GitLab build/test 重複跑 mvn 的問題；把前端 Vitest 補進 pipeline。
 
-## R-08：BPMN 部署 stage 的 no-op（1d）
-- 現況：CI 掃 bpmn-definitions/**（目錄不存在，BPMN 在 jar 內）；cicd/envs/*.yml 的 shell
-  假 YAML parser 對含冒號的值解析錯誤、只過濾 ^bpmn\.。
-- 選 A（推薦）：建立 bpmn-definitions/ 把 BPMN 移出 jar（BPMN-as-code），env 替換改用
-  yq 或 Python；或選 B：刪掉兩個 deploy job 與 BPMN 佔位，承認 BPMN 隨 jar 部署。
-  ⚠️ 選 A 會連動 #61 的 Git 版控與部署來源，先讀 DeploymentController 與 .github/.gitlab 檔。
-- 驗收：不存在「執行成功但什麼都沒做」的 stage；選 A 時 CI 真的能部署 BPMN 檔。
+## R-08：BPMN 部署 stage（依 ADR-002，選項 A；實作 ~2.5d）
+- 已拍板 BPMN-as-code：repo bpmn-definitions/ 單一來源、POST /api/deployments 唯一部署入口、
+  runtime 目錄為帳本；CI 服務帳號 JWT、失敗大聲紅、不做 env 替換（#53 已在部署期做）。
+- 實作票 T1–T5 與未決問題（IdP、權限邊界）見 ADR-002 §6～§8；T2 開工前先取得 §8-Q1／Q2 答案。
+- 驗收：不存在「執行成功但什麼都沒做」的 stage；負控（空目錄／URL 錯／token 錯 → job 紅）。
 
 <共通規範 §0>
 ```

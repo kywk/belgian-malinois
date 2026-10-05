@@ -13,11 +13,11 @@
 | 後端 | Spring Boot **4.1.1** + Flowable **8.0.0** + Jackson **3** + JGit **7.8**（#70 全數完成，EOL 安全債清償） |
 | 前端 | Vue 3.4 + Vite 5 + Element Plus |
 | 測試 | 後端 **1656**（`mvn clean verify`）、前端 **211**（Vitest）、`acceptance-test.sh` **PASS 7 / FAIL 0** |
-| `main` | `64dff59`（本輪 2 merge；`nsl` 主機不可達，約 **140 顆** commit 待推） |
+| `main` | `c6789c3`（B 批次 2 merge＋R-08 設計 merge；`nsl` 主機不可達，約 **143 顆** commit 待推） |
 | dev DB | core schema **v9**、Flowable schema **8.0.0.0**（不可逆）；audit 鏈 broken=19／unverifiable=123 為歷史債 |
 | dev 容器 | compose project `greyhound`；跑最新 build、預設設定（mock 組織/權限、Git 版控關閉） |
 | 功能 backlog | **97 項：✅ 97、🟡 0、⬜ 0** |
-| remediation backlog | 開放 **~5 人日**（見 §3.B；R-21／R-22／R-24／R-25 已於 2026-10-05 完成） |
+| remediation backlog | 開放 **~6.5 人日**（見 §3.B；R-21～R-25 已完成；R-08 依 ADR-002 上修至 ~2.5） |
 
 **閱讀順序**：① 最新 round（22）→ ② 本 README 的「未完成總表」→ ③ `2026-10-04-next-agent-prompt.md` →
 ④ 需要時回讀對應輪次 → ⑤ 環境陷阱總表（`round4`＋`round6/13/14` 增補，動手前必讀）。
@@ -61,6 +61,9 @@
 - **remediation B 批次（2026-10-05）**：R-21（授權設定寫入端驗證＋UI 多選）、R-22（反向代理後真實
   client IP）、R-24（擁有權查詢與篩選分離）、R-25（API key v2／寬限期／失敗節流）；後端 1656、前端
   211、acceptance 7/0（round22）。
+- **R-08 設計（ADR-002，2026-10-05）**：選項 A（BPMN-as-code）拍板；單一 writer、CI 服務帳號 JWT、
+  classpath「先關設定、再移檔案」、測試 `testResources` 零複本；實作票 T1–T5 ~2.5 人日待派（未決 7 條
+  見 ADR-002 §8）。
 - **#70 升級結案**：Boot 4.1.1＋Flowable 8.0.0＋Jackson 3（EOL 安全債清償）；Security 7 鏈序、`FACTOR_BEARER` 兩條安全回歸修復。
 - **前端瀏覽器走查**（升級驗收最後一項）：4 身分 × 10 路線；抓到並修復 `#56` 的 `DynamicForm` v-else-if 鏈斷裂回歸。
 - **功能補齊**：#28（webhook payloadTemplate）、#32（Teams 通知）、#35（EL 逐方法白名單）、#60（formData 原子啟動）、#61（BPMN Git 版控）、#41（異常偵測）、#53（`${ENV_*}` 替換）、#63（+198 單元測試）、#64（端到端＋真 bug 修復）、#8／#9（外圍 client 正式化）。
@@ -84,7 +87,7 @@
 |---|---|---|---|
 | R-04 | Secrets 治理（步驟 2–5） | 0.5 | `application.yml`／`docker-compose.yml` 仍有 dev 密碼與 `bpm-webhook-secret` 字面值；dev 預設可接受，但驗收要求 git 追蹤檔零命中＋prod 由 env 注入 |
 | R-07 | CI/CD 收斂成單軌 | 2 | 平台已定：**保留 GitLab CI、刪 GitHub Actions**；deploy job 仍是 `echo` |
-| R-08 | `bpmn-definitions/` no-op | 1 | CI 掃不存在的目錄；#61 已做「部署時 Git commit」，但 BPMN-as-code pipeline 仍缺（A：移出 jar；B：刪 job） |
+| R-08 | BPMN-as-code（選項 A） | 2.5 | **設計完成：ADR-002**（單一 writer／CI 服務帳號 JWT／classpath 退場「先關設定、再移檔案」）；實作 T1–T5 待派，T2 需 IdP 與權限邊界拍板（ADR-002 §8） |
 | R-15 | Spotless＋ESLint/Prettier＋`.editorconfig` | 1 | 目前皆無；格式化會產生巨大 diff，建議獨立 commit 離峰做 |
 | R-16 | 根目錄 `README.md` | 0.5 | 目前不存在 |
 
