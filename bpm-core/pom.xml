@@ -37,6 +37,13 @@
              走 library 也讓 commit 失敗是 Java 例外，可以 fail-closed（503）處理，
              不必解析 CLI 的 exit code 與輸出。 -->
         <jgit.version>7.8.0.202609011348-r</jgit.version>
+        <!-- uni-form SDK（表單 DSL／Access Profile／Envelope 投影／提交驗證，
+             docs/plan/2026-10-12-uniform-form-refactor.md）。0.1.0-SNAPSHOT 由 pinned
+             submodule vendor/uni-form 以 `mvn install` 進 ~/.m2（未發布到任何 registry）。
+             取 boot4 starter（不是 boot3）：本專案是 Boot 4.1.1 + Flowable 8 + Jackson 3，
+             見計畫 §二。starter 會自動配置 UniformSpecResources／TypeRegistry／
+             JsonSchemaValidator／UniformBffService（com.nanshan.uniform.boot4）。 -->
+        <uniform.version>0.1.0-SNAPSHOT</uniform.version>
     </properties>
 
     <dependencies>
@@ -131,6 +138,32 @@
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-sqlserver</artifactId>
+        </dependency>
+        <!-- uni-form SDK（計畫 §六 BE）。個別宣告 4 個 artifact：spec（classpath
+             資源：DSL／manifest／envelope schema）、core（編譯與驗證入口，只依賴 JDK21）、
+             jackson3（networknt JsonSchemaValidator 的 Jackson 3 adapter）、
+             spring-boot4-starter（Boot 4 自動配置上述 4 個 bean）。
+             core／spec 由 starter 遞移帶入，這裡顯式宣告是為了讓「用了哪些 artifact」
+             在 POM 上看得見 —— 與本 repo 對第三方依賴的一貫作法相同。 -->
+        <dependency>
+            <groupId>com.nanshan.uniform</groupId>
+            <artifactId>uniform-spec</artifactId>
+            <version>${uniform.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.nanshan.uniform</groupId>
+            <artifactId>uniform-core</artifactId>
+            <version>${uniform.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.nanshan.uniform</groupId>
+            <artifactId>uniform-jackson3</artifactId>
+            <version>${uniform.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.nanshan.uniform</groupId>
+            <artifactId>uniform-spring-boot4-starter</artifactId>
+            <version>${uniform.version}</version>
         </dependency>
         <dependency>
             <groupId>com.microsoft.sqlserver</groupId>
