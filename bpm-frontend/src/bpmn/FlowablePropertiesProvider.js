@@ -1,6 +1,7 @@
 import AssigneeProps from './AssigneeProps.js'
 import CallActivityProps from './CallActivityProps.js'
 import FormProps from './FormProps.js'
+import UniformAccessProps from './UniformAccessProps.js'
 import WebhookProps from './WebhookProps.js'
 
 const LOW_PRIORITY = 500
@@ -16,6 +17,10 @@ export default class FlowablePropertiesProvider {
         groups.push(AssigneeProps(element))
         groups.push(FormProps(element))
         groups.push(WebhookProps(element))
+        // uni-form 表單權限（ADR-23）：mode／default／欄位覆寫清單。
+        // 掛在 UserTask 上（plan §五 B：access 掛 userTask；startEvent 的
+        // 預設 fill／editable 由後端決定，面板不提供）。
+        groups.push(UniformAccessProps(element))
       }
       // 已知限制（2026-10-02 使用者裁決，暫不支援）：pool／collaboration 圖上
       // 選取的是 bpmn:Participant，不是 bpmn:Process，所以下方判斷不會命中，

@@ -69,10 +69,10 @@ describe('FlowablePropertiesProvider 的面板掛載', () => {
     expect(groupIds(p, process)).toEqual(['flowable-webhooks'])
   })
 
-  it('bpmn:UserTask 的既有面板不得改變', async () => {
+  it('bpmn:UserTask 的既有面板不得改變（＋ uni-form 表單權限，ADR-23）', async () => {
     const p = provider()
     const { userTask } = await fixtures()
-    expect(groupIds(p, userTask)).toEqual(['flowable-assignee', 'flowable-form', 'flowable-webhooks'])
+    expect(groupIds(p, userTask)).toEqual(['flowable-assignee', 'flowable-form', 'flowable-webhooks', 'uniform-access'])
   })
 
   it('其他元素不得長出 webhook 面板', async () => {

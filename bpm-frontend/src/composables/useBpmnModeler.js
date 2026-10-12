@@ -1,7 +1,7 @@
 import { ref, shallowRef } from 'vue'
 import BpmnModeler from 'bpmn-js/lib/Modeler'
 import { BpmnPropertiesPanelModule, BpmnPropertiesProviderModule } from 'bpmn-js-properties-panel'
-import flowableModdle from './flowableModdle.js'
+import flowableModdle, { uniformModdle } from './flowableModdle.js'
 
 const EMPTY_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -37,7 +37,10 @@ export function useBpmnModeler() {
       container,
       propertiesPanel: { parent: propertiesPanelContainer },
       additionalModules: modules,
-      moddleExtensions: { flowable: flowableModdle }
+      // 兩個 package 都必須註冊：uniform:access（ADR-23）沒有自己的 descriptor
+      // 就解析不了 —— 設計器「開啟 → 存檔」會把整段欄位權限吃掉（見
+      // flowableModdle.js 檔頭與 uniform 區塊的註解）。
+      moddleExtensions: { flowable: flowableModdle, uniform: uniformModdle }
     })
 
     _modeler.on('selection.changed', (e) => {
