@@ -24,6 +24,11 @@
  *
  * 為什麼 {@code Webhooks}／{@code Webhook} 也用同一個寫法：它們就是
  * extensionElements 的子元素，理由完全一樣。
+ *
+ * ⚠️ 本檔同時匯出第二個 package（{@code uniform}，見檔案末尾）：moddle 的
+ * package 只有一組 prefix／uri，所以 {@code uniform:access} 不可能是
+ * Flowable package 的一部分，而必須是獨立 descriptor；載入端
+ * （useBpmnModeler、測試）要把兩個都傳進 {@code moddleExtensions}。
  */
 export default {
   name: 'Flowable',
@@ -147,6 +152,65 @@ export default {
         { name: 'sourceExpression', isAttr: true, type: 'String' },
         { name: 'target', isAttr: true, type: 'String' },
         { name: 'targetExpression', isAttr: true, type: 'String' }
+      ]
+    }
+  ]
+}
+
+/**
+ * uni-form 表單權限（{@code uniform:access}，ADR-23／2026-10-12 重構）。
+ *
+ * 寫出來長相（與 bpmn-definitions／bpm-core processes 的 seed 相同）：
+ *   <bpmn:extensionElements>
+ *     <uniform:access mode="fill" default="readonly">
+ *       <uniform:field key="reason" state="editable"/>
+ *     </uniform:access>
+ *   </bpmn:extensionElements>
+ *
+ * ⚠️ 這兩個型別的 {@code superClass: ['Element']} 都不可移除，理由與檔頭的
+ * TaskListener 完全相同 —— 少了它，moddle-xml 不認得這些子元素，
+ * 設計器「開啟 → 存檔」會把整段 {@code uniform:access} 吃掉（欄位權限
+ * 靜默退回後端的 fail-closed view／readonly，而且不會有任何錯誤）。
+ *
+ * ⚠️ {@code xml.tagAlias: 'lowerCase'} 不可移除：它只把小寫化「首字元」，
+ * 所以 Access → access、Field → field，正好是後端
+ * {@code FormAccessResolver} 讀的 tag 名（同 Flowable package 的註解）。
+ *
+ * required 用 String 而不是 Boolean 的原因：格式凍結在 plan §五 B，
+ * 只有「必要時 field 具 required」這一條，未定值域；宣告成 String 讓
+ * 「未設定＝沒有屬性」與 true／false 三態都能原樣往返，不會被 moddle
+ * 把 Boolean 預設值（false）自動序列化出來。
+ */
+export const uniformModdle = {
+  name: 'Uniform',
+  uri: 'http://bpm.com/uniform',
+  prefix: 'uniform',
+  xml: { tagAlias: 'lowerCase' },
+  associations: [],
+  types: [
+    {
+      name: 'Access',
+      // ⚠️ 不可移除。見上方註解與檔頭。
+      superClass: ['Element'],
+      properties: [
+        { name: 'mode', isAttr: true, type: 'String' },
+        // 'default' 是 JS 保留字，但作為物件屬性名合法；moddle 只把它當
+        // XML 屬性名（uniform:default），存取用 access.get('default')／
+        // access.default 都可以。
+        { name: 'default', isAttr: true, type: 'String' },
+        // 屬性名 field 決定 propertiesByName 的查找，孩子元素的 tag 名
+        // 由型別名決定（Field → uniform:field），與 Webhooks.values 相同。
+        { name: 'field', type: 'Field', isMany: true }
+      ]
+    },
+    {
+      name: 'Field',
+      // ⚠️ 不可移除。見上方註解與檔頭。
+      superClass: ['Element'],
+      properties: [
+        { name: 'key', isAttr: true, type: 'String' },
+        { name: 'state', isAttr: true, type: 'String' },
+        { name: 'required', isAttr: true, type: 'String' }
       ]
     }
   ]
