@@ -80,7 +80,7 @@ class ErpSyncDelegateIntegrationTest extends IntegrationTestBase {
                     </boundaryEvent>
                     <sequenceFlow id="alt" sourceRef="erpFailed" targetRef="altReview"/>
                     <userTask id="altReview" name="ERP 同步失敗-人工處理"
-                              flowable:assignee="mgr001" flowable:formKey="leave-review"/>
+                              flowable:assignee="mgr001" flowable:formKey="leave-request"/>
                     <sequenceFlow id="altEnd" sourceRef="altReview" targetRef="end"/>
                 """.formatted(boundaryCode);
         String xml = """
@@ -102,7 +102,7 @@ class ErpSyncDelegateIntegrationTest extends IntegrationTestBase {
                     <sequenceFlow id="ok" sourceRef="syncErp" targetRef="manualReview"/>
                     %s
                     <userTask id="manualReview" name="人工複核"
-                              flowable:assignee="mgr001" flowable:formKey="leave-review"/>
+                              flowable:assignee="mgr001" flowable:formKey="leave-request"/>
                     <sequenceFlow id="okEnd" sourceRef="manualReview" targetRef="end"/>
                     <endEvent id="end"/>
                   </process>

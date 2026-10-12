@@ -188,8 +188,9 @@ class StartProcessFormDataCompensationTest extends IntegrationTestBase {
     }
 
     private static Map<String, Object> leaveValues(String reason) {
+        // uni-form canonical：dateRange 是 {start,end}，不是 "a~b"。
         return Map.of("leaveType", "annual",
-                "dateRange", "2026-10-01~2026-10-03",
+                "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
                 "reason", reason);
     }
 

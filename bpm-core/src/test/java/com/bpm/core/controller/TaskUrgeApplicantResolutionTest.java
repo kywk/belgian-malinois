@@ -3,12 +3,16 @@ package com.bpm.core.controller;
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.external.ExternalActorGuard;
+import com.bpm.core.form.service.FormService;
 import com.bpm.core.notify.NotifyPublisher;
 import com.bpm.core.security.ProcessAccessGuard;
 import com.bpm.core.security.TaskHolderGuard;
 import com.bpm.core.service.ApplicantResolver;
 import com.bpm.core.service.BpmPermissionService;
 import com.bpm.core.service.OnBehalfOfLookup;
+import com.bpm.core.uniform.FormAccessResolver;
+import com.bpm.core.uniform.FormContextResolver;
+import com.bpm.core.uniform.FormSubmissionService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
@@ -75,7 +79,10 @@ class TaskUrgeApplicantResolutionTest {
     private final TaskController controller = new TaskController(
             taskService, runtimeService, repositoryService, auditPublisher, accessGuard,
             holderGuard, actorGuard, new ApplicantResolver(permService),
-            onBehalfOfLookup, notifyPublisher, redis);
+            onBehalfOfLookup, notifyPublisher, redis,
+            // uni-form 重構新增的相依：催辦路徑用不到，mock 即可。
+            mock(FormService.class), mock(FormAccessResolver.class),
+            mock(FormContextResolver.class), mock(FormSubmissionService.class));
 
     /** 每個測試的起點：一個存在、系統發起、沒有 onBehalfOf 的案件。 */
     @BeforeEach

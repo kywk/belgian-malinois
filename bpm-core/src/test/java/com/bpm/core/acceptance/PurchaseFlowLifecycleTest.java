@@ -16,6 +16,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -88,12 +89,16 @@ class PurchaseFlowLifecycleTest extends IntegrationTestBase {
     }
 
     private Started startWithFormData(String reason, int amount) throws Exception {
+        return startWithFormData(purchaseValues(reason, amount));
+    }
+
+    private Started startWithFormData(Map<String, Object> values) throws Exception {
         String body = objectMapper.writeValueAsString(Map.of(
                 "processDefinitionKey", PURCHASE,
                 "businessKey", "purchase-e2e-" + UUID.randomUUID(),
                 "formData", Map.of(
                         "formDefinitionId", PURCHASE_FORM_KEY,
-                        "dataJson", objectMapper.writeValueAsString(purchaseValues(reason, amount)))));
+                        "dataJson", objectMapper.writeValueAsString(values))));
         String response = mockMvc.perform(post("/api/process-instances")
                         .header("X-User-Id", APPLICANT)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -313,7 +318,11 @@ class PurchaseFlowLifecycleTest extends IntegrationTestBase {
     void financeReturnThenReviseThenResubmitCompletesAfterBothStagesAgain() throws Exception {
         String original = "財務退回前-" + UUID.randomUUID();
         String revised = "補件後-" + UUID.randomUUID();
-        Started s = startWithFormData(original, 7000);
+        // ⚠️ 補件只能改 reason（Access Profile：fill／readonly＋reason editable），
+        // 其餘欄位必須原值送回。purchaseValues() 每次都會產生新的隨機 itemName，
+        // 所以這裡以原始值為底、只換 reason。
+        Map<String, Object> originalValues = purchaseValues(original, 7000);
+        Started s = startWithFormData(originalValues);
 
         Task finance = managerApproveAndReachFinance(s.pid());
         // 一般退回（無 returnTo）：財務 → revisionFromFinance（上一站）。
@@ -327,16 +336,19 @@ class PurchaseFlowLifecycleTest extends IntegrationTestBase {
                 .isEqualTo("revisionFromFinance");
         assertThat(revision.getAssignee()).isEqualTo(APPLICANT);
 
-        // 補件（reason 是 seed schema 中 editableOnRevision=true 的欄位）。
+        // 補件＋重送：完成補件任務並附帶 formData（uni-form 重構的唯一提交入口）。
+        Map<String, Object> revisedValues = new LinkedHashMap<>(originalValues);
+        revisedValues.put("reason", revised);
         String reviseBody = objectMapper.writeValueAsString(Map.of(
-                "dataJson", objectMapper.writeValueAsString(purchaseValues(revised, 7000))));
-        mockMvc.perform(put("/api/form-data/{id}", s.formDataId())
+                "action", "complete",
+                "formData", Map.of("dataJson",
+                        objectMapper.writeValueAsString(revisedValues))));
+        mockMvc.perform(put("/api/tasks/{id}", revision.getId())
                         .header("X-User-Id", APPLICANT)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reviseBody))
                 .andExpect(status().isOk());
 
-        completeTask(revision.getId(), APPLICANT, "{\"action\":\"complete\"}");
         Task managerAgain = currentTask(s.pid());
         assertThat(managerAgain.getTaskDefinitionKey())
                 .as("財務退回補件後必須回主管（BPMN flowResubmit2），不是直接回財務")

@@ -4,6 +4,7 @@ import com.bpm.core.form.model.FormDefinition;
 import com.bpm.core.form.repository.FormDefinitionRepository;
 import com.bpm.core.support.IntegrationTestBase;
 import com.bpm.core.support.TestGatewayMockMvcCustomizer;
+import com.bpm.core.support.UniformTestDsl;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -127,7 +128,11 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
     /** 通配權限 {@code *} → {@code ROLE_ADMIN}。攻擊者想冒充的那個「看起來很有權威」的身分。 */
     private static final String ADMIN = "admin001";
 
-    private static final String SCHEMA = "{\\\"fields\\\":[{\\\"id\\\":\\\"amount\\\"}]}";
+    private static final String SCHEMA = UniformTestDsl.embedded("""
+            {"$uniform":"1.0","key":"identity-test","title":{"zh-TW":"測試表單"},
+             "requires":{"core":"^1.0"},
+             "root":[{"id":"n_amount","type":"number","key":"amount","label":"金額"}]}
+            """);
 
     @Autowired
     private FormDefinitionRepository defRepo;
@@ -344,7 +349,8 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
         // 沒有非空斷言的話，這條測試分不出 400 來自哪一個 ——
         // 而分不出來就等於沒驗到「守衛排在 service 之前」這件事。
         var res = post("/api/forms", DESIGNER,
-                createBody(formKey, "被改掉的名字", "{\\\"fields\\\":[{\\\"id\\\":\\\"injected\\\"}]}",
+                createBody(formKey, "被改掉的名字", UniformTestDsl.embedded(
+                                UniformTestDsl.withKeys(formKey, "injected")),
                         "\"createdBy\":\"" + ADMIN + "\""));
 
         assertThat(res.statusCode()).isEqualTo(400);

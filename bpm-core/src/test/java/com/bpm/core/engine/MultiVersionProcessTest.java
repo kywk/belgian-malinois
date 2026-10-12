@@ -2,6 +2,7 @@ package com.bpm.core.engine;
 
 import com.bpm.core.form.repository.FormDefinitionRepository;
 import com.bpm.core.support.IntegrationTestBase;
+import com.bpm.core.support.UniformTestDsl;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import org.flowable.engine.HistoryService;
@@ -401,7 +402,8 @@ class MultiVersionProcessTest extends IntegrationTestBase {
                         .header("X-User-Id", DESIGNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"改版後的審核表\","
-                                + "\"schemaJson\":\"{\\\"marker\\\":\\\"form-v" + expectedVersion + "\\\"}\"}"))
+                                + "\"schemaJson\":\"" + UniformTestDsl.embedded(
+                                        UniformTestDsl.withKeys(formKey, "markerV" + expectedVersion)) + "\"}"))
                 .andExpect(status().isOk());
         mockMvc.perform(post("/api/forms/{id}/publish", draftId)
                         .header("X-User-Id", DESIGNER))
@@ -413,7 +415,8 @@ class MultiVersionProcessTest extends IntegrationTestBase {
                         .header("X-User-Id", DESIGNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"formKey\":\"" + formKey + "\",\"name\":\"版本鎖測試表\","
-                                + "\"schemaJson\":\"{\\\"marker\\\":\\\"form-v1\\\"}\"}"))
+                                + "\"schemaJson\":\"" + UniformTestDsl.embedded(
+                                        UniformTestDsl.withKeys(formKey, "formV1")) + "\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(JSON.readTree(body).get("version").asInt()).isEqualTo(1);

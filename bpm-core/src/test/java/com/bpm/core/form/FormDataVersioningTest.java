@@ -9,12 +9,14 @@ import org.flowable.task.api.Task;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.sql.PreparedStatement;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -22,46 +24,29 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * #58：{@code PUT /api/form-data/{id}} 的授權、退回狀態與版本化。
+ * 補件提交的版本化：{@code PUT /api/tasks/{id}} 帶 {@code formData}
+ * （uni-form 重構 §五 A5；改寫自 #58 的 {@code PUT /api/form-data/{id}} 版本）。
  *
- * <h2>裁決（使用者 2026-10-03）</h2>
+ * <h2>版本化語意不變，入口變了</h2>
  *
- * <ol>
- *   <li><b>授權：</b>只有該列的送件人（{@code existing.getSubmittedBy()}）
- *       可以修改；非送件人即使參與者也是 404（與「不存在」不可分辨）。</li>
- *   <li><b>狀態：</b>案件必須停在指派給呼叫者的補件關卡；否則 409。
- *       判定重用 {@code NotifyPublisher.isRevisionTask}（規則只有一份）。</li>
- *   <li><b>版本化：</b>修改新增一列（新 {@code dataJson}／{@code submittedAt}），
- *       舊列保留。{@code FORM_UPDATE} 稽核同時記新列與被取代的舊列 id。</li>
- * </ol>
- *
- * <h2>⚠️ 為什麼狀態碼走真實 HTTP</h2>
- *
- * <p>與 {@code FormDataAuthorizationTest} 同一理由：MockMvc 不做 error
- * dispatch，{@code ResponseStatusException} 的狀態碼是容器轉出來的。
- * 用 MockMvc 寫，守衛沒接線時這些測試照樣全綠。
+ * <p>「修改＝新增一列，舊列保留」是 #58 的裁決，重構沒有動它；
+ * 變的是入口：補件不再直接 PUT 表單資料，而是<b>完成補件任務</b>時
+ * 附帶提交。授權因此多了一層：能改的人必須先是該任務的持有人
+ * （{@code TaskHolderGuard}），不再是「任何知道 formDataId 的送件人」。
  *
  * <h2>每個拒絕測試都驗「資料真的沒變」</h2>
  *
- * <p>回 404／409 卻仍改了資料，比沒有守衛更危險 —— 所以除了狀態碼，
- * 每一條都直接回 {@link FormDataRepository} 與表單 DB 驗證後果
- * （列數、內容、稽核）。
- *
- * <h2>⚠️ 這個類別沒有覆蓋的事</h2>
- *
- * <ul>
- *   <li><b>schema 驗證</b>：{@code PUT} 仍然不驗 {@code dataJson} 是否符合
- *       {@code schemaJson}（#58 未納入，見 {@code FormDataController.submit}
- *       的已知落差說明）。本類別沿用既有測試的 {@code leave-form-v1}
- *       （查不到定義 → 略過驗證），因此對這條落差<b>沒有</b>證明力。</li>
- *   <li><b>前端</b>：目前沒有元件呼叫 {@code updateFormData}（見
- *       {@code bpm-frontend/src/services/formApi.js}）；補件畫面走的是
- *       {@code updateTask} 的 variables 路徑。多列的影響因此不在畫面端。</li>
- *   <li><b>併發</b>：狀態檢查與寫入之間沒有鎖，補件任務在同一瞬間被完成時，
- *       仍可能寫入一列「完成後才到」的版本。</li>
- * </ul>
+ * <p>回 404／400 卻仍改了資料，比沒有守衛更危險 —— 所以除了狀態碼，
+ * 每一條都直接回表單 DB 與稽核 DB 驗證後果（列數、內容、稽核）。
  */
 class FormDataVersioningTest extends IntegrationTestBase {
+
+    private static final String APPLICANT = "user001";
+    private static final String MANAGER = "mgr001";
+    private static final String LEAVE = "leave-approval";
+
+    private static final String ORIGINAL_REASON = "原始事由";
+    private static final String REVISED_REASON = "補件後事由";
 
     @Autowired
     private RuntimeService runtimeService;
@@ -72,12 +57,12 @@ class FormDataVersioningTest extends IntegrationTestBase {
     @Autowired
     private FormDataRepository dataRepo;
 
+    @Autowired
+    private ObjectMapper objectMapper;
+
     private final HttpClient http = HttpClient.newHttpClient();
 
-    private static final String ORIGINAL = "{\"salary\":\"95000\"}";
-    private static final String REVISED = "{\"salary\":\"88000\"}";
-
-    // ── HTTP 小工具（走真實 HTTP，見類別註解）───────────────────────
+    // ── HTTP 小工具（走真實 HTTP，見既有測試的類別註解）──────────────
 
     private HttpResponse<String> send(String method, String path, String userId, String body)
             throws Exception {
@@ -104,20 +89,24 @@ class FormDataVersioningTest extends IntegrationTestBase {
 
     // ── 情境小工具 ──────────────────────────────────────────────────
 
-    private String startCase(String initiator) {
-        return runtimeService.startProcessInstanceByKey("leave-approval",
-                Map.of("initiator", initiator, "leaveType", "annual", "days", 1)).getId();
+    private static String leaveValues(String reason) throws Exception {
+        return new ObjectMapper().writeValueAsString(Map.of(
+                "leaveType", "annual",
+                "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
+                "reason", reason));
     }
 
-    /** 以 HTTP 送出一筆表單資料（走完整守衛），回傳記錄 id。 */
-    private String submitFormData(String pid, String userId) throws Exception {
-        String body = "{\"formDefinitionId\":\"leave-form-v1\","
-                + "\"processInstanceId\":\"" + pid + "\","
-                + "\"dataJson\":\"" + ORIGINAL.replace("\"", "\\\"") + "\"}";
-        var res = post("/api/form-data", userId, body);
-        assertThat(res.statusCode()).as("前置條件：送出表單資料應成功，實際回 " + res.body())
+    /** 以 #60 的 formData 契約啟動請假流程（formKey 由伺服器解析）。 */
+    private String startWithFormData(String reason) throws Exception {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("processDefinitionKey", LEAVE);
+        payload.put("formData", Map.of("formDefinitionId", "leave-request",
+                "dataJson", leaveValues(reason)));
+        var res = post("/api/process-instances", APPLICANT,
+                objectMapper.writeValueAsString(payload));
+        assertThat(res.statusCode()).as("前置條件：啟動＋表單落地應成功，實際 " + res.body())
                 .isEqualTo(200);
-        return field(res.body(), "id");
+        return field(res.body(), "processInstanceId");
     }
 
     /** 主管退回 → 補件任務指派給申請人本人（assignee = 申請人）。 */
@@ -129,18 +118,20 @@ class FormDataVersioningTest extends IntegrationTestBase {
         return revision;
     }
 
-    private static String reviseBody(String dataJson) {
-        return "{\"dataJson\":\"" + dataJson.replace("\"", "\\\"") + "\"}";
+    private String completeBody(String dataJson) throws Exception {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("action", "complete");
+        payload.put("formData", Map.of("dataJson", dataJson));
+        return objectMapper.writeValueAsString(payload);
     }
 
     private static String field(String json, String name) {
-        var m = java.util.regex.Pattern.compile("\"" + name + "\":\"([^\"]*)\"");
-        var matcher = m.matcher(json);
-        return matcher.find() ? matcher.group(1) : null;
+        var m = java.util.regex.Pattern.compile("\"" + name + "\":\"([^\"]*)\"").matcher(json);
+        return m.find() ? m.group(1) : null;
     }
 
-    private String dataJsonOf(String recordId) {
-        return dataRepo.findById(recordId).orElseThrow().getDataJson();
+    private String latestDataJsonOf(String pid) {
+        return dataRepo.findByProcessInstanceIdOrderBySubmittedAtDesc(pid).get(0).getDataJson();
     }
 
     private int rowCountOf(String pid) {
@@ -173,13 +164,6 @@ class FormDataVersioningTest extends IntegrationTestBase {
         return count.get();
     }
 
-    /**
-     * 等一筆含 {@code formDataId} 的 {@code FORM_UPDATE} detail。
-     *
-     * <p>稽核寫入掛在交易的 beforeCommit，正常在回應之前就完成；
-     * 保留輪詢只是與既有測試（{@code FormDataAuthorizationTest}）同一形狀，
-     * 避免時序抖動造成假紅。
-     */
     private static String awaitFormUpdateDetail(String formDataId) throws InterruptedException {
         var out = new AtomicReference<String>();
         long deadline = System.currentTimeMillis() + 5_000;
@@ -197,117 +181,117 @@ class FormDataVersioningTest extends IntegrationTestBase {
         return out.get();
     }
 
-    // ── a) 送件人＋退回狀態 → 版本化成功 ────────────────────────────
+    // ── a) 退回到補件 → 版本化成功 ──────────────────────────────────
 
     @Test
-    @DisplayName("#58：送件人在退回狀態修改 → 200、新列生效、舊列保留")
-    void submitterCanReviseOnReturnedCaseAndHistoryIsKept() throws Exception {
-        String pid = startCase("user001");
-        String originalId = submitFormData(pid, "user001");
+    @DisplayName("補件提交 → 200、新列生效、舊列保留、submittedBy 沿用申請人")
+    void revisionCreatesNewRowAndKeepsHistory() throws Exception {
+        String pid = startWithFormData(ORIGINAL_REASON);
+        int rowsAfterStart = rowCountOf(pid);
         Task revision = returnToApplicant(pid);
         assertThat(revision.getAssignee())
                 .as("補件關卡指派給申請人本人（${applicantResolver}）")
-                .isEqualTo("user001");
+                .isEqualTo(APPLICANT);
 
-        var res = put("/api/form-data/" + originalId, "user001", reviseBody(REVISED));
+        var res = put("/api/tasks/" + revision.getId(), APPLICANT,
+                completeBody(leaveValues(REVISED_REASON)));
 
         assertThat(res.statusCode()).as("實際回 " + res.body()).isEqualTo(200);
-        String newId = field(res.body(), "id");
-        assertThat(newId)
-                .as("回傳的必須是新列，不是被覆寫的舊列")
-                .isNotEqualTo(originalId);
-        assertThat(dataJsonOf(newId)).isEqualTo(REVISED);
+        String newId = field(res.body(), "formDataId");
+        assertThat(newId).as("回應必須帶新列的 id").isNotBlank();
+        assertThat(latestDataJsonOf(pid)).contains(REVISED_REASON);
         assertThat(dataRepo.findById(newId).orElseThrow().getSubmittedBy())
-                .as("新列沿用送件人，body 不是身分來源")
-                .isEqualTo("user001");
-        assertThat(dataJsonOf(originalId))
-                .as("原始送件必須完整保留 —— 這是版本化的全部意義")
-                .isEqualTo(ORIGINAL);
-        assertThat(rowCountOf(pid)).as("同案件應有兩列：原始＋修改版").isEqualTo(2);
+                .as("新列沿用送件人（補件者就是申請人；誰最後改的由稽核記錄）")
+                .isEqualTo(APPLICANT);
+        assertThat(rowCountOf(pid))
+                .as("原始送件＋補件版必須各留一列（版本化，不覆寫）")
+                .isEqualTo(rowsAfterStart + 1);
 
-        var list = get("/api/form-data/" + pid, "user001");
+        var list = get("/api/form-data/" + pid, APPLICANT);
         assertThat(list.statusCode()).isEqualTo(200);
-        assertThat(list.body()).contains(originalId).contains(newId);
-        assertThat(list.body().indexOf(newId))
+        assertThat(latestDataJsonOf(pid))
                 .as("getByProcess 依 submittedAt 遞減：最新版本排最前面")
-                .isLessThan(list.body().indexOf(originalId));
+                .contains(REVISED_REASON);
+        assertThat(list.body()).contains(newId);
     }
 
-    // ── b) 非送件人的參與者 → 404 ───────────────────────────────────
+    // ── b) 非持有人 → 404 ───────────────────────────────────────────
 
     @Test
-    @DisplayName("#58：非送件人的參與者修改 → 404，資料與列數不變")
-    void participantWhoIsNotSubmitterIsNotFound() throws Exception {
-        String pid = startCase("user001");
-        String originalId = submitFormData(pid, "user001");
-        returnToApplicant(pid);
-        // mgr001 剛完成 managerReview，是這個案件的參與者（歷史任務）；
-        // 但送件人是 user001。參與者身分不再是充分條件。
+    @DisplayName("非持有人（即使參與者）提交補件 → 404，資料與列數不變")
+    void nonHolderCannotSubmitRevision() throws Exception {
+        String pid = startWithFormData(ORIGINAL_REASON);
+        Task revision = returnToApplicant(pid);
         int rowsBefore = rowCountOf(pid);
 
-        var res = put("/api/form-data/" + originalId, "mgr001", reviseBody(REVISED));
+        // mgr001 剛完成 managerReview，是這個案件的參與者；
+        // 但補件任務的持有人是申請人 —— 任務層守衛先擋下（404）。
+        var res = put("/api/tasks/" + revision.getId(), MANAGER,
+                completeBody(leaveValues(REVISED_REASON)));
 
         assertThat(res.statusCode())
-                .as("非送件人（即使參與者）與『記錄不存在』不可分辨，一律 404")
+                .as("非持有人與『任務不存在』不可分辨，一律 404")
                 .isEqualTo(404);
-        assertThat(dataJsonOf(originalId)).isEqualTo(ORIGINAL);
-        assertThat(rowCountOf(pid)).as("被拒的修改不得新增任何列").isEqualTo(rowsBefore);
+        assertThat(latestDataJsonOf(pid)).contains(ORIGINAL_REASON);
+        assertThat(rowCountOf(pid)).as("被拒的提交不得新增任何列").isEqualTo(rowsBefore);
+        assertThat(taskService.createTaskQuery().taskId(revision.getId()).count())
+                .as("被拒的提交不得完成任務").isEqualTo(1);
     }
 
-    // ── c) 非退回狀態 → 409 ─────────────────────────────────────────
+    // ── c) 檢視模式的任務不能提交 ───────────────────────────────────
 
     @Test
-    @DisplayName("#58：審核中（非退回）送件人修改 → 409，資料不變")
-    void notReturnedCaseIsConflict() throws Exception {
-        String pid = startCase("user001");
-        String originalId = submitFormData(pid, "user001");
-        // 案件停在 managerReview（assignee mgr001）：user001 是送件人與發起人，
-        // 通過授權，但沒有指派給他的補件任務 → 狀態衝突。
+    @DisplayName("審核中（view 節點）提交 → 400，資料與列數不變")
+    void nonFillTaskIsRejected() throws Exception {
+        String pid = startWithFormData(ORIGINAL_REASON);
+        Task managerTask = taskService.createTaskQuery().processInstanceId(pid).singleResult();
         int rowsBefore = rowCountOf(pid);
 
-        var res = put("/api/form-data/" + originalId, "user001", reviseBody(REVISED));
+        var res = put("/api/tasks/" + managerTask.getId(), MANAGER,
+                completeBody(leaveValues(REVISED_REASON)));
 
         assertThat(res.statusCode())
-                .as("你是這筆資料的主人，但案件現在不是退回狀態 —— 是狀態衝突，不是權限問題")
-                .isEqualTo(409);
-        assertThat(dataJsonOf(originalId)).isEqualTo(ORIGINAL);
+                .as("主管審核是 view 節點：審核意見走 variables，不表單資料")
+                .isEqualTo(400);
+        assertThat(res.body()).contains("檢視模式");
         assertThat(rowCountOf(pid)).isEqualTo(rowsBefore);
+        assertThat(taskService.createTaskQuery().taskId(managerTask.getId()).count()).isEqualTo(1);
     }
 
-    // ── d) 已結束案件 → 409（自選並說明）────────────────────────────
+    // ── d) 已結束案件 → 任務不存在（404）────────────────────────────
 
     @Test
-    @DisplayName("#58：已結束案件修改 → 409（送件人仍通過授權，差別在狀態）")
-    void finishedCaseIsConflict() throws Exception {
-        String pid = startCase("user001");
-        String originalId = submitFormData(pid, "user001");
-        Task mgr = taskService.createTaskQuery().processInstanceId(pid).singleResult();
-        taskService.complete(mgr.getId(), Map.of("approved", true, "rejected", false));
+    @DisplayName("已結束案件的補件任務 → 404（任務已隨案件消失）")
+    void finishedCaseHasNoRevisionTask() throws Exception {
+        String pid = startWithFormData(ORIGINAL_REASON);
+        Task revision = returnToApplicant(pid);
+        // 補件完成 → 回主管 → 核准結案。
+        put("/api/tasks/" + revision.getId(), APPLICANT, completeBody(leaveValues(REVISED_REASON)));
+        Task managerTask = taskService.createTaskQuery().processInstanceId(pid).singleResult();
+        taskService.complete(managerTask.getId(), Map.of("approved", true, "rejected", false));
         assertThat(runtimeService.createProcessInstanceQuery().processInstanceId(pid).count())
                 .as("前置條件：案件應已結束").isZero();
 
-        var res = put("/api/form-data/" + originalId, "user001", reviseBody(REVISED));
+        var res = put("/api/tasks/" + revision.getId(), APPLICANT,
+                completeBody(leaveValues("再改一次")));
 
-        // 刻意選 409 而不是 404：user001 仍是發起人（歷史變數）與送件人，
-        // 授權成立；「案件結束了」是狀態問題。404 會把「已結束」與
-        // 「不是你的」塌成同一個回應，而這兩種情況該做的事正好相反。
-        assertThat(res.statusCode()).isEqualTo(409);
-        assertThat(dataJsonOf(originalId)).isEqualTo(ORIGINAL);
-        assertThat(rowCountOf(pid)).isEqualTo(1);
+        assertThat(res.statusCode()).isEqualTo(404);
+        assertThat(latestDataJsonOf(pid)).contains(REVISED_REASON);
     }
 
     // ── e) 稽核串起新舊列 ───────────────────────────────────────────
 
     @Test
-    @DisplayName("#58：FORM_UPDATE 稽核同時含新列與被取代的舊列 id")
+    @DisplayName("FORM_UPDATE 稽核同時含新列與被取代的舊列 id")
     void auditLinksNewAndSupersededRows() throws Exception {
-        String pid = startCase("user001");
-        String originalId = submitFormData(pid, "user001");
-        returnToApplicant(pid);
+        String pid = startWithFormData(ORIGINAL_REASON);
+        String originalId = dataRepo.findByProcessInstanceIdOrderBySubmittedAtDesc(pid).get(0).getId();
+        Task revision = returnToApplicant(pid);
 
-        var res = put("/api/form-data/" + originalId, "user001", reviseBody(REVISED));
+        var res = put("/api/tasks/" + revision.getId(), APPLICANT,
+                completeBody(leaveValues(REVISED_REASON)));
         assertThat(res.statusCode()).isEqualTo(200);
-        String newId = field(res.body(), "id");
+        String newId = field(res.body(), "formDataId");
 
         String detail = awaitFormUpdateDetail(newId);
         assertThat(detail)
@@ -320,26 +304,23 @@ class FormDataVersioningTest extends IntegrationTestBase {
     // ── f) 被拒零副作用 ─────────────────────────────────────────────
 
     @Test
-    @DisplayName("#58：被拒的修改（409 與 404）不留資料列、不寫 FORM_UPDATE 稽核")
-    void rejectedUpdateLeavesNoSideEffects() throws Exception {
-        String pid = startCase("user001");
-        String originalId = submitFormData(pid, "user001");
+    @DisplayName("被拒的提交（readonly 篡改）不留資料列、不寫 FORM_UPDATE 稽核")
+    void rejectedSubmissionLeavesNoSideEffects() throws Exception {
+        String pid = startWithFormData(ORIGINAL_REASON);
+        Task revision = returnToApplicant(pid);
         int rowsBefore = rowCountOf(pid);
-        int userAuditBefore = auditCountOf("user001", "FORM_UPDATE");
-        int mgrAuditBefore = auditCountOf("mgr001", "FORM_UPDATE");
+        int userAuditBefore = auditCountOf(APPLICANT, "FORM_UPDATE");
 
-        // (1) 送件人，但案件還在審核中 → 409
-        assertThat(put("/api/form-data/" + originalId, "user001", reviseBody(REVISED)).statusCode())
-                .isEqualTo(409);
+        // leaveType 在補件節點是 readonly，篡改必須擋下。
+        var res = put("/api/tasks/" + revision.getId(), APPLICANT,
+                completeBody("{\"reason\":\"補件\",\"leaveType\":\"sick\"}"));
 
-        // (2) 案件退回後，非送件人的參與者 → 404
-        returnToApplicant(pid);
-        assertThat(put("/api/form-data/" + originalId, "mgr001", reviseBody(REVISED)).statusCode())
-                .isEqualTo(404);
-
-        assertThat(dataJsonOf(originalId)).isEqualTo(ORIGINAL);
-        assertThat(rowCountOf(pid)).as("兩次拒絕都不得留下任何列").isEqualTo(rowsBefore);
-        assertThat(auditCountOf("user001", "FORM_UPDATE")).isEqualTo(userAuditBefore);
-        assertThat(auditCountOf("mgr001", "FORM_UPDATE")).isEqualTo(mgrAuditBefore);
+        assertThat(res.statusCode()).isEqualTo(400);
+        assertThat(latestDataJsonOf(pid)).contains(ORIGINAL_REASON);
+        assertThat(rowCountOf(pid)).as("被拒的提交不得留下任何列").isEqualTo(rowsBefore);
+        assertThat(auditCountOf(APPLICANT, "FORM_UPDATE"))
+                .as("沒有變更發生就不得宣稱 FORM_UPDATE")
+                .isEqualTo(userAuditBefore);
+        assertThat(taskService.createTaskQuery().taskId(revision.getId()).count()).isEqualTo(1);
     }
 }
