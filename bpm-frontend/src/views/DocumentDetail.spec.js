@@ -190,6 +190,10 @@ describe('DocumentDetail：表單載入失敗', () => {
     expect(wrapper.text()).toContain('表單載入失敗')
     expect(wrapper.text()).toContain('此任務不是動態表單任務')
     expect(wrapper.findComponent(UfRenderer).exists()).toBe(false)
+    // fail-closed：Envelope 不在時不得露出任何任務動作（尤其審核按鈕）。
+    expect(buttonWithText(wrapper, '同意')).toBeFalsy()
+    expect(buttonWithText(wrapper, '補件重送')).toBeFalsy()
+    expect(wrapper.text()).toContain('表單載入完成後才能執行任務操作')
   })
 
   it('回應缺 envelope.data（格式不正確）也不破畫面', async () => {

@@ -107,15 +107,18 @@ async function handlePreview() {
 }
 
 onMounted(async () => {
-  const id = route.params.id
-  if (!id) {
+  // 路由參數是 formKey（FormList 以 formKey 導頁）；version 由 query 指明
+  // 精確版本 —— 沒有 version 時 API 回最新 published，會把 draft 載成別版。
+  const formKeyParam = route.params.id
+  if (!formKeyParam) {
     dsl.value = emptyDocument()
     return
   }
+  const version = route.query?.version
   loading.value = true
   try {
-    // 沿用現狀：GET /api/forms/{formKey}，回傳定義（schemaJson 內容是 DSL）。
-    const def = await getFormSchema(id)
+    // GET /api/forms/{formKey}?version=，回傳定義（schemaJson 內容是 DSL）。
+    const def = await getFormSchema(formKeyParam, version)
     const doc = typeof def.schemaJson === 'string' ? JSON.parse(def.schemaJson) : def.schemaJson
     dsl.value = doc
     formId.value = def.id ?? null

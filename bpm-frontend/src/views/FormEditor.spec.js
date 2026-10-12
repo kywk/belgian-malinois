@@ -15,10 +15,13 @@ import { installUniformPlugin } from '../uniform/setup.js'
  *     回應的 Envelope 用 UfRenderer 畫在 dialog 裡。
  */
 
-const { pushMock } = vi.hoisted(() => ({ pushMock: vi.fn() }))
+const { pushMock, routeRef } = vi.hoisted(() => ({
+  pushMock: vi.fn(),
+  routeRef: { value: { params: { id: 'leave-request' } } },
+}))
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ params: { id: 'leave-request' } }),
+  useRoute: () => routeRef.value,
   useRouter: () => ({ push: pushMock }),
 }))
 
@@ -62,6 +65,7 @@ function mountPage() {
 
 beforeEach(() => {
   document.querySelectorAll('.el-message').forEach((node) => node.remove())
+  routeRef.value = { params: { id: 'leave-request' } }
   http.get.mockReset()
   http.put.mockReset()
   http.post.mockReset()
@@ -88,6 +92,17 @@ describe('FormEditor：載入既有表單', () => {
     expect(designer.props('palette')).toEqual(
       ['text', 'textarea', 'number', 'select', 'radio', 'checkbox', 'boolean', 'date', 'dateRange', 'divider', 'freeText'],
     )
+  })
+
+  it('query 帶 version 時精確載入該版本（草稿不會被載成最新 published）', async () => {
+    routeRef.value = { params: { id: 'leave-request' }, query: { version: '3' } }
+    const wrapper = mountPage()
+    await flush()
+    await flush()
+
+    expect(http.get).toHaveBeenCalledWith('/api/forms/leave-request', { params: { version: '3' } })
+    const designer = wrapper.findComponent(UfDesigner)
+    expect(designer.exists()).toBe(true)
   })
 })
 

@@ -62,18 +62,22 @@
     </el-row>
 
     <el-card style="margin-top: 16px">
-      <!-- Revision task (Envelope.mode=fill): show resubmit button -->
+      <!-- 權限的唯一來源是 Envelope.mode：fill＝補件、view＝審核。
+           ⚠️ fail-closed：Envelope 還沒到（載入中／失敗／此任務無表單）時
+           「不顯示任何任務動作」——以任務名稱猜測會讓補件任務在後端失聯時
+           露出一整排審核按鈕（同意／拒絕），而補件任務的受指派人是申請人本人。
+           載入狀態與失敗原因由上方表單區呈現。 -->
       <el-space v-if="isRevision">
         <el-button type="primary" :loading="submitting" @click="handleRevisionSubmit()">補件重送</el-button>
       </el-space>
-      <!-- Review task (Envelope.mode=view): show approval actions -->
-      <el-space v-else>
+      <el-space v-else-if="envelope?.mode === 'view'">
         <el-button type="success" @click="openAction('approve')">同意</el-button>
         <el-button type="warning" @click="openAction('return')">退件</el-button>
         <el-button type="danger" @click="openAction('reject')">拒絕</el-button>
         <el-button @click="openAction('delegate')">轉發</el-button>
         <el-button @click="csVisible = true">加簽</el-button>
       </el-space>
+      <p v-else style="color:#909399;margin:0">{{ actionHint }}</p>
     </el-card>
 
     <ActionDialog v-model:visible="actionVisible" :action="currentAction"
@@ -109,8 +113,8 @@ const currentAction = ref('')
 
 // ── uni-form Envelope ────────────────────────────────────────────
 // envelope.mode 是唯一的權限來源（fill＝補件、view＝審核），
-// 不再從任務名稱推測；envelope 載入失敗時才退回舊的任務名稱判斷，
-// 至少讓補件任務還看得到按鈕（載入錯誤已在表單區顯示）。
+// 不再從任務名稱推測；Envelope 未載入時任務動作一律不顯示（fail-closed），
+// 載入狀態與失敗原因呈現在表單區。
 const envelope = ref(null)
 const formData = ref({})
 const formErrors = ref([])
@@ -120,9 +124,12 @@ const rendererRef = ref()
 const submitting = ref(false)
 
 const isExternal = computed(() => task.value?.formKey?.startsWith('external:'))
-// envelope.mode 是唯一的權限來源（計畫 §五 A.1）：fill＝補件、view＝審核。
-// Envelope 還沒到（載入中／失敗）時不猜 —— 表單區會顯示載入狀態或錯誤原因。
 const isRevision = computed(() => envelope.value?.mode === 'fill')
+const actionHint = computed(() =>
+  !task.value?.formKey || isExternal.value
+    ? '此任務沒有動態表單。'
+    : '表單載入完成後才能執行任務操作；載入失敗請重新整理。',
+)
 
 function openAction(action) {
   currentAction.value = action
