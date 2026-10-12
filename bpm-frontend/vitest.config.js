@@ -1,5 +1,8 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+
+const uniformSpec = fileURLToPath(new URL('./node_modules/@nanshan/uniform-spec/dist/spec', import.meta.url))
 
 /**
  * 前端測試設定。
@@ -17,6 +20,11 @@ import vue from '@vitejs/plugin-vue'
  */
 export default defineConfig({
   plugins: [vue()],
+  resolve: {
+    alias: {
+      '@nanshan/uniform-spec/spec': uniformSpec,
+    },
+  },
   test: {
     environment: 'jsdom',
     globals: true,
