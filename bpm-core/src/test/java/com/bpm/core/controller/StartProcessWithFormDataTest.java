@@ -103,8 +103,10 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
     }
 
     private static Map<String, Object> leaveValues(String reason) {
+        // uni-form canonical：dateRange 是 {start,end} 物件，不是 "a~b" 字串
+        // （計畫 §一「值格式」列）。
         return Map.of("leaveType", "annual",
-                "dateRange", "2026-10-01~2026-10-03",
+                "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
                 "reason", reason);
     }
 
@@ -197,7 +199,9 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
 
         // 表單欄位推導成流程變數（spec §8.5：欄位 id == 變數名）。
         assertThat(runtimeService.getVariable(pid, "leaveType")).isEqualTo("annual");
-        assertThat(runtimeService.getVariable(pid, "dateRange")).isEqualTo("2026-10-01~2026-10-03");
+        assertThat(runtimeService.getVariable(pid, "dateRange"))
+                .as("canonical 格式落地：dateRange 是 {start,end} 物件")
+                .isEqualTo(Map.of("start", "2026-10-01", "end", "2026-10-03"));
         assertThat(runtimeService.getVariable(pid, "reason")).isEqualTo(marker);
         assertThat(runtimeService.getVariable(pid, "initiator"))
                 .as("表單推導不得蓋掉 server 寫入的 initiator").isEqualTo(USER);
@@ -232,28 +236,54 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
     // ── ② 拒絕路徑：400 且零副作用 ────────────────────────────────
 
     @Test
-    @DisplayName("#60：schema 違規（缺必填／型別錯）→ 400 指名欄位，零副作用")
+    @DisplayName("#60／uni-form：schema 違規（缺必填／型別錯）→ 400 指名欄位，零副作用")
     void schemaViolationIsRejectedWithoutSideEffects() throws Exception {
         FormDefinition def = leaveRequest();
         long instancesBefore = countRunning(LEAVE);
         long auditBefore = auditRowCount();
         int rowsBefore = formRowCount(def.getId());
 
-        // (a) 必填缺漏：前端未填事由時送的就是空字串。
+        // (a) 必填缺漏：整包資料沒有 reason 這個 key。
+        // ⚠️ 不是「空字串」：SDK 的 required 是 JSON Schema 的鍵存在性，
+        // "" 是一個合法的值（舊 FormSchemaValidator 把空白視為缺漏，
+        // uni-form 的語意不同 —— 這裡釘的是新語意）。
         var missing = post(startBody(def.getId(),
-                Map.of("leaveType", "annual", "dateRange", "2026-10-01~2026-10-03", "reason", "")));
+                Map.of("leaveType", "annual",
+                        "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"))));
         assertThat(missing.statusCode()).as("body=%s", missing.body()).isEqualTo(400);
         assertThat(missing.body()).contains("reason", "必填");
 
-        // (b) 型別不符。
+        // (b) 型別不符：select 的值必須是字串。
         var wrongType = post(startBody(def.getId(),
-                Map.of("leaveType", 123, "dateRange", "2026-10-01~2026-10-03", "reason", "x")));
+                Map.of("leaveType", 123,
+                        "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
+                        "reason", "x")));
         assertThat(wrongType.statusCode()).as("body=%s", wrongType.body()).isEqualTo(400);
-        assertThat(wrongType.body()).contains("leaveType", "select");
+        assertThat(wrongType.body()).contains("leaveType");
 
         assertThat(countRunning(LEAVE)).as("被拒的請求不得留下案件").isEqualTo(instancesBefore);
         assertThat(formRowCount(def.getId())).as("被拒的請求不得留下表單資料").isEqualTo(rowsBefore);
         assertThat(auditRowCount()).as("被拒的請求不得留下稽核").isEqualTo(auditBefore);
+    }
+
+    @Test
+    @DisplayName("uni-form：未知欄位（不在 DSL）→ 400 指名欄位，零副作用")
+    void unknownFieldIsRejectedWithoutSideEffects() throws Exception {
+        FormDefinition def = leaveRequest();
+        long before = countRunning(LEAVE);
+
+        var res = post(startBody(def.getId(),
+                Map.of("leaveType", "annual",
+                        "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
+                        "reason", "x",
+                        "salary", "95000")));
+
+        assertThat(res.statusCode()).as("body=%s", res.body()).isEqualTo(400);
+        assertThat(res.body())
+                .as("UX 需要知道要改哪個欄位：unknownField 的 SDK 錯誤物件不含 key，"
+                        + "由 FormSubmissionService 另外指名")
+                .contains("salary");
+        assertThat(countRunning(LEAVE)).as("被拒的請求不得留下案件").isEqualTo(before);
     }
 
     @Test
@@ -278,14 +308,16 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
     @Test
     @DisplayName("#60：formData 夾帶 initiator／onBehalfOf／_ 前綴 → 400 指名變數，零副作用")
     void protectedNamesInFormDataAreRejected() throws Exception {
+        FormDefinition def = leaveRequest();
         long before = countRunning(LEAVE);
-        // ⚠️ 用查不到的 formDefinitionId：schema 驗證會依 #55 的已知缺口略過，
-        // 因此這條測的是「推導變數的保護名單」本身。若用真實定義，未知欄位
-        // 會先被 schema 擋下，保護名單就沒有被單獨證明到。
-        String bogus = "no-such-definition-" + UUID.randomUUID();
 
+        // ⚠️ 用真實定義：受保護變數的檢查必須排在 DSL 內容驗證<b>之前</b>
+        // （這些 key 不在 DSL，若順序顛倒會先被 unknownField 擋下，
+        // 保護名單就沒有被單獨證明到）。舊版靠「查不到的 formDefinitionId
+        // 讓 schema 驗證略過」製造這個順序，uni-form 重構已消滅那條路徑
+        // （計畫 §五 A6），現在的順序是程式碼保證的。
         for (String name : List.of("initiator", "onBehalfOf", "_formVersions", "_externalSystemId")) {
-            var res = post(startBody(bogus, Map.of(name, "injected")));
+            var res = post(startBody(def.getId(), Map.of(name, "injected")));
 
             assertThat(res.statusCode())
                     .as("formData 夾帶 %s 必須 400；body=%s", name, res.body()).isEqualTo(400);
@@ -293,6 +325,22 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
             assertThat(countRunning(LEAVE))
                     .as("夾帶 %s 被拒時不得留下案件", name).isEqualTo(before);
         }
+    }
+
+    @Test
+    @DisplayName("uni-form：formDefinitionId 查不到定義 → 400（#55 的略過驗證缺口已消滅）")
+    void unresolvedFormDefinitionIsRejected() throws Exception {
+        long before = countRunning(LEAVE);
+        String bogus = "no-such-definition-" + UUID.randomUUID();
+
+        var res = post(startBody(bogus, Map.of("reason", "x")));
+
+        assertThat(res.statusCode())
+                .as("改動前：查不到的 id 會讓整包 dataJson 靜默略過驗證（#55 已知缺口）；"
+                        + "uni-form 重構後必須明確 400")
+                .isEqualTo(400);
+        assertThat(res.body()).contains(bogus);
+        assertThat(countRunning(LEAVE)).as("被拒的請求不得留下案件").isEqualTo(before);
     }
 
     @Test

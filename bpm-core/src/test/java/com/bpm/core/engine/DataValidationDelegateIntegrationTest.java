@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *       'DATA_VALIDATION_FAILED'」—— 錯誤碼就在訊息裡。</li>
  * </ol>
  *
- * <p>BPMN 的 {@code formKey} 用 {@code leave-review}（V5 migration 已 seed），
+ * <p>BPMN 的 {@code formKey} 用 {@code leave-request}（V7 的 DSL seed；review 表已於 V7 刪除），
  * 讓測試 BPMN 也能通過 lint 的 {@code formkey-exists} 規則。
  */
 class DataValidationDelegateIntegrationTest extends IntegrationTestBase {
@@ -62,7 +62,7 @@ class DataValidationDelegateIntegrationTest extends IntegrationTestBase {
                     </boundaryEvent>
                     <sequenceFlow id="alt" sourceRef="validationFailed" targetRef="manualReview"/>
                     <userTask id="manualReview" name="人工複核"
-                              flowable:assignee="mgr001" flowable:formKey="leave-review"/>
+                              flowable:assignee="mgr001" flowable:formKey="leave-request"/>
                     <sequenceFlow id="altEnd" sourceRef="manualReview" targetRef="end"/>
                 """ : "";
         String xml = """

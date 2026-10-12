@@ -25,6 +25,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 表單畫面看起來完全正常，只有表單「名稱」是問號。
  *
  * <p>這類錯誤無法用 H2 或單元測試抓到，必須對真實 MSSQL 跑真實的 seed 路徑。
+ *
+ * <p>⚠️ uni-form 重構（V7 migration）後 seed 只剩<b>兩張</b>申請表
+ * （review 表已刪除，權限改由 BPMN {@code uniform:access} 表達）；
+ * {@code schema_json} 的內容也換成 DSL。這條測試的命題不變：
+ * <b>中文必須原樣寫進 NVARCHAR</b>。
  */
 class FormSeedEncodingTest extends IntegrationTestBase {
 
@@ -33,33 +38,31 @@ class FormSeedEncodingTest extends IntegrationTestBase {
     void seededFormNamesKeepChinese() {
         List<String> names = new ArrayList<>();
         withFormConnection(c -> {
-            // 只查這 4 個 seed formKey，不查全表。
-            // 容器是 static 且由所有測試共用（見 FormServiceIntegrationTestBase），
-            // 其他測試會新增表單 —— 對全表計數會讓本測試隨執行順序而壞掉。
+            // 只查這 2 個 seed formKey，不查全表。
+            // 容器是 static 且由所有測試共用，其他測試會新增表單 ——
+            // 對全表計數會讓本測試隨執行順序而壞掉。
             try (Statement st = c.createStatement();
                  ResultSet rs = st.executeQuery(
                          "SELECT form_key, name FROM bpm_form_definition "
-                         + "WHERE form_key IN ('leave-request','leave-review',"
-                         + "'purchase-request','purchase-review') ORDER BY form_key")) {
+                         + "WHERE form_key IN ('leave-request','purchase-request') "
+                         + "ORDER BY form_key")) {
                 while (rs.next()) {
                     names.add(rs.getString("form_key") + "=" + rs.getString("name"));
                 }
             }
         });
 
-        assertThat(names).as("seed 應建立這 4 個表單定義").hasSize(4);
+        assertThat(names).as("seed 應建立這 2 個表單定義").hasSize(2);
         assertThat(names)
-                .as("表單名稱不得含問號 —— 出現問號就是 data.sql 少了 N 前綴")
+                .as("表單名稱不得含問號 —— 出現問號就是 migration 少了 N 前綴")
                 .noneMatch(n -> n.contains("?"))
                 .containsExactly(
                         "leave-request=請假申請表",
-                        "leave-review=請假審核表",
-                        "purchase-request=採購申請表",
-                        "purchase-review=採購審核表");
+                        "purchase-request=採購申請表");
     }
 
     @Test
-    @DisplayName("schema_json 的欄位 label 也必須保留中文")
+    @DisplayName("schema_json 是 DSL 且欄位 label 保留中文")
     void seededSchemaJsonKeepsChinese() {
         withFormConnection(c -> {
             try (Statement st = c.createStatement();
@@ -70,6 +73,9 @@ class FormSeedEncodingTest extends IntegrationTestBase {
                 // 這幾個 label 是前端畫面直接顯示的字串，壞掉會立刻被使用者看到。
                 assertThat(json).contains("假別", "請假期間", "事由");
                 assertThat(json).doesNotContain("?");
+                // V7 不再是扁平 fields[]：schemaJson 的世界只有 DSL。
+                assertThat(json).contains("\"$uniform\":\"1.0\"");
+                assertThat(json).doesNotContain("\"fields\"");
             }
         });
     }

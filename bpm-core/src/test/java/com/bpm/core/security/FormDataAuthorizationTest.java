@@ -6,9 +6,11 @@ import com.bpm.core.support.IntegrationTestBase;
 import com.bpm.core.support.TestGatewayMockMvcCustomizer;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
+import org.flowable.task.api.Task;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -16,6 +18,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.sql.PreparedStatement;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -23,39 +26,36 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * #72：{@code /api/form-data} 三個端點的授權與身分。
+ * {@code /api/form-data} 與任務表單提交的授權與身分
+ * （uni-form 重構後改寫自 #72／#58 的 {@code POST}／{@code PUT /api/form-data} 版本）。
  *
- * <h2>缺陷（三個，全部以真實 JWT 線上實測確認）</h2>
+ * <h2>入口變了，政策沒變</h2>
  *
- * <ol>
- *   <li><b>讀零檢查。</b>{@code GET /api/form-data/{pid}} 不看呼叫者是誰。
- *       實測 token=user001 讀 user002 的案件回 200，
- *       {@code dataJson: {"salary":"95000","reason":"機密"}}。
- *       依 spec §8.5 欄位 id == 流程變數名，所以這與
- *       {@code GET /api/process-instances/{id}/variables} 是<b>同一批資料的兩條路</b>；
- *       #71 擋下後者卻沒擋這裡，那一版的保護可被繞過。</li>
- *   <li><b>寫零擁有權檢查。</b>{@code PUT /api/form-data/{id}} 的路徑參數只有 id，
- *       {@code updateData} 內部 {@code findById} 之後完全不判斷關係。
- *       實測以 user001 改寫 user002 案件的表單回 200，之後 user002 讀到的
- *       就是 {@code {"salary":"9999999"}} —— 任何登入者都能改任何人的表單資料。</li>
- *   <li><b>{@code submittedBy} 來自 body。</b>它同時是稽核的 operatorId，
- *       所以稽核記的是冒用者，且被 hash chain 永久固定 ——
- *       與 #66 修掉的 {@code ProcessController.initiator}、
- *       {@code DocumentController.createdBy} 完全同型。</li>
- * </ol>
+ * <p>uni-form 重構移除了 {@code POST /api/form-data} 與
+ * {@code PUT /api/form-data/{id}}：表單資料一律隨流程動作落地
+ * （{@code POST /api/process-instances}／{@code PUT /api/tasks/{id}} 的
+ * {@code formData}）。因此本檔測的是：
+ *
+ * <ul>
+ *   <li><b>讀端（{@code GET /api/form-data/{pid}}）</b>：關係人 ∪
+ *       {@code audit:log:read}（旁路每次留痕），非關係人 404、
+ *       不認 {@code ROLE_ADMIN}。政策與 #72 逐字相同。</li>
+ *   <li><b>寫端</b>：不再有「body 指定 processInstanceId／submittedBy」的欄位，
+ *       而是任務層守衛（{@code TaskHolderGuard}）＋ {@code @CallerId}。
+ *       本檔把「非持有人 404、身分欄位不可由 body 冒用」釘住。</li>
+ * </ul>
  *
  * <h2>⚠️ 為什麼狀態碼走真實 HTTP</h2>
  *
  * <p>MockMvc <b>不做 error dispatch</b>：{@code ResponseStatusException} 會被
  * 容器轉成 ERROR dispatch 打到 {@code /error}，而狀態碼正是那條路徑決定的
- * （見 {@link ErrorDispatchTest}）。用 MockMvc 寫，這些測試在缺陷存在時
+ * （見 {@code ErrorDispatchTest}）。用 MockMvc 寫，這些測試在缺陷存在時
  * 會照樣全綠。
  *
  * <h2>每個守衛測試都驗「資料真的沒變」而不只看狀態碼</h2>
  *
  * <p>被拒絕的寫入如果回 404 卻仍然改了資料，那這個修補只是把攻擊從
- * 「看得到」變成「看不到錯誤訊息」。因此 PUT 與 POST 的每一條拒絕測試
- * 都直接回 {@link FormDataRepository} 與稽核 DB 驗證後果。
+ * 「看得到」變成「看不到錯誤訊息」。
  */
 class FormDataAuthorizationTest extends IntegrationTestBase {
 
@@ -67,6 +67,9 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
 
     @Autowired
     private FormDataRepository dataRepo;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     private final HttpClient http = HttpClient.newHttpClient();
 
@@ -104,10 +107,6 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
         return send("GET", path, userId, null);
     }
 
-    private HttpResponse<String> post(String path, String userId, String body) throws Exception {
-        return send("POST", path, userId, body);
-    }
-
     private HttpResponse<String> put(String path, String userId, String body) throws Exception {
         return send("PUT", path, userId, body);
     }
@@ -117,21 +116,28 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
                 Map.of("initiator", initiator, "leaveType", "annual", "days", 1)).getId();
     }
 
-    /** 以 HTTP 送出一筆表單資料（走完整的三道守衛），回傳記錄 id。 */
-    private String submitFormData(String pid, String userId, String submittedByJson) throws Exception {
-        String body = "{\"formDefinitionId\":\"leave-form-v1\","
-                + "\"processInstanceId\":\"" + pid + "\","
-                + submittedByJson
-                + "\"dataJson\":\"" + ORIGINAL.replace("\"", "\\\"") + "\"}";
-        var res = post("/api/form-data", userId, body);
-        assertThat(res.statusCode()).as("前置條件：送出表單資料應成功，實際回 " + res.body()).isEqualTo(200);
-        return res.body().replaceAll(".*\"id\":\"([^\"]*)\".*", "$1");
+    /** 直接種一筆表單資料（讀端測試用；寫端一律走任務完成）。 */
+    private String seedFormData(String pid, String submittedBy) {
+        FormData data = new FormData();
+        data.setFormDefinitionId("leave-request");
+        data.setProcessInstanceId(pid);
+        data.setSubmittedBy(submittedBy);
+        data.setDataJson(ORIGINAL);
+        return dataRepo.save(data).getId();
     }
 
-    private static String field(String json, String name) {
-        var m = java.util.regex.Pattern.compile("\"" + name + "\":\"([^\"]*)\"");
-        var matcher = m.matcher(json);
-        return matcher.find() ? matcher.group(1) : null;
+    /** 主管退回 → 補件任務（指派給申請人）。 */
+    private Task returnToApplicant(String pid) {
+        Task mgr = taskService.createTaskQuery().processInstanceId(pid).singleResult();
+        taskService.complete(mgr.getId(), Map.of("approved", false, "rejected", false));
+        return taskService.createTaskQuery().processInstanceId(pid).singleResult();
+    }
+
+    private String revisionBody(String dataJson) throws Exception {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("action", "complete");
+        payload.put("formData", Map.of("dataJson", dataJson));
+        return objectMapper.writeValueAsString(payload);
     }
 
     private String dataJsonOf(String recordId) {
@@ -205,7 +211,7 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
     @DisplayName("#72：非參與者讀他人案件的表單資料 → 404（不是 403）")
     void formDataOfAnotherPersonsCaseIsNotFound() throws Exception {
         String pid = startCase("user001");
-        submitFormData(pid, "user001", "");
+        seedFormData(pid, "user001");
 
         var res = get("/api/form-data/" + pid, OUTSIDER);
 
@@ -221,7 +227,7 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
     @DisplayName("#72：申請人讀自己案件的表單資料 → 200 且拿得到內容")
     void initiatorCanReadOwnFormData() throws Exception {
         String pid = startCase("user001");
-        String recordId = submitFormData(pid, "user001", "");
+        String recordId = seedFormData(pid, "user001");
 
         var res = get("/api/form-data/" + pid, "user001");
 
@@ -234,7 +240,7 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
     void auditorCanReadFormDataAndItIsRecorded() throws Exception {
         truncateAuditLog();
         String pid = startCase("user001");
-        submitFormData(pid, "user001", "");
+        seedFormData(pid, "user001");
 
         var res = get("/api/form-data/" + pid, AUDITOR);
 
@@ -251,8 +257,7 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
     void participantReadIsNotRecordedAsBypass() throws Exception {
         truncateAuditLog();
         String pid = startCase("user001");
-        String recordId = submitFormData(pid, "user001", "");
-        // 前置：送出本身寫的是 FORM_SUBMIT，不是 DATA_ACCESS。
+        String recordId = seedFormData(pid, "user001");
         assertThat(dataAccessCountOf("user001")).isZero();
 
         assertThat(get("/api/form-data/" + pid, "user001").statusCode()).isEqualTo(200);
@@ -267,7 +272,7 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
     @DisplayName("#72：持有 ROLE_ADMIN 但沒有 audit:log:read 的人不得讀他人案件的表單資料")
     void adminWildcardIsNotAnAuditBypass() throws Exception {
         String pid = startCase("user001");
-        submitFormData(pid, "user001", "");
+        seedFormData(pid, "user001");
 
         // 「能管理系統」與「能看全公司的薪資單」是不同的權責。
         // 與稽核旁路那條必須成組存在 —— 少了它，上一條可以靠
@@ -278,196 +283,101 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
         assertThat(res.body()).doesNotContain("95000");
     }
 
-    // ── ② PUT：擁有權 ──────────────────────────────────────────────
+    // ── ② 寫端：任務層守衛（表單資料的唯一入口）─────────────────────
 
     @Test
-    @DisplayName("#72：非參與者改寫他人案件的表單資料 → 404，且資料真的沒被改動")
-    void nonParticipantCannotOverwriteOthersFormData() throws Exception {
+    @DisplayName("#77：非持有人帶 formData 完成他人任務 → 404，資料零副作用")
+    void nonHolderCannotSubmitFormData() throws Exception {
         String pid = startCase("user001");
-        String recordId = submitFormData(pid, "user001", "");
-        assertThat(dataJsonOf(recordId)).isEqualTo(ORIGINAL);
-
-        var res = put("/api/form-data/" + recordId, OUTSIDER,
-                "{\"dataJson\":\"" + TAMPERED.replace("\"", "\\\"") + "\"}");
-
-        assertThat(res.statusCode())
-                .as("改動前：updateData 只做 findById，任何登入者都能改任何人的表單資料")
-                .isEqualTo(404);
-        assertThat(dataJsonOf(recordId))
-                .as("被拒的寫入不得有任何後果 —— 回 404 卻仍改到資料，比沒有守衛更危險")
-                .isEqualTo(ORIGINAL);
-    }
-
-    @Test
-    @DisplayName("#72＋#58：簽核人是參與者、但不是送件人 → 404，且資料真的沒被改動")
-    void currentApproverIsNotTheSubmitterAndMayNotUpdate() throws Exception {
-        // ⚠️ #58（2026-10-03 裁決）收窄了這裡的政策：改動前「參與者即可改」，
-        // 於是簽核人能改寫申請人填的薪資數字。現在只有該列的送件人能改，
-        // 參與者身分不再是充分條件 —— 這一條因此從 200 改釘 404。
-        String pid = startCase("user001");
-        String recordId = submitFormData(pid, "user001", "");
-
-        var res = put("/api/form-data/" + recordId, "mgr001",
-                "{\"dataJson\":\"" + TAMPERED.replace("\"", "\\\"") + "\"}");
-
-        assertThat(res.statusCode())
-                .as("mgr001 目前持有 managerReview，是參與者；但送件人是 user001")
-                .isEqualTo(404);
-        assertThat(dataJsonOf(recordId))
-                .as("被拒的寫入不得有任何後果")
-                .isEqualTo(ORIGINAL);
-    }
-
-    @Test
-    @DisplayName("#72：稽核旁路是唯讀的：持有 audit:log:read 也不能替別人的案件改表單")
-    void auditorCannotUpdate() throws Exception {
-        String pid = startCase("user001");
-        String recordId = submitFormData(pid, "user001", "");
-
-        var res = put("/api/form-data/" + recordId, AUDITOR,
-                "{\"dataJson\":\"" + TAMPERED.replace("\"", "\\\"") + "\"}");
-
-        assertThat(res.statusCode())
-                .as("稽核人員的職責是查閱，不是替案件補件或改寫別人填的薪資數字")
-                .isEqualTo(404);
-        assertThat(dataJsonOf(recordId)).isEqualTo(ORIGINAL);
-    }
-
-    @Test
-    @DisplayName("#72：不存在的表單資料 id → 404，且與「不屬於你」無法分辨")
-    void unknownRecordIsNotFound() throws Exception {
-        var res = put("/api/form-data/no-such-form-data-id", "user001",
-                "{\"dataJson\":\"{}\"}");
-
-        assertThat(res.statusCode())
-                .as("兩種拒絕同一個狀態碼，PUT 因此不能當成枚舉別人資料的探測工具")
-                .isEqualTo(404);
-    }
-
-    // ── ③ POST：寫入端的參與者檢查 ─────────────────────────────────
-
-    @Test
-    @DisplayName("#72：非參與者不得把表單資料塞進他人案件")
-    void nonParticipantCannotSubmitIntoAnotherPersonsCase() throws Exception {
-        String pid = startCase("user001");
-        int before = rowCountOf(pid);
-
-        var res = post("/api/form-data", OUTSIDER,
-                "{\"formDefinitionId\":\"leave-form-v1\",\"processInstanceId\":\"" + pid
-                        + "\",\"dataJson\":\"{\\\"salary\\\":\\\"1\\\"}\"}");
-
-        assertThat(res.statusCode())
-                .as("processInstanceId 是 body 的純資料欄位，但資料會被該案的參與者讀到")
-                .isEqualTo(404);
-        assertThat(rowCountOf(pid))
-                .as("被拒的請求不得在他人案件底下留下任何一列").isEqualTo(before);
-    }
-
-    @Test
-    @DisplayName("#72：POST 缺少 processInstanceId → 400，不得變成 500")
-    void missingProcessInstanceIdIsBadRequest() throws Exception {
-        var res = post("/api/form-data", "user001",
-                "{\"formDefinitionId\":\"leave-form-v1\",\"dataJson\":\"{}\"}");
-
-        // processInstanceId(null) 在 Flowable 的 query 上等同「沒有這個條件」，
-        // singleResult() 會變成對全公司案件取單筆 → FlowableException → 500。
-        assertThat(res.statusCode()).isEqualTo(400);
-    }
-
-    // ── ④ submittedBy 的身分冒用（backlog #72，與 #66 同型）────────
-
-    @Test
-    @DisplayName("#72：POST 帶冒用的 submittedBy → 400，且不得留下資料與稽核")
-    void submitCannotImpersonateSubmittedBy() throws Exception {
-        String pid = startCase("user001");
+        seedFormData(pid, "user001");
+        Task revision = returnToApplicant(pid);
         int rowsBefore = rowCountOf(pid);
 
-        var res = post("/api/form-data", "user001",
-                "{\"formDefinitionId\":\"leave-form-v1\",\"processInstanceId\":\"" + pid
-                        + "\",\"submittedBy\":\"" + ADMIN + "\",\"dataJson\":\"{}\"}");
+        var res = put("/api/tasks/" + revision.getId(), OUTSIDER,
+                revisionBody("{\"reason\":\"" + TAMPERED.replace("\"", "\\\"") + "\"}"));
 
         assertThat(res.statusCode())
-                .as("改動前：submittedBy 由 body 指定，冒用完全無阻")
-                .isEqualTo(400);
-        assertThat(res.body())
-                .as("訊息要說清楚要改什麼，否則呼叫端只會看到 400（#73）")
-                .contains("submittedBy");
-        assertThat(rowCountOf(pid)).isEqualTo(rowsBefore);
+                .as("任務層守衛（TaskHolderGuard）必須先於任何表單處理")
+                .isEqualTo(404);
+        assertThat(rowCountOf(pid)).as("被拒的請求不得在他人案件底下留下任何一列")
+                .isEqualTo(rowsBefore);
+        assertThat(taskService.createTaskQuery().taskId(revision.getId()).count())
+                .as("被拒的請求不得完成任務").isEqualTo(1);
     }
 
     @Test
-    @DisplayName("#72：POST 省略 submittedBy → 200，送件人與稽核 operatorId 都是登入者")
+    @DisplayName("#72：稽核旁路是唯讀的：持有 audit:log:read 也不能完成他人任務")
+    void auditorCannotWrite() throws Exception {
+        String pid = startCase("user001");
+        seedFormData(pid, "user001");
+        Task revision = returnToApplicant(pid);
+
+        var res = put("/api/tasks/" + revision.getId(), AUDITOR, revisionBody("{\"reason\":\"x\"}"));
+
+        assertThat(res.statusCode())
+                .as("稽核人員的職責是查閱，不是替案件補件")
+                .isEqualTo(404);
+    }
+
+    @Test
+    @DisplayName("#77：不存在的任務 id → 404（與「不是你的」不可分辨）")
+    void unknownTaskIsNotFound() throws Exception {
+        var res = put("/api/tasks/no-such-task-id", "user001", revisionBody("{\"reason\":\"x\"}"));
+
+        assertThat(res.statusCode()).isEqualTo(404);
+    }
+
+    // ── ③ 身分欄位：submittedBy 一律由 @CallerId 決定 ────────────────
+
+    @Test
+    @DisplayName("formData 夾帶 submittedBy 不會冒用：落地列的送件人是登入者")
     void submittedByComesFromTheAuthenticatedCaller() throws Exception {
         String pid = startCase("user001");
+        seedFormData(pid, "user001");
+        Task revision = returnToApplicant(pid);
 
-        var res = post("/api/form-data", "user001",
-                "{\"formDefinitionId\":\"leave-form-v1\",\"processInstanceId\":\"" + pid
-                        + "\",\"dataJson\":\"" + ORIGINAL.replace("\"", "\\\"") + "\"}");
+        // 新 payload 的形狀是 {dataJson} —— 沒有 submittedBy 欄位。
+        // 夾帶它只是被忽略（record 沒有這個欄位），落地的送件人仍是登入者。
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("action", "complete");
+        payload.put("formData", Map.of("dataJson", "{\"reason\":\"補件\"}",
+                "submittedBy", ADMIN));
 
-        assertThat(res.statusCode()).isEqualTo(200);
-        String recordId = field(res.body(), "id");
-        assertThat(field(res.body(), "submittedBy"))
-                .as("省略時必須寫入登入者而不是留 null —— 欄位可為 null 會讓「誰送出的」無解")
+        var res = put("/api/tasks/" + revision.getId(), "user001",
+                objectMapper.writeValueAsString(payload));
+
+        assertThat(res.statusCode()).as("body=%s", res.body()).isEqualTo(200);
+        String newId = field(res.body(), "formDataId");
+        assertThat(dataRepo.findById(newId).orElseThrow().getSubmittedBy())
+                .as("送件人不得由 body 指定，也不得沿用被取代列以外的任何來源")
                 .isEqualTo("user001");
-        assertThat(awaitFormOperator("FORM_SUBMIT", recordId))
-                .as("稽核要記「誰做的」。改動前它記的是 body 的 submittedBy，"
-                        + "等於把冒用者寫進被 hash chain 固定的紀錄")
-                .isEqualTo("user001");
-    }
-
-    @Test
-    @DisplayName("#72：POST 帶與自己相同的 submittedBy 視為省略，不得拒絕")
-    void matchingSubmittedByIsAccepted() throws Exception {
-        // DocumentController.createdBy 的同型取捨：submittedBy 是 JPA entity 欄位，
-        // Jackson 反序列化後無法分辨「沒送」與「送了 null」；而送出與自己相同的
-        // 身分並不構成冒用，拒絕它只會製造無意義的破壞。
-        String pid = startCase("user001");
-
-        var res = post("/api/form-data", "user001",
-                "{\"formDefinitionId\":\"leave-form-v1\",\"processInstanceId\":\"" + pid
-                        + "\",\"submittedBy\":\"user001\",\"dataJson\":\"{}\"}");
-
-        assertThat(res.statusCode()).isEqualTo(200);
-    }
-
-    @Test
-    @DisplayName("#72：PUT 帶冒用的 submittedBy → 400，且資料沒有被改動")
-    void updateCannotImpersonateSubmittedBy() throws Exception {
-        String pid = startCase("user001");
-        String recordId = submitFormData(pid, "user001", "");
-
-        var res = put("/api/form-data/" + recordId, "user001",
-                "{\"submittedBy\":\"" + ADMIN + "\",\"dataJson\":\""
-                        + TAMPERED.replace("\"", "\\\"") + "\"}");
-
-        assertThat(res.statusCode()).isEqualTo(400);
-        assertThat(dataJsonOf(recordId))
-                .as("400 必須真的擋下寫入，而不是只回一個錯誤狀態碼")
-                .isEqualTo(ORIGINAL);
-    }
-
-    @Test
-    @DisplayName("#72＋#58：退回狀態下送件人修改 → 200，稽核 operatorId 是登入者")
-    void updateOperatorIsTheAuthenticatedCaller() throws Exception {
-        String pid = startCase("user001");
-        String recordId = submitFormData(pid, "user001", "");
-        // #58：修改必須在退回（補件）狀態。主管退回 → 補件任務指派給 user001。
-        var mgrTask = taskService.createTaskQuery().processInstanceId(pid).singleResult();
-        taskService.complete(mgrTask.getId(), Map.of("approved", false, "rejected", false));
-
-        var res = put("/api/form-data/" + recordId, "user001",
-                "{\"dataJson\":\"" + TAMPERED.replace("\"", "\\\"") + "\"}");
-
-        assertThat(res.statusCode()).isEqualTo(200);
-        // #58 版本化：回傳的是新列，不是被改寫的舊列。
-        String newId = field(res.body(), "id");
-        assertThat(newId).isNotEqualTo(recordId);
         assertThat(awaitFormOperator("FORM_UPDATE", newId))
-                .as("改動前：operatorId 是 body 的 submittedBy")
+                .as("稽核 operatorId 也是登入者")
                 .isEqualTo("user001");
-        // submittedBy 刻意不覆寫：舊列原封不動，新列沿用同一位送件人。
-        assertThat(dataJsonOf(recordId)).as("原始送件必須保留").isEqualTo(ORIGINAL);
-        assertThat(dataRepo.findById(recordId).orElseThrow().getSubmittedBy()).isEqualTo("user001");
+    }
+
+    @Test
+    @DisplayName("#58：補件提交的新列沿用送件人；稽核 operatorId 是登入者")
+    void revisionKeepsOriginalSubmitterAndAuditsCaller() throws Exception {
+        String pid = startCase("user001");
+        String originalId = seedFormData(pid, "user001");
+        Task revision = returnToApplicant(pid);
+
+        var res = put("/api/tasks/" + revision.getId(), "user001",
+                revisionBody("{\"reason\":\"補件後\"}"));
+
+        assertThat(res.statusCode()).isEqualTo(200);
+        String newId = field(res.body(), "formDataId");
+        assertThat(newId).isNotEqualTo(originalId);
+        assertThat(dataJsonOf(originalId))
+                .as("原始送件必須完整保留 —— 這是版本化的全部意義")
+                .isEqualTo(ORIGINAL);
+        assertThat(dataRepo.findById(originalId).orElseThrow().getSubmittedBy()).isEqualTo("user001");
         assertThat(dataRepo.findById(newId).orElseThrow().getSubmittedBy()).isEqualTo("user001");
+    }
+
+    private static String field(String json, String name) {
+        var m = java.util.regex.Pattern.compile("\"" + name + "\":\"([^\"]*)\"").matcher(json);
+        return m.find() ? m.group(1) : null;
     }
 }

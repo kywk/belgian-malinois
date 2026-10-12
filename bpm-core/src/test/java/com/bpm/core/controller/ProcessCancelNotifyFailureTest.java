@@ -2,12 +2,13 @@ package com.bpm.core.controller;
 
 import com.bpm.core.audit.AuditEventPublisher;
 import com.bpm.core.form.service.FormService;
-import com.bpm.core.form.validation.FormSchemaValidator;
 import com.bpm.core.notify.NotifyPublisher;
 import com.bpm.core.security.ProcessAccessGuard;
 import com.bpm.core.service.ApplicantIdentityLookup;
 import com.bpm.core.service.FormVersionLocker;
 import com.bpm.core.service.ProcessInvolvementService;
+import com.bpm.core.uniform.FormAccessResolver;
+import com.bpm.core.uniform.FormSubmissionService;
 import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
@@ -19,7 +20,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
@@ -77,8 +77,8 @@ class ProcessCancelNotifyFailureTest {
                 // #60 新增的三個相依：撤回路徑完全用不到，mock 即可
                 // （見該測試「為什麼不用 @MockitoSpyBean」的說明）。
                 mock(FormService.class),
-                mock(FormSchemaValidator.class),
-                new ObjectMapper());
+                mock(FormSubmissionService.class),
+                mock(FormAccessResolver.class));
     }
 
     @Test

@@ -36,8 +36,9 @@ import java.util.Map;
  *
  * <p>{@code formDefinitionId} 的語意沿用 {@code FormData.formDefinitionId}，
  * 但多了一層解析：先當定義 id（UUID）查，查不到再當 formKey 查最新
- * published 版本 —— 前端只知道 BPMN 裡的 formKey，而
- * {@code FormSchemaValidator} 需要的是定義 id（見 ProcessController）。
+ * published 版本 —— 前端只知道 BPMN 裡的 formKey。uni-form 重構後
+ * 兩者都查不到是 <b>400</b>（不再有「查不到定義就略過驗證」的缺口，
+ * 見 ProcessController）。
  *
  * @param processDefinitionKey 要啟動的流程 key
  * @param businessKey          業務單號（可為 null）

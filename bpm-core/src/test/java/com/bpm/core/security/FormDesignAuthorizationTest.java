@@ -4,6 +4,7 @@ import com.bpm.core.form.model.FormDefinition;
 import com.bpm.core.form.repository.FormDefinitionRepository;
 import com.bpm.core.support.IntegrationTestBase;
 import com.bpm.core.support.TestGatewayMockMvcCustomizer;
+import com.bpm.core.support.UniformTestDsl;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.crypto.MACSigner;
@@ -144,7 +145,9 @@ class FormDesignAuthorizationTest extends IntegrationTestBase {
         d.setName("測試表單");
         d.setVersion(version);
         d.setStatus(status);
-        d.setSchemaJson("{\"fields\":[{\"id\":\"original\"}]}");
+        // V7 之後 schemaJson 的世界只有 DSL：publish 會過 FormDefinitionValidator，
+        // 由 repository 直接種入的內容也必須合法（否則 publish 會 400）。
+        d.setSchemaJson(UniformTestDsl.withKeys(formKey, "original"));
         return defRepo.save(d);
     }
 
@@ -200,7 +203,8 @@ class FormDesignAuthorizationTest extends IntegrationTestBase {
         FormDefinition draft = saveForm(key, "draft", 1);
 
         var res = put("/api/forms/" + draft.getId(), NO_PERM,
-                "{\"name\":\"被改掉的表單\",\"schemaJson\":\"{\\\"fields\\\":[{\\\"id\\\":\\\"approved\\\"}]}\"}");
+                "{\"name\":\"被改掉的表單\",\"schemaJson\":\""
+                        + UniformTestDsl.embedded(UniformTestDsl.withKeys(key, "approved")) + "\"}");
 
         assertThat(res.statusCode()).isEqualTo(403);
         FormDefinition after = defRepo.findById(draft.getId()).orElseThrow();
@@ -218,9 +222,10 @@ class FormDesignAuthorizationTest extends IntegrationTestBase {
         FormDefinition draft = saveForm(key, "draft", 1);
 
         var res = put("/api/forms/" + draft.getId(), DESIGNER,
-                "{\"name\":\"改版後的表單\",\"schemaJson\":\"{\\\"fields\\\":[{\\\"id\\\":\\\"leaveType\\\"}]}\"}");
+                "{\"name\":\"改版後的表單\",\"schemaJson\":\""
+                        + UniformTestDsl.embedded(UniformTestDsl.withKeys(key, "leaveType")) + "\"}");
 
-        assertThat(res.statusCode()).isEqualTo(200);
+        assertThat(res.statusCode()).as("body=%s", res.body()).isEqualTo(200);
         FormDefinition after = defRepo.findById(draft.getId()).orElseThrow();
         assertThat(after.getSchemaJson())
                 .as("必須真的換掉 schemaJson —— 200 本身不證明任何事")
@@ -289,7 +294,8 @@ class FormDesignAuthorizationTest extends IntegrationTestBase {
     void createRequiresTheFormDesignPermission() throws Exception {
         String key = uniqueKey();
         String body = "{\"formKey\":\"" + key + "\",\"name\":\"新表單\","
-                + "\"schemaJson\":\"{\\\"fields\\\":[{\\\"id\\\":\\\"approved\\\"}]}\"}";
+                + "\"schemaJson\":\"" + UniformTestDsl.embedded(UniformTestDsl.withKeys(key, "approved"))
+                + "\"}";
 
         assertThat(post("/api/forms", NO_PERM, body).statusCode()).isEqualTo(403);
         assertThat(versionsOf(key)).as("403 之後不得建立任何版本").isEmpty();
@@ -329,7 +335,8 @@ class FormDesignAuthorizationTest extends IntegrationTestBase {
         // 那半邊由 AuditReadAuthorityTest 驗。兩者刻意不同，
         // 理由寫在 SecurityConfig 的兩條規則旁。
         var res = put("/api/forms/" + draft.getId(), ADMIN,
-                "{\"name\":\"管理員改的\",\"schemaJson\":\"{\\\"fields\\\":[{\\\"id\\\":\\\"byAdmin\\\"}]}\"}");
+                "{\"name\":\"管理員改的\",\"schemaJson\":\""
+                        + UniformTestDsl.embedded(UniformTestDsl.withKeys(key, "byAdmin")) + "\"}");
 
         assertThat(res.statusCode()).isEqualTo(200);
         assertThat(defRepo.findById(draft.getId()).orElseThrow().getSchemaJson())

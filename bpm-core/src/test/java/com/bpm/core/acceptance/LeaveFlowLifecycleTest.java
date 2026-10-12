@@ -86,8 +86,9 @@ class LeaveFlowLifecycleTest extends IntegrationTestBase {
     private record Started(String pid, String formDataId) {}
 
     private static Map<String, Object> leaveValues(String reason) {
+        // uni-form canonical：dateRange 是 {start,end} 物件（計畫 §一「值格式」列）。
         return Map.of("leaveType", "annual",
-                "dateRange", "2026-10-01~2026-10-03",
+                "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
                 "reason", reason);
     }
 
@@ -335,17 +336,19 @@ class LeaveFlowLifecycleTest extends IntegrationTestBase {
                 .as("退回後必須停在申請人補件關卡").isEqualTo("applicantRevision");
         assertThat(revision.getAssignee()).isEqualTo(APPLICANT);
 
-        // 申請人補件：PUT /api/form-data/{id} 產生新版本（#58）。
+        // 申請人補件：完成補件任務並附帶 formData（uni-form 重構：表單提交
+        // 隨流程動作落地，版本化語意不變 —— 新列生效、舊列保留）。
         String reviseBody = objectMapper.writeValueAsString(Map.of(
-                "dataJson", objectMapper.writeValueAsString(leaveValues(revised))));
-        mockMvc.perform(put("/api/form-data/{id}", s.formDataId())
+                "action", "complete",
+                "formData", Map.of("dataJson",
+                        objectMapper.writeValueAsString(leaveValues(revised)))));
+        mockMvc.perform(put("/api/tasks/{id}", revision.getId())
                         .header("X-User-Id", APPLICANT)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reviseBody))
                 .andExpect(status().isOk());
 
-        // 重送（完成補件任務）→ 回到主管 → 核准。
-        completeTask(revision.getId(), APPLICANT, "{\"action\":\"complete\"}");
+        // 重送後回到主管 → 核准。
         Task secondReview = currentTask(s.pid());
         assertThat(secondReview.getTaskDefinitionKey())
                 .as("重送後必須回到主管關卡").isEqualTo("managerReview");
