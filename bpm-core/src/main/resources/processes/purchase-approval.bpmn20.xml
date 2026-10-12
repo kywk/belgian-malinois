@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
              xmlns:flowable="http://flowable.org/bpmn"
+             xmlns:uniform="http://bpm.com/uniform"
              xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
              xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
              xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
@@ -21,8 +22,11 @@
 
     <userTask id="managerReview" name="主管審核"
               flowable:assignee="${assigneeResolver.resolve(execution)}"
-              flowable:formKey="purchase-review">
+              flowable:formKey="purchase-request">
       <extensionElements>
+        <!-- ADR-23／uni-form 重構：審核與補件共用同一份 DSL，權限由 Access Profile 表達；
+             缺漏時後端 fail-closed 為 view／readonly（見 FormAccessResolver）。 -->
+        <uniform:access mode="view" default="readonly"/>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
         <flowable:taskListener event="all" delegateExpression="${webhookTaskListener}"/>
       </extensionElements>
@@ -52,6 +56,9 @@
               flowable:assignee="${applicantResolver.resolve(execution)}"
               flowable:formKey="purchase-request">
       <extensionElements>
+        <uniform:access mode="fill" default="readonly">
+          <uniform:field key="reason" state="editable"/>
+        </uniform:access>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
         <flowable:taskListener event="all" delegateExpression="${webhookTaskListener}"/>
       </extensionElements>
@@ -62,8 +69,9 @@
     <!-- 財務審核 -->
     <userTask id="financeReview" name="財務審核"
               flowable:candidateUsers="${permService.getUsersByPermission('finance:payment:approve')}"
-              flowable:formKey="purchase-review">
+              flowable:formKey="purchase-request">
       <extensionElements>
+        <uniform:access mode="view" default="readonly"/>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
         <flowable:taskListener event="all" delegateExpression="${webhookTaskListener}"/>
       </extensionElements>
@@ -108,6 +116,9 @@
               flowable:assignee="${applicantResolver.resolve(execution)}"
               flowable:formKey="purchase-request">
       <extensionElements>
+        <uniform:access mode="fill" default="readonly">
+          <uniform:field key="reason" state="editable"/>
+        </uniform:access>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
         <flowable:taskListener event="all" delegateExpression="${webhookTaskListener}"/>
       </extensionElements>
