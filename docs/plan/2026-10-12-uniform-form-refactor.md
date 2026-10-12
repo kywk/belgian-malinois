@@ -88,6 +88,17 @@
 
 PM 保留：整合／合併、`scripts/` 對齊（seed 檢查清單 4→2）、CLAUDE.md 更新、端到端驗收、uni-form 回報。
 
+### 派工紀錄（2026-10-12）
+
+| 代號 | Worktree | Branch | Base | Session |
+|---|---|---|---|---|
+| BE | `~/workspace/.worktrees/greyhound/uniform-be` | `feature/uniform-be` | `0d07772` | `ses_ed08ea9a4ffep5ra3PydZ0QGLm` |
+| FE | `~/workspace/.worktrees/greyhound/uniform-fe` | `feature/uniform-fe` | `0d07772` | `ses_ed08ea9a2ffe8D6RgwkNGDesKP` |
+| BPMN | `~/workspace/.worktrees/greyhound/uniform-bpmn` | `feature/uniform-bpmn` | `0d07772` | `ses_ed08ea9a1ffe70AE32D4tg6eMO` |
+
+- uni-form 端：`~/workspace/.worktrees/uni-form/fix-jackson3-fullv1-smoke`（分支 `fix/jackson3-fullv1-smoke-v2`；`43bf983` 修正＋`9025fd7` 報告），待 uni-form 接受。
+- PM 已完成：submodule pin、npm tarball、package.json/lock、V7 seed、BPMN access、`scripts/seed-data.sh`（4→2 keys＋DSL 檢查）、本計畫。
+
 ## 七、驗收條件
 
 - `cd bpm-core && mvn verify` 全綠（Testcontainers）。

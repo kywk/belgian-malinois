@@ -80,11 +80,14 @@ deploy_bpmn "bpmn-definitions/purchase-approval.bpmn20.xml" "purchase-approval"
 # 讓部署本身產生定義。
 deploy_bpmn "bpmn-definitions/countersign-review.bpmn20.xml" "countersign-review.bpmn20.xml"
 
-# ── 驗證表單定義（form-service 已透過 data.sql 初始化）────────
+# ── 驗證表單定義（uni-form 重構：V7 seed 直接存 DSL v1）────────
 echo "Verifying form definitions..."
-for formKey in leave-request leave-review purchase-request purchase-review; do
+for formKey in leave-request purchase-request; do
   resp=$(curl -sf "$FORM_URL/api/forms/$formKey" -H "$(auth_header admin001)") || fail "Form $formKey not found"
-  ok "Form $formKey exists"
+  # schemaJson 必須是 uni-form DSL v1（$uniform:"1.0"）；舊扁平 fields[] 格式已不再支援。
+  echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); doc=json.loads(d['schemaJson']); assert doc.get('\x24uniform')=='1.0', 'schemaJson 不是 DSL v1'" \
+    || fail "Form $formKey 的 schemaJson 不是 uni-form DSL v1"
+  ok "Form $formKey exists (uni-form DSL v1)"
 done
 
 # ── 驗證 Mock Org/Perm ────────────────────────────────────────
@@ -105,4 +108,4 @@ echo "  總監:   dir001"
 echo "  管理員: admin001"
 echo ""
 echo "Deployed processes: leave-approval, purchase-approval, countersign-review"
-echo "Form definitions:   leave-request, leave-review, purchase-request, purchase-review"
+echo "Form definitions:   leave-request, purchase-request（uni-form DSL v1）"
