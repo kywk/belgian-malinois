@@ -105,9 +105,9 @@ public class FormDefinitionController {
         // 欄位可為 null 會讓「這張審核表是誰做的」變成無解）。
         def.setCreatedBy(accessGuard.requireSelf(def.getCreatedBy(), userId, "createdBy"));
 
-        // uni-form 重構（計畫 §五 A7）：schemaJson 必須是合法 DSL。
-        // 排在 create 之前 —— 違規時不建立任何列（零副作用）。
-        definitionValidator.validate(def.getSchemaJson());
+        // uni-form 重構（計畫 §五 A7）：schemaJson 必須是合法 DSL（且 key 與
+        // formKey 一致）。排在 create 之前 —— 違規時不建立任何列（零副作用）。
+        definitionValidator.validate(def.getSchemaJson(), def.getFormKey());
 
         FormDefinition saved = formService.create(def);
         audit("FORM_UPDATE", userId, saved, "create");
@@ -165,9 +165,13 @@ public class FormDefinitionController {
     public FormDefinition update(@PathVariable String id, @RequestBody FormDefinition def,
                                  @CallerId
                                  String userId) {
+        // 先確認資料列存在（次序同 FormDataController.update：不存在 → 404，
+        // 與「內容不合法」是兩種不同的錯）。key／formKey 一致性以**既有列**的
+        // formKey 檢查 —— body 的 formKey 不會被 update 搬動。
+        FormDefinition existing = formService.getById(id);
         // uni-form 重構（計畫 §五 A7）：update 搬的就是 schemaJson，
         // 因此這裡是必須擋下的主要入口（400 零副作用 —— 排在 update 之前）。
-        definitionValidator.validate(def.getSchemaJson());
+        definitionValidator.validate(def.getSchemaJson(), existing.getFormKey());
 
         FormDefinition saved = formService.update(id, def);
         audit("FORM_UPDATE", userId, saved, "update");
@@ -190,7 +194,7 @@ public class FormDefinitionController {
                                   @CallerId
                                   String userId) {
         FormDefinition existing = formService.getById(id);
-        definitionValidator.validate(existing.getSchemaJson());
+        definitionValidator.validate(existing.getSchemaJson(), existing.getFormKey());
 
         FormDefinition saved = formService.publish(id);
         audit("FORM_UPDATE", userId, saved, "publish");

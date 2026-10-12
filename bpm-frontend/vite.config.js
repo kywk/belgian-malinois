@@ -22,7 +22,9 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': {
-        target: 'http://localhost:80',
+        // 預設對 docker-compose 的 nginx（:80）；用 localenv 起 bpm-core 時
+        // 以 VITE_API_PROXY=http://127.0.0.1:18110 npm run dev 覆寫即可。
+        target: process.env.VITE_API_PROXY || 'http://localhost:80',
         changeOrigin: true
       }
     }

@@ -46,10 +46,15 @@ import java.util.Set;
  *   <li><b>無 access</b>：userTask → {@code {mode:"view", default:"readonly", fields:{}}}；
  *       startEvent → {@code {mode:"fill", default:"editable", fields:{}}}（新案件的
  *       起始表單本來就是填寫，沒有既有資料可看）。</li>
- *   <li><b>有 access 但解析失敗</b>（mode 非法／default 非法／field 缺 key／
- *       state 非法／required 非布林／找不到節點或 BpmnModel）→
+ *   <li><b>有 access 但解析失敗</b>（mode 非法／default 非法／field 形狀非法／
+ *       找不到節點或 BpmnModel）→
  *       {@code {mode:"view", default:"readonly", fields:{}}}，<b>startEvent 也不例外</b>。
  *       壞掉的授權設定不可以退化成「編輯」或「填寫」。</li>
+ *   <li><b>field 的兩種「不完整」要分開對待</b>（與 BPMN 面板的行為對齊）：
+ *       設計器按「新增欄位」留下的空列（缺 {@code key}，或只有 key 而沒有任何
+ *       覆寫屬性）<b>略過該列</b> —— 它不是一條授權語句，略過不授予任何權限；
+ *       但「有 key 又有屬性、值卻非法」（state 非三態、required 非 true／false）
+ *       是<b>無法解讀的授權意圖</b>，整份 fail-closed，不得猜測。</li>
  * </ul>
  *
  * <p>⚠️ 這裡刻意不是「解析失敗就丟 500」：BPMN 是管理者部署的資產，一份壞掉的
@@ -195,13 +200,38 @@ public class FormAccessResolver {
                     .findFirst().map(Map.Entry::getValue).orElse(List.of());
         }
         for (ExtensionElement field : fieldElements) {
-            Map<String, Object> entry = fieldEntry(field);
-            if (entry == null) {
-                log.warn("BPMN uniform:field 無法解析（key／state／required 形狀非法），"
-                        + "Access Profile 採 fail-closed（view／readonly）");
+            String key = attribute(field, "key");
+            if (key == null || key.isBlank()) {
+                // 設計器「新增欄位」尚未填 key 的空列：面板刻意保留它
+                // （不保留的話重繪後消失，見 uniformAccessStorage.js），
+                // 但它不是一條授權語句 —— 略過，不授予任何權限。
+                continue;
+            }
+            String state = attribute(field, "state");
+            String required = attribute(field, "required");
+            if (state == null && required == null) {
+                // 只有 key、還沒有任何覆寫屬性（還在編輯中的列）→ no-op。
+                continue;
+            }
+            if (state != null && !STATES.contains(state)) {
+                log.warn("BPMN uniform:field '{}' 的 state 非法（{}），"
+                        + "Access Profile 採 fail-closed（view／readonly）", key, state);
                 return fallback(TASK_FALLBACK);
             }
-            String key = attribute(field, "key");
+            if (required != null && !"true".equals(required) && !"false".equals(required)) {
+                log.warn("BPMN uniform:field '{}' 的 required 非布林（{}），"
+                        + "Access Profile 採 fail-closed（view／readonly）", key, required);
+                return fallback(TASK_FALLBACK);
+            }
+            Map<String, Object> entry = new LinkedHashMap<>();
+            // state 缺席是合法的（access-profile.schema.json 的 fieldEntry 允許只帶 required），
+            // 此時套用 profile 的 default；缺席不得被當成 hidden，也不得編一個值。
+            if (state != null) {
+                entry.put("state", state);
+            }
+            if (required != null) {
+                entry.put("required", Boolean.parseBoolean(required));
+            }
             fields.put(key, entry);
         }
 
@@ -217,31 +247,6 @@ public class FormAccessResolver {
      *
      * @return {@code null} 代表形狀非法（呼叫端整份 profile fail-closed）
      */
-    private Map<String, Object> fieldEntry(ExtensionElement field) {
-        String key = attribute(field, "key");
-        if (key == null || key.isBlank()) {
-            return null;
-        }
-        String state = attribute(field, "state");
-        if (state != null && !STATES.contains(state)) {
-            return null;
-        }
-        String required = attribute(field, "required");
-        if (required != null && !"true".equals(required) && !"false".equals(required)) {
-            return null;
-        }
-        Map<String, Object> entry = new LinkedHashMap<>();
-        // state 缺席是合法的（access-profile.schema.json 的 fieldEntry 允許只帶 required），
-        // 此時套用 profile 的 default；缺席不得被當成 hidden，也不得編一個值。
-        if (state != null) {
-            entry.put("state", state);
-        }
-        if (required != null) {
-            entry.put("required", Boolean.parseBoolean(required));
-        }
-        return entry.isEmpty() ? null : entry;
-    }
-
     private ExtensionElement accessOf(Map<String, List<ExtensionElement>> extensionElements) {
         if (extensionElements == null || extensionElements.isEmpty()) {
             return null;

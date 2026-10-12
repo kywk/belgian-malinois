@@ -36,6 +36,8 @@
 5. **設計器 palette 收斂**：text／textarea／number／select／radio／checkbox／boolean／date／dateRange／divider／freeText；`file`／`richtext`／`orgSelector`／`amount`／`optionsSource` 延後（P5）。`GET /api/forms/options`（`optionsUrl` 代理）暫留、設計器不提供入口。
 6. **前端驗證**用 `createCoreValidation`（僅提示）；後端永遠以 validateV1 重驗。
 7. **FormData／FormDefinition 表保留**（宿主儲存責任不變）；`schemaJson` 內容換為 DSL；建立／更新／發布時以 `compileStatic` gate。
+8. **`uniform:field` 空列的語意**（BPMN 面板與後端對齊）：缺 `key`、或只有 key 而無任何覆寫屬性的列（面板「新增欄位」的編輯中狀態）→ **略過該列** —— 它不是授權語句，略過不授予任何權限；但「有 key 又有屬性、值卻非法」（state 非三態／required 非布林）→ **整份 profile fail-closed**，不得猜測授權意圖。
+9. **DSL `key` 必須等於 `formKey`**：`FormDefinitionValidator` 在建立／更新／發布以 400 擋下（Envelope 的 `schemaRef.key` 依賴這個等式；不一致會直到案件投影時才以 500 爆出，肇因與現場相隔很遠）。`/api/forms/preview` 不受此限（尚未落地為定義）。
 
 ## 四、已完成（P0 基底，2026-10-12）
 
@@ -45,6 +47,7 @@
 - [x] BPMN `uniform:access`：`leave-approval`／`purchase-approval`／`countersign-review`（兩份副本 byte-identical；review=view/readonly，補件=fill/readonly＋reason editable）。
 - [x] 本計畫文件（介面凍結）。
 - [x] uni-form main 迴歸修正（fix 分支 `43bf983`，待回報／接受）。
+- [x] 合併 BE／FE／BPMN 三分支；PM 收斂修正（`9b79c5c` 及後續）：DocumentDetail 任務動作 fail-closed、FormList→FormEditor 帶 `formKey+version`、`uniform:field` 空列語意（決策 8）、`key==formKey` gate（決策 9）、前端 dev proxy `VITE_API_PROXY`、formApi 移除已無端點的函式。
 
 ## 五、凍結介面（施工不得自行變更；有問題回報 PM）
 
@@ -112,3 +115,4 @@ PM 保留：整合／合併、`scripts/` 對齊（seed 檢查清單 4→2）、C
 - CI 尚不能 clone submodule（本機 file transport；未 push）。部署階段前需指定可取得的 Git URL 或 CI 先行 build。
 - `optionsSource`／OptionsProvider 遷移（P5）；`file`／FileVault（P5）；BPMN lint 檢查 access 引用的 field key 存在（P5）。
 - uni-form `43bf983` 接受後更新 submodule pin（並重跑兩端）。
+- **required 語意（SDK）**：必填以「鍵存在」判定；text/textarea 空字串在 API 直送時**不**報必填（舊 validator 視空白為缺漏）。前端 widgets 會把空輸入轉 `undefined`，UI 行為與舊版一致；差異僅限直接呼叫 API 的呼叫端。

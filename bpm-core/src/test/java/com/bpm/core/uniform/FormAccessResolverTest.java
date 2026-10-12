@@ -176,14 +176,28 @@ class FormAccessResolverTest {
     }
 
     @Test
-    @DisplayName("field 缺 key／state 非法／required 非布林 → 整份 profile fail-closed")
-    void malformedFieldFailsClosed() {
-        assertThat(resolverFor(parse(accessWithField("mode=\"fill\" default=\"readonly\"",
-                "<uniform:field state=\"editable\"/>")))
-                .profileForTask("leave:1:1", "t1"))
-                .as("缺 key")
-                .containsEntry("mode", "view");
+    @DisplayName("設計器未填完的空列（缺 key／無覆寫屬性）→ 略過該列，其餘照用")
+    void incompleteRowsAreSkipped() {
+        Map<String, Object> profile = resolverFor(parse(accessWithField(
+                "mode=\"fill\" default=\"readonly\"",
+                "<uniform:field/>"
+                        + "<uniform:field key=\"dateRange\"/>"
+                        + "<uniform:field key=\"reason\" state=\"editable\"/>")))
+                .profileForTask("leave:1:1", "t1");
 
+        assertThat(profile)
+                .as("空列不是授權語句，略過不影響 mode；略過也不會授予任何權限")
+                .containsEntry("mode", "fill")
+                .containsEntry("default", "readonly");
+        assertThat(fields(profile))
+                .as("只有真正帶覆寫屬性的列生效")
+                .containsOnlyKeys("reason");
+        assertThat(fields(profile).get("reason")).isEqualTo(Map.of("state", "editable"));
+    }
+
+    @Test
+    @DisplayName("field 有 key 但屬性非法（state 非三態／required 非布林）→ 整份 fail-closed")
+    void illegalFieldShapesFailClosed() {
         assertThat(resolverFor(parse(accessWithField("mode=\"fill\" default=\"readonly\"",
                 "<uniform:field key=\"reason\" state=\"writable\"/>")))
                 .profileForTask("leave:1:1", "t1"))

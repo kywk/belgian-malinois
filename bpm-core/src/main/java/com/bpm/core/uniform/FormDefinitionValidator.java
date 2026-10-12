@@ -81,14 +81,27 @@ public class FormDefinitionValidator {
      * @throws ResponseStatusException 400：不是合法 DSL（訊息彙整、指名 path）
      */
     public void validate(String schemaJson) {
-        require(parse(schemaJson));
+        require(parse(schemaJson), null);
+    }
+
+    /**
+     * 驗證一份 DSL 字串，並要求 DSL 的 {@code key} 等於 {@code formKey}
+     * （建立／更新／發布等「要落地為定義」的路徑）。
+     */
+    public void validate(String schemaJson, String formKey) {
+        require(parse(schemaJson), formKey);
     }
 
     /**
      * 驗證一份已解析的 DSL 物件（設計器預覽用 —— 不必為了驗證再序列化一次）。
      */
     public void validate(Map<String, Object> dsl) {
-        require(dsl);
+        require(dsl, null);
+    }
+
+    /** 已解析 DSL ＋ key／formKey 一致性檢查（建立／更新／發布）。 */
+    public void validate(Map<String, Object> dsl, String formKey) {
+        require(dsl, formKey);
     }
 
     /** 解析 {@code schemaJson} → DSL 物件；失敗 400（呼叫端的輸入）。 */
@@ -110,7 +123,7 @@ public class FormDefinitionValidator {
         }
     }
 
-    private void require(Map<String, Object> dsl) {
+    private void require(Map<String, Object> dsl, String formKey) {
         // ① spec 的 DSL schema 是唯一權威；$ref 由 adapter 對本地資源解析。
         if (!specResources.schemas().containsKey(DSL_SCHEMA_ID)) {
             // 資源不存在＝部署問題（spec jar 沒帶到）；不猜、不用內建副本。
@@ -122,6 +135,20 @@ public class FormDefinitionValidator {
         if (!schemaErrors.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "schemaJson 不符 uni-form DSL schema：" + summarize(schemaErrors));
+        }
+
+        // ①' DSL 的 key 必須與 formKey 一致：FormEnvelopeService 以 formKey 當
+        // Envelope 的 key 送進 projectV1，而 SDK 要求它等於 dsl.key。不一致的定義
+        // 存得進去、直到某個案件投影時才以 500 出現 —— 在這裡擋，錯誤留在存檔
+        // 當下、零副作用。formKey 為 null／空白時不檢查（那是 FormService.create
+        // 的「formKey 為必填」錯誤，訊息更貼近肇因）。
+        if (formKey != null && !formKey.isBlank()) {
+            Object key = dsl.get("key");
+            if (!formKey.equals(key)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "DSL 的 key 必須等於 formKey（DSL key=" + key + "，formKey=" + formKey + "）。"
+                                + "表單識別在存檔與投影兩條路上必須是同一個值。");
+            }
         }
 
         // ② 跨節點語意：schema 過了仍可能 compile 不過（key 重複、condition 引用不存在…）。

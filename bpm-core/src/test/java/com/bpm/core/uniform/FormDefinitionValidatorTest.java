@@ -109,6 +109,23 @@ class FormDefinitionValidatorTest {
     }
 
     @Test
+    @DisplayName("DSL key 與 formKey 不一致 → 400（投影才爆的等式在存檔當下擋）")
+    void keyMustEqualFormKey() throws Exception {
+        FormDefinitionValidator validator = validator();
+
+        // 對照組：一致時通過。
+        validator.validate(VALID_DSL, "leave-request");
+
+        assertThatThrownBy(() -> validator.validate(VALID_DSL, "purchase-request"))
+                .hasMessageContaining("formKey")
+                .hasMessageContaining("leave-request");
+
+        // Map 版本同一份判定。
+        assertThatThrownBy(() -> validator.validate(validator.parse(VALID_DSL), "purchase-request"))
+                .hasMessageContaining("formKey");
+    }
+
+    @Test
     @DisplayName("validate(Map) 與 validate(String) 同一份判定（設計器預覽用）")
     void parsedOverloadSharesTheSameGate() throws Exception {
         FormDefinitionValidator validator = validator();
