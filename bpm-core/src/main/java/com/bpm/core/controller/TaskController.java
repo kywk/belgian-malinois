@@ -17,6 +17,12 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
 import org.flowable.common.engine.impl.identity.Authentication;
 import com.bpm.core.dto.TaskActionRequest;
+import com.bpm.core.form.model.FormData;
+import com.bpm.core.form.model.FormDefinition;
+import com.bpm.core.form.service.FormService;
+import com.bpm.core.uniform.FormAccessResolver;
+import com.bpm.core.uniform.FormContextResolver;
+import com.bpm.core.uniform.FormSubmissionService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
@@ -107,6 +113,14 @@ public class TaskController {
     // #6：催辦頻率限制。既有 Redis（OrgService／BpmPermissionService 已在使用），
     // 不新增基礎設施。
     private final StringRedisTemplate redis;
+    // uni-form 重構（計畫 §五 A5）：complete 可帶 formData。表單寫入仍走
+    // FormService（唯一入口）；Access Profile 與定義解析分別用工廠的
+    // FormAccessResolver／FormContextResolver；內容驗證用 FormSubmissionService
+    // —— 與 ProcessController.startProcess 同一組服務，不在此重寫規則。
+    private final FormService formService;
+    private final FormAccessResolver formAccessResolver;
+    private final FormContextResolver formContextResolver;
+    private final FormSubmissionService formSubmissionService;
 
     public TaskController(TaskService taskService, RuntimeService runtimeService,
                           RepositoryService repositoryService,
@@ -121,7 +135,11 @@ public class TaskController {
                           com.bpm.core.service.ApplicantResolver applicantResolver,
                           com.bpm.core.service.OnBehalfOfLookup onBehalfOfLookup,
                           NotifyPublisher notifyPublisher,
-                          StringRedisTemplate redis) {
+                          StringRedisTemplate redis,
+                          FormService formService,
+                          FormAccessResolver formAccessResolver,
+                          FormContextResolver formContextResolver,
+                          FormSubmissionService formSubmissionService) {
         this.taskService = taskService;
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
@@ -133,6 +151,10 @@ public class TaskController {
         this.onBehalfOfLookup = onBehalfOfLookup;
         this.notifyPublisher = notifyPublisher;
         this.redis = redis;
+        this.formService = formService;
+        this.formAccessResolver = formAccessResolver;
+        this.formContextResolver = formContextResolver;
+        this.formSubmissionService = formSubmissionService;
     }
 
     /**
@@ -344,6 +366,16 @@ public class TaskController {
                     "returnTo 僅適用於 action=complete（支援的值：initiator）");
         }
 
+        // ── formData 只對 complete 有意義（計畫 §五 A5）────────────────
+        //
+        // 與 returnTo 同一政策：其他 action 帶了它一律 400，不靜默忽略 ——
+        // 靜默忽略會讓呼叫端以為表單資料已經落地。排在持有者守衛之後
+        // （對非持有者仍回 404，不新增任務存在性的枚舉管道）。
+        if (req.formData() != null && !"complete".equals(action)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "formData 僅適用於 action=complete");
+        }
+
         // 操作者就是呼叫者，一層 fallback 都不留。
         //
         // 改動前是 firstNonBlank(callerId, firstNonBlank(task.getAssignee(), req.assignee()))。
@@ -356,6 +388,10 @@ public class TaskController {
         // 稽核要記的是「誰按的按鈕」，不是「誰持有這個任務」——那是兩個不同
         // 的事實，混用只會在出事時指錯方向。
         String operatorId = callerId;
+
+        // 本次寫入的表單資料新列（僅 complete 帶 formData 時非 null；
+        // 回應用，見方法尾端）。
+        String formDataId = null;
 
         switch (action) {
             case "claim" -> {
@@ -453,6 +489,20 @@ public class TaskController {
                     req.variables().forEach(v -> vars.put(v.name(), v.value()));
                 }
 
+                // ── uni-form：formData 的解析、驗證與變數推導（計畫 §五 A5）──
+                //
+                // 順序與 startProcess 完全相同：形狀 → 解析 → 驗證 → 變數推導
+                // →（完成任務）→ 表單落地。所有 400／404 都排在
+                // taskService.complete 之前 —— 零副作用不是靠回滾，而是
+                // 根本沒有東西需要回滾。
+                //
+                // 推導的變數與 body 的 variables 併入同一個 map（重疊 → 400），
+                // 因此下方「伺服器決定值」（approved／rejected／returnTo）
+                // 的覆寫語意一體適用：表單欄位與 body 變數沒有兩套規則。
+                TaskFormSubmission submission = req.formData() != null
+                        ? prepareFormSubmission(task, req, vars)
+                        : null;
+
                 if (returnToInitiator) {
                     // 語意衝突：退回申請人與「拒絕」「核准」不可能同時成立。
                     // 兩個 400 都必須在 complete 之前，不得靠下面的覆寫把
@@ -487,6 +537,19 @@ public class TaskController {
                     vars.put("returnTo", "");
                 }
                 taskService.complete(id, vars);
+
+                // ── uni-form：表單落地放在 complete 之後（計畫 §五 A5）────
+                //
+                // 「寫入最後」是跨 DB 原子性的必要條件（沒有 XA；見
+                // ProcessController 的完整取捨）：其後只剩回應組裝與主交易
+                // commit，因此「表單已 commit、任務卻回滾」的窗口被壓到最小，
+                // 而主交易真的回滾時由 afterCompletion 補償刪除。
+                //
+                // 表單交易先 commit；失敗（拋例外）時主交易一併回滾 ——
+                // 任務不會完成、變數不會寫入、稽核不會落地。
+                if (submission != null) {
+                    formDataId = persistFormSubmission(submission, task, callerId);
+                }
 
                 // ── #33／#96：完成後通知申請人（退回／拒絕／結案）────────
                 //
@@ -670,7 +733,156 @@ public class TaskController {
         // 不會再出現「字串不在 enum 裡 → valueOf 拋例外 → 稽核靜默遺失」。
         auditPublisher.publish(new AuditEvent(auditType.name(), operatorId,
                 processInstanceId, id, detail));
-        return Map.of("taskId", id, "status", "ok");
+
+        // 沒有 formData 時回應形狀與改動前完全相同（既有呼叫端不受影響）；
+        // 有 formData 時多一個 formDataId（計畫 §五 A5）。
+        Map<String, Object> response = new HashMap<>();
+        response.put("taskId", id);
+        response.put("status", "ok");
+        if (formDataId != null) {
+            response.put("formDataId", formDataId);
+        }
+        return response;
+    }
+
+    // ── uni-form：complete 的 formData（計畫 §五 A5）────────────────────
+
+    /**
+     * 一次任務表單提交的解析結果（已驗證，尚未寫入）。
+     *
+     * @param definition 提交當下的定義（由任務 formKey ＋ {@code _formVersions} 鎖定版本解析）
+     * @param dataJson   原樣落地的 canonical JSON 字串
+     * @param previousRow 前一列（版本化用；沒有＝這是這張單的第一筆）
+     */
+    private record TaskFormSubmission(FormDefinition definition, String dataJson, FormData previousRow) {}
+
+    /**
+     * 解析、驗證 formData 並把提交值推導成流程變數。
+     *
+     * <p>全部在任何寫入之前（零副作用的 400／404）。驗證規則不在這裡：
+     * {@link FormSubmissionService} 呼叫 SDK 的 {@code validateV1}
+     * （與 {@code ProcessController.startProcess} 同一份）。
+     *
+     * @param vars 既有變數（body 的 {@code variables}）；推導出的值併入同一個 map，
+     *             與它重疊一律 400 —— 同一個欄位兩處都給時靜默選一邊，
+     *             呼叫端會以為另一邊生效了
+     */
+    private TaskFormSubmission prepareFormSubmission(Task task, TaskActionRequest req,
+                                                     Map<String, Object> vars) {
+        String formKey = task.getFormKey();
+        if (formKey == null || formKey.isBlank() || formKey.startsWith("external:")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "此任務不是動態表單任務（formKey 空白或為 external:），不可提交 formData: "
+                            + task.getId());
+        }
+        FormDefinition def = formContextResolver.definitionFor(formKey, task.getProcessInstanceId());
+
+        Map<String, Object> profile = formAccessResolver.profileForTask(
+                task.getProcessDefinitionId(), task.getTaskDefinitionKey());
+        if (!"fill".equals(profile.get("mode"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "此任務的表單為檢視模式（mode=" + profile.get("mode")
+                            + "），不可提交表單資料");
+        }
+
+        String dataJson = req.formData().dataJson();
+        Map<String, Object> submitted = formSubmissionService.parseDataJson(dataJson, "formData.dataJson");
+        FormData previousRow = formContextResolver.latestRow(task.getProcessInstanceId());
+        Map<String, Object> stored = formContextResolver.storedDataOf(previousRow);
+
+        // 受保護變數與 variables 重疊的檢查排在內容驗證之前 —— 與 startProcess
+        // 同一順序：DSL 若真的宣告了叫 initiator／returnTo 的欄位，
+        // 也必須先被「受保護」擋下，而不是靠著它剛好不在 DSL 裡。
+        for (Map.Entry<String, Object> entry : submitted.entrySet()) {
+            String name = entry.getKey();
+            // `$` 前綴是 SDK 保留鍵（$labels／$schema）；它們是表單 metadata，
+            // 不是流程變數（spec §8.5 的欄位 id 不以此開頭）。
+            if (name.startsWith("$")) {
+                continue;
+            }
+            // 受保護的變數名一律拒絕，不靜默丟棄 —— 與 body 的 variables
+            // 同一政策（見本類別 PROTECTED_VARIABLES 的說明）。
+            //
+            // 兩份名單都套用：ProcessController.isProtectedVariable 是啟動與
+            // 完成路徑的共用名單（initiator／effectiveInitiator／onBehalfOf／_
+            // 前綴），isProtectedVariable 是本路徑的完整名單（多了 returnTo
+            // —— 伺服器寫入的路由變數，formData 不得指定）。
+            if (ProcessController.isProtectedVariable(name) || isProtectedVariable(name)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "不允許以表單欄位指定受保護的變數: " + name
+                                + "（initiator／onBehalfOf／returnTo 由伺服器決定；"
+                                + "_ 前綴為伺服器內部狀態）");
+            }
+            if (vars.containsKey(name)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "變數 '" + name + "' 同時出現在 variables 與 formData。"
+                                + "同一個欄位只能提供一處，避免兩邊值不同時的靜默分歧。");
+            }
+        }
+
+        List<String> errors = formSubmissionService.validate(def, profile, submitted, stored);
+        if (!errors.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "表單資料不符表單定義的 schema：" + String.join("；", errors));
+        }
+
+        for (Map.Entry<String, Object> entry : submitted.entrySet()) {
+            if (!entry.getKey().startsWith("$")) {
+                vars.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return new TaskFormSubmission(def, dataJson, previousRow);
+    }
+
+    /**
+     * 表單資料落地（版本化）＋稽核＋跨 DB 補償。
+     *
+     * <h2>新列 vs 版本列（計畫 §五 A5）</h2>
+     *
+     * <ul>
+     *   <li><b>無前一列 → 新列</b>（{@code FORM_SUBMIT}）：
+     *       {@code processInstanceId}／{@code formDefinitionId}／
+     *       {@code submittedBy=caller}／{@code taskId=本次任務}。</li>
+     *   <li><b>有前一列 → 版本列</b>（{@code FORM_UPDATE} 含
+     *       {@code formDataId}／{@code supersededFormDataId}）：沿用
+     *       {@link FormService#updateData} 的既有版本化語意（新列生效、
+     *       舊列保留）。{@code submittedBy}／{@code taskId} 沿用舊列
+     *       —— 補件者就是申請人，「誰最後改的」由稽核的 operatorId 記錄；
+     *       這是既有語意，本次不變更。</li>
+     * </ul>
+     *
+     * <p>⚠️ 回傳的 id 一律是<b>新列</b>：回應的 {@code formDataId} 是
+     * 「這次提交產生的那一列」，不是被取代的舊列。
+     */
+    private String persistFormSubmission(TaskFormSubmission submission, Task task, String callerId) {
+        FormData saved;
+        if (submission.previousRow() != null) {
+            FormData revision = new FormData();
+            revision.setDataJson(submission.dataJson());
+            saved = formService.updateData(submission.previousRow().getId(), revision);
+            // formDataId 是新列（實際生效的版本），supersededFormDataId 是被取代的
+            // 舊列 —— 只記其中一個會讓版本鏈斷掉（與 FormDataController.update 同一理由）。
+            auditPublisher.publish(new AuditEvent(OperationType.FORM_UPDATE.name(), callerId,
+                    task.getProcessInstanceId(), task.getId(),
+                    Map.of("formDataId", saved.getId(),
+                            "supersededFormDataId", submission.previousRow().getId())));
+        } else {
+            FormData data = new FormData();
+            data.setProcessInstanceId(task.getProcessInstanceId());
+            data.setFormDefinitionId(submission.definition().getId());
+            data.setSubmittedBy(callerId);
+            data.setTaskId(task.getId());
+            data.setDataJson(submission.dataJson());
+            saved = formService.submitData(data);
+            auditPublisher.publish(new AuditEvent(OperationType.FORM_SUBMIT.name(), callerId,
+                    task.getProcessInstanceId(), task.getId(),
+                    Map.of("formDefinitionId", saved.getFormDefinitionId(),
+                            "formDataId", saved.getId())));
+        }
+        // 主交易 commit 失敗 → afterCompletion 補償刪除（form 交易已 commit，
+        // 回滾不了它）。實作與 ProcessController 共用同一份。
+        ProcessController.registerFormDataCompensation(formService, saved.getId());
+        return saved.getId();
     }
 
     /**
