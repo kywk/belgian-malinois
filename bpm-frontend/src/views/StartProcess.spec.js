@@ -1,114 +1,194 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mount, enableAutoUnmount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
-import { createPinia, setActivePinia } from 'pinia'
+import { UfRenderer } from '@nanshan/uniform-vue'
+import { installUniformPlugin } from '../uniform/setup.js'
 
 /**
- * #60：StartProcess.vue 的送單 payload。
+ * StartProcess 的流程清單與送單 payload（uni-form 重構）。
  *
- * <h3>改動前後的契約</h3>
- *
- * <p>改動前只送 {@code variables}（原始 map），後端不會落地任何表單資料；
- * 改動後送 {@code formData: { formDefinitionId, dataJson }}，由後端先驗
- * schema、再把欄位推導成流程變數並落地 {@code bpm_form_data}。
- *
- * <p>這個測試只釘住「前端送出什麼」，不重驗後端行為（後端由
- * {@code StartProcessWithFormDataTest} 覆蓋）。三件事必須成立：
- *
- * <ol>
- *   <li>payload 有 {@code formData}，且 {@code formDefinitionId} 是 BPMN 的
- *       formKey（{@code leave-request}／{@code purchase-request}）。</li>
- *   <li><b>不得</b>再送 {@code variables} —— 兩處都給會被後端以「重疊」
- *       回 400，或（若欄位不同）讓兩條來源靜默分歧。</li>
- *   <li>{@code dateRange} 維持既有的 {@code "起~訖"} 字串格式
- *       （FormSchemaValidator 同時接受它與 {@code ["起","訖"]} 陣列）。</li>
- * </ol>
- *
- * <p>⚠️ 用完整 mount 而非 shallow：按鈕在 {@code v-if="processKey"} 之下，
- * stub 掉 el-button 之後「按鈕存在但沒接線」與「按鈕不存在」會塌成同一件事。
+ * 凍結契約（docs/plan/2026-10-12-uniform-form-refactor.md §五 A.2／A.3／A.6）：
+ *   - 清單來自 GET /api/process-definitions?latestVersion=true，只列
+ *     有 startFormKey 的流程；選了之後 GET /api/process-definitions/{key}/start-form。
+ *   - 送出 POST /api/process-instances：
+ *     {processDefinitionKey, formData:{formDefinitionId: Envelope.schemaRef.key, dataJson}}。
+ *     **不得**送 variables（與 formData 重疊會 400）或 initiator（#66）。
  */
 
+const { pushMock } = vi.hoisted(() => ({ pushMock: vi.fn() }))
+
 vi.mock('vue-router', () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: pushMock }),
 }))
 
-// view 只透過共用的 axios instance 呼叫 API（CLAUDE.md 慣例），
-// 因此 mock 掉 http.js 的 default export 即可，不需要 axios 本身。
 vi.mock('../services/http', () => ({
-  default: { post: vi.fn() },
+  default: { get: vi.fn(), post: vi.fn() },
 }))
 
-const StartProcess = (await import('./StartProcess.vue')).default
+enableAutoUnmount(afterEach)
+
 const http = (await import('../services/http')).default
+const StartProcess = (await import('./StartProcess.vue')).default
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-function mountPage() {
-  const pinia = createPinia()
-  setActivePinia(pinia)
-  return mount(StartProcess, { global: { plugins: [ElementPlus, pinia] } })
+const DEFINITIONS = [
+  { key: 'leave-approval', name: '請假申請', startFormKey: 'leave-request' },
+  { key: 'purchase-approval', name: '採購申請', startFormKey: 'purchase-request' },
+  { key: 'no-form', name: '沒有起始表單的流程', startFormKey: null },
+]
+
+const START_ENVELOPE = {
+  uniform: '1.0',
+  mode: 'fill',
+  frame: 'form',
+  schemaRef: { key: 'leave-request', version: 1, hash: 'h' },
+  schema: {
+    $uniform: '1.0',
+    key: 'leave-request',
+    requires: { core: '^1.0' },
+    root: [
+      { id: 'n_leaveType', type: 'select', key: 'leaveType', label: '假別', props: { options: [{ value: 'annual', label: '特休' }] } },
+      { id: 'n_reason', type: 'textarea', key: 'reason', label: '事由', required: true },
+    ],
+  },
+  data: {},
+  meta: { locale: 'zh-TW', states: { leaveType: 'editable', reason: 'editable' }, required: ['reason'] },
 }
 
-async function clickSubmit(wrapper) {
-  const button = wrapper.findAll('button').find((b) => b.text().includes('送出申請'))
-  expect(button, '畫面上必須有送出申請按鈕（否則後面的斷言是空的）').toBeTruthy()
-  await button.trigger('click')
-  await flush()
+function mountPage() {
+  return mount(StartProcess, {
+    global: { plugins: [ElementPlus, installUniformPlugin] },
+  })
 }
 
 beforeEach(() => {
+  http.get.mockReset()
   http.post.mockReset()
+  pushMock.mockReset()
+  http.get.mockImplementation((url) => {
+    if (url === '/api/process-definitions') return Promise.resolve({ data: DEFINITIONS })
+    if (url === '/api/process-definitions/leave-approval/start-form') {
+      return Promise.resolve({ data: START_ENVELOPE })
+    }
+    return Promise.resolve({ data: [] })
+  })
   http.post.mockResolvedValue({
     data: { processInstanceId: 'pid-60', currentTask: { assignee: 'mgr001' } },
   })
 })
 
-describe('#60 StartProcess 以 formData 送出', () => {
-  it('請假：payload 是 formData + leave-request，不含 variables，dateRange 是 "起~訖"', async () => {
-    const wrapper = mountPage()
-    wrapper.vm.processKey = 'leave-approval'
-    await wrapper.vm.$nextTick()
-    wrapper.vm.leaveForm.leaveType = 'personal'
-    wrapper.vm.leaveForm.dateRange = [new Date(2026, 9, 1), new Date(2026, 9, 3)]
-    wrapper.vm.leaveForm.reason = '家庭因素'
+async function loadAndSelect(wrapper, key = 'leave-approval') {
+  await flush()
+  wrapper.vm.processKey = key
+  await flush()
+  await flush()
+}
 
-    await clickSubmit(wrapper)
+describe('StartProcess：流程清單', () => {
+  it('只列有 startFormKey 的流程（label=name、value=key）', async () => {
+    const wrapper = mountPage()
+    await flush()
+
+    expect(http.get).toHaveBeenCalledWith('/api/process-definitions', { params: { latestVersion: true } })
+    const options = wrapper.findAllComponents({ name: 'ElOption' })
+    const labels = options.map((option) => option.props('label'))
+    expect(labels).toContain('請假申請')
+    expect(labels).toContain('採購申請')
+    expect(labels).not.toContain('沒有起始表單的流程')
+    const leave = options.find((option) => option.props('label') === '請假申請')
+    expect(leave.props('value')).toBe('leave-approval')
+  })
+
+  it('清單都沒有 startFormKey 時顯示空狀態提示', async () => {
+    http.get.mockImplementation((url) => {
+      if (url === '/api/process-definitions') {
+        return Promise.resolve({ data: [{ key: 'no-form', name: '無表單流程', startFormKey: null }] })
+      }
+      return Promise.resolve({ data: [] })
+    })
+    const wrapper = mountPage()
+    await flush()
+
+    expect(wrapper.text()).toContain('沒有可發起的流程')
+  })
+
+  it('清單載入失敗顯示明確錯誤', async () => {
+    http.get.mockRejectedValue(Object.assign(new Error('boom'), {
+      response: { status: 500, data: { message: '後端爆炸' } },
+    }))
+    const wrapper = mountPage()
+    await flush()
+
+    expect(wrapper.text()).toContain('流程清單載入失敗')
+    expect(wrapper.text()).toContain('後端爆炸')
+  })
+})
+
+describe('StartProcess：選流程 → Envelope 表單', () => {
+  it('選了流程才打 start-form，並以 UfRenderer 渲染 Envelope', async () => {
+    const wrapper = mountPage()
+    await loadAndSelect(wrapper)
+
+    expect(http.get).toHaveBeenCalledWith('/api/process-definitions/leave-approval/start-form')
+    const renderer = wrapper.findComponent(UfRenderer)
+    expect(renderer.exists()).toBe(true)
+    expect(renderer.props('envelope')).toEqual(START_ENVELOPE)
+    expect(wrapper.text()).toContain('假別')
+    expect(wrapper.text()).toContain('事由')
+  })
+
+  it('start-form 失敗顯示錯誤，不留下空表單', async () => {
+    http.get.mockImplementation((url) => {
+      if (url === '/api/process-definitions') return Promise.resolve({ data: DEFINITIONS })
+      return Promise.reject(Object.assign(new Error('nf'), {
+        response: { status: 404, data: { message: '找不到起始表單' } },
+      }))
+    })
+    const wrapper = mountPage()
+    await loadAndSelect(wrapper)
+
+    expect(wrapper.text()).toContain('表單載入失敗')
+    expect(wrapper.text()).toContain('找不到起始表單')
+    expect(wrapper.findComponent(UfRenderer).exists()).toBe(false)
+  })
+})
+
+describe('StartProcess：送出 payload', () => {
+  it('formData.formDefinitionId 是 Envelope.schemaRef.key，不含 variables／initiator', async () => {
+    const wrapper = mountPage()
+    await loadAndSelect(wrapper)
+    wrapper.vm.formData = { leaveType: 'annual', reason: '家庭因素' }
+    await wrapper.vm.$nextTick()
+
+    const submit = wrapper.findAll('button').find((button) => button.text().includes('送出申請'))
+    expect(submit).toBeTruthy()
+    await submit.trigger('click')
+    await flush()
 
     expect(http.post).toHaveBeenCalledTimes(1)
     const [url, payload] = http.post.mock.calls[0]
     expect(url).toBe('/api/process-instances')
+    expect(Object.keys(payload).sort()).toEqual(['formData', 'processDefinitionKey'])
     expect(payload.processDefinitionKey).toBe('leave-approval')
-    // 兩條來源不得並存：variables 必須整個消失。
     expect(payload.variables).toBeUndefined()
-    // #66：initiator 一律由後端從登入身分決定。
     expect(payload.initiator).toBeUndefined()
     expect(payload.formData.formDefinitionId).toBe('leave-request')
-    expect(JSON.parse(payload.formData.dataJson)).toEqual({
-      leaveType: 'personal',
-      dateRange: '2026-10-01~2026-10-03',
-      reason: '家庭因素',
-    })
+    expect(JSON.parse(payload.formData.dataJson)).toEqual({ leaveType: 'annual', reason: '家庭因素' })
+    expect(wrapper.text()).toContain('申請已送出')
   })
 
-  it('採購：formDefinitionId 是 purchase-request，欄位與 schema 對齊', async () => {
+  it('internal validate 不通過就不送 POST', async () => {
     const wrapper = mountPage()
-    wrapper.vm.processKey = 'purchase-approval'
+    await loadAndSelect(wrapper)
+    // required 是「key 必須存在」（JSON Schema：camelCase 鍵不在物件裡）；
+    // 空字串仍算存在，widget 在清空時是把 key 拿掉（updateValue(undefined)）。
+    wrapper.vm.formData = { leaveType: 'annual' }
     await wrapper.vm.$nextTick()
-    wrapper.vm.purchaseForm.itemName = '筆電'
-    wrapper.vm.purchaseForm.quantity = 2
-    wrapper.vm.purchaseForm.amount = 42000
-    wrapper.vm.purchaseForm.reason = '汰換'
 
-    await clickSubmit(wrapper)
+    await wrapper.findAll('button').find((button) => button.text().includes('送出申請')).trigger('click')
+    await flush()
 
-    const [, payload] = http.post.mock.calls[0]
-    expect(payload.variables).toBeUndefined()
-    expect(payload.formData.formDefinitionId).toBe('purchase-request')
-    expect(JSON.parse(payload.formData.dataJson)).toEqual({
-      itemName: '筆電',
-      quantity: 2,
-      amount: 42000,
-      reason: '汰換',
-    })
+    expect(http.post).not.toHaveBeenCalled()
   })
 })
