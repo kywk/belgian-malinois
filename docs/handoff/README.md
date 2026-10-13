@@ -13,7 +13,7 @@
 | 後端 | Spring Boot **4.1.1** + Flowable **8.0.0** + Jackson **3** + JGit **7.8** + **uni-form SDK**（`vendor/uni-form` pin `89708ef`；uniform-core／jackson3／boot4-starter） |
 | 前端 | Vue 3.4 + Vite 5 + Element Plus + **UfRenderer／UfDesigner**（表單已全面 uni-form） |
 | 測試 | 後端 **1677**（`mvn verify`）、前端 **259**（Vitest）、`acceptance-test.sh` **PASS 7 / FAIL 0**、E2E（localenv）**13/13** |
-| `main` | `5b81ffb`（＝`nsl/main`）；重構交付於分支 **`uni-form`**（22 commits，2026-10-13 推 `nsl`） |
+| `main` | `beaffb4`（2026-10-13 合併 `uni-form`：uni-form 表單重構）；`nsl/main` 已同步 |
 | dev DB | core schema **v9**、Flowable schema **8.0.0.0**（不可逆）；audit 鏈 broken=19／unverifiable=123 為歷史債 |
 | dev 環境 | **localenv-first**：`bash ~/nanshan/scripts/localenv.sh greyhound ready`（:18110）；`scripts/localdev.sh`（偵測不到 localenv 才走 compose fallback） |
 | 功能 backlog | **97 項：✅ 97、🟡 0、⬜ 0**；uni-form P5 後續見 §3.F |
@@ -84,7 +84,7 @@
 
 | 項目 | 說明 |
 |---|---|
-| **push** | `nsl`（10.127.42.141）已可達（2026-10-13）；分支 `uni-form` 已推（`git push -u nsl uni-form`）。合併到 `main`／`dev` 的策略依使用者指示（**永不裸 push**） |
+| **push** | `nsl`（10.127.42.141）：`main` 已於 2026-10-13 推（含 uni-form 重構，merge `beaffb4`）；遠端 `uni-form` 分支保留（可刪）。**永不裸 push** |
 | **部署前檢查清單** | 見 `round21 §4`：prod secrets（含 `ORG_AUTH_TOKEN`／`PERM_AUTH_TOKEN`）、Teams webhook、`BPM_BPMN_GIT_ENABLED`、backfill、表單 schema 修復、權限碼指派等 |
 | **部署前 DB／secrets 盤點** | `bpm_external_system` 無 seed SQL：撈 `allowedProcessKeys`（fail-closed 恐中斷）與 `ipWhitelist`（nginx IP 語意翻轉）；prod 必須注入 `API_KEY_HMAC_SECRET`（未設即啟動失敗）。見 round22 §5 |
 

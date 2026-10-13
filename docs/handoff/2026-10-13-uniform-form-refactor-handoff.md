@@ -53,7 +53,8 @@
 
 ## 5. Commits
 
-- greyhound 分支 **`uni-form`**（base `5b81ffb`＝nsl/main）：**22 commits、98 檔、+7352/−3215**。
+- greyhound 分支 **`uni-form`**（base `5b81ffb`＝nsl/main）：**22 commits、98 檔、+7352/−3215**；
+  **2026-10-13 已合併回 `main`（merge `beaffb4`）並推 `nsl`**。
   重點：`0d07772`（submodule pin＋seeds＋BPMN）→ 三分支合併（`b2fe722`／`051062a`／`98f0ec2`）→
   `9b79c5c`／`01afee4`／`b21c138`（PM 收斂與修正）→ `3e2c9c9`／`14875e9`／`523ad3e`（localenv／
   容器建置／文件）。
