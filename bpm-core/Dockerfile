@@ -1,13 +1,28 @@
 # syntax=docker/dockerfile:1
+# ⚠️ build context 是 repo 根目錄（docker-compose.yml：`context: .`）。
+#
+# 為什麼不是 ./bpm-core：容器內必須先建置 uni-form SDK —— `0.1.0-SNAPSHOT`
+# 不在任何 registry，而「依賴主機 ~/.m2」會讓容器建置變成環境相依、在乾淨
+# 機器／CI 上失敗（實測原版 `dependency:go-offline` 就是這樣炸的）。
+# 從 pinned submodule 建置之後，快取鍵 = submodule commit，可重現。
+# ⚠️ 需要已初始化的 submodule：`git submodule update --init vendor/uni-form`。
 FROM eclipse-temurin:21-jdk-alpine AS build
 WORKDIR /app
 RUN apk add --no-cache maven
-# Pre-fetch dependencies (cached layer, only re-runs when pom.xml changes)
-COPY pom.xml .
-RUN --mount=type=cache,target=/root/.m2 mvn dependency:go-offline -q
-# Build
-COPY src ./src
-RUN --mount=type=cache,target=/root/.m2 mvn package -DskipTests -q
+
+# ── 1) uni-form SDK（spec/ 是 uniform-spec 模組的資源來源，路徑 ../../spec）──
+COPY vendor/uni-form/java /uf/java
+COPY vendor/uni-form/spec /uf/spec
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -B -q -f /uf/java \
+      -pl uniform-spec,uniform-core,uniform-jackson3,uniform-spring-boot4-starter -am \
+      install -DskipTests
+
+# ── 2) bpm-core 本體（pom 先到，依賴層快取只隨 pom 變動）──
+COPY bpm-core/pom.xml /app/pom.xml
+RUN --mount=type=cache,target=/root/.m2 mvn -B -q dependency:go-offline
+COPY bpm-core/src /app/src
+RUN --mount=type=cache,target=/root/.m2 mvn -B -q package -DskipTests
 
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app

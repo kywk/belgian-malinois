@@ -174,17 +174,19 @@ public class FormService {
      * <p>{@code FormData.formDefinitionId} 存的是定義資料列的 id（seed 用
      * {@code NEWID()}，是 UUID），而 BPMN 與前端只知道 formKey
      * （{@code leave-request}／{@code purchase-request}）。前端啟動流程時
-     * 送的是後者；若直接把它當 id 傳給 {@link FormSchemaValidator}，
-     * {@code findById("leave-request")} 查不到 → 依 #55 的已知缺口
-     * <b>整包 dataJson 靜默略過驗證</b>，而落地的那一列也不指向任何定義
+     * 送的是後者；若直接把它當 id 傳，查不到定義 → 依 #55 的歷史缺口
+     * 會整包 dataJson 靜默略過驗證，而落地的那一列也不指向任何定義
      * （{@code requireNotUsedByRunningProcess} 之類以 id 為條件的查詢全部落空）。
      *
      * <p>解析順序：<b>先當 id、查不到再當 formKey 找最新 published</b>。
      * 先 id 是為了不改變既有呼叫端（它們送的是真正的 UUID）；後 formKey
      * 是為了讓「只知道流程」的前端不必先打一趟 {@code GET /api/forms/{formKey}}
-     * 拿 id。兩者都查不到時回 {@code null} —— 呼叫端沿用原值，讓 validator
-     * 走它既有的「查不到定義 → 略過並 warn」路徑，而不是在這裡另外發明一種
-     * 錯誤語意（見 {@link FormSchemaValidator} 類別註解第 3 點）。
+     * 拿 id。兩者都查不到時回 {@code null}。
+     *
+     * <p>⚠️ uni-form 重構（2026-10-12）之後，{@code null} 的後果變了：
+     * 呼叫端（{@code ProcessController}）不再「略過驗證」，而是<b>直接 400</b>
+     * —— #55 的缺口已消滅（見計畫 §五 A6），本方法維持回 {@code null}
+     * 讓呼叫端決定狀態碼。
      *
      * <p>⚠️ 取「最新 published」與 {@code FormVersionLocker} 鎖進
      * {@code _formVersions} 的是同一條查詢（{@code findLatestPublished}），

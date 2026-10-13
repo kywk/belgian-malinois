@@ -7,6 +7,7 @@ import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.form.model.FormDefinition;
 import com.bpm.core.form.service.FormService;
 import com.bpm.core.security.ProcessAccessGuard;
+import com.bpm.core.uniform.FormDefinitionValidator;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.bind.annotation.*;
@@ -57,12 +58,17 @@ public class FormDefinitionController {
     // DocumentController 的 createdBy 必須共用同一份 requireSelf：
     // 授權規則只能有一份（見 ProcessAccessGuard 類別註解）。
     private final ProcessAccessGuard accessGuard;
+    // uni-form 重構（計畫 §五 A7）：schemaJson 必須是合法 DSL。
+    // 驗證排在所有 repository 寫入之前 —— 400 的零副作用不是靠回滾。
+    private final FormDefinitionValidator definitionValidator;
 
     public FormDefinitionController(FormService formService, AuditEventPublisher auditPublisher,
-                                    ProcessAccessGuard accessGuard) {
+                                    ProcessAccessGuard accessGuard,
+                                    FormDefinitionValidator definitionValidator) {
         this.formService = formService;
         this.auditPublisher = auditPublisher;
         this.accessGuard = accessGuard;
+        this.definitionValidator = definitionValidator;
     }
 
     /**
@@ -98,6 +104,10 @@ public class FormDefinitionController {
         // createdBy = 登入者（省略時必須寫入，而不是留 null：
         // 欄位可為 null 會讓「這張審核表是誰做的」變成無解）。
         def.setCreatedBy(accessGuard.requireSelf(def.getCreatedBy(), userId, "createdBy"));
+
+        // uni-form 重構（計畫 §五 A7）：schemaJson 必須是合法 DSL（且 key 與
+        // formKey 一致）。排在 create 之前 —— 違規時不建立任何列（零副作用）。
+        definitionValidator.validate(def.getSchemaJson(), def.getFormKey());
 
         FormDefinition saved = formService.create(def);
         audit("FORM_UPDATE", userId, saved, "create");
@@ -155,16 +165,37 @@ public class FormDefinitionController {
     public FormDefinition update(@PathVariable String id, @RequestBody FormDefinition def,
                                  @CallerId
                                  String userId) {
+        // 先確認資料列存在（次序同 FormDataController.update：不存在 → 404，
+        // 與「內容不合法」是兩種不同的錯）。key／formKey 一致性以**既有列**的
+        // formKey 檢查 —— body 的 formKey 不會被 update 搬動。
+        FormDefinition existing = formService.getById(id);
+        // uni-form 重構（計畫 §五 A7）：update 搬的就是 schemaJson，
+        // 因此這裡是必須擋下的主要入口（400 零副作用 —— 排在 update 之前）。
+        definitionValidator.validate(def.getSchemaJson(), existing.getFormKey());
+
         FormDefinition saved = formService.update(id, def);
         audit("FORM_UPDATE", userId, saved, "update");
         return saved;
     }
 
+    /**
+     * 發布 draft。
+     *
+     * <p>uni-form 重構（計畫 §五 A7）：<b>發布也要過 DSL gate</b>。
+     * draft 可能是 {@code createNextDraft} 複製來的（來源可能是更早版本、
+     * 甚至舊格式），那條路徑不經過 create／update 的驗證。發布是「這份
+     * 版本開始給流程用」的時點，是最後一個能零成本擋下的地方；
+     * 發布後才發現 DSL 壞掉，錯誤會出現在某個案件的投影／提交上（500），
+     * 與肇因相隔很遠。
+     */
     @PostMapping("/{id}/publish")
     @Transactional("formTransactionManager")
     public FormDefinition publish(@PathVariable String id,
                                   @CallerId
                                   String userId) {
+        FormDefinition existing = formService.getById(id);
+        definitionValidator.validate(existing.getSchemaJson(), existing.getFormKey());
+
         FormDefinition saved = formService.publish(id);
         audit("FORM_UPDATE", userId, saved, "publish");
         return saved;

@@ -2,6 +2,7 @@ package com.bpm.core.security;
 
 import com.bpm.core.support.IntegrationTestBase;
 import com.bpm.core.support.TestGatewayMockMvcCustomizer;
+import com.bpm.core.support.UniformTestDsl;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.crypto.MACSigner;
@@ -403,7 +404,7 @@ class MePermissionsEndpointTest extends IntegrationTestBase {
 
     private int postForm(String formKey, String userId) throws Exception {
         String body = "{\"formKey\":\"" + formKey + "\",\"name\":\"一致性測試表單\","
-                + "\"schemaJson\":\"{\\\"fields\\\":[{\\\"id\\\":\\\"x\\\"}]}\"}";
+                + "\"schemaJson\":\"" + UniformTestDsl.minimalEmbedded(formKey) + "\"}";
         HttpRequest req = HttpRequest.newBuilder(
                         URI.create("http://localhost:" + SERVLET_PORT + "/api/forms"))
                 .header("X-Gateway-Secret", TestGatewayMockMvcCustomizer.GATEWAY_SECRET)

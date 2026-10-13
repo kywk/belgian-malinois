@@ -88,7 +88,7 @@ class ESignDelegateIntegrationTest extends IntegrationTestBase {
                     <sequenceFlow id="alt1" sourceRef="esignFailed" targetRef="altReview"/>
                     <sequenceFlow id="alt2" sourceRef="esignBlocked" targetRef="altReview"/>
                     <userTask id="altReview" name="電子簽章失敗-人工處理"
-                              flowable:assignee="mgr001" flowable:formKey="leave-review"/>
+                              flowable:assignee="mgr001" flowable:formKey="leave-request"/>
                     <sequenceFlow id="altEnd" sourceRef="altReview" targetRef="end"/>
                 """ : "";
         String xml = """
@@ -116,7 +116,7 @@ class ESignDelegateIntegrationTest extends IntegrationTestBase {
                     </intermediateCatchEvent>
                     <sequenceFlow id="afterEsign" sourceRef="waitEsign" targetRef="manualReview"/>
                     <userTask id="manualReview" name="簽核結果複核"
-                              flowable:assignee="mgr001" flowable:formKey="leave-review"/>
+                              flowable:assignee="mgr001" flowable:formKey="leave-request"/>
                     <sequenceFlow id="okEnd" sourceRef="manualReview" targetRef="end"/>
                     %s
                     <endEvent id="end"/>

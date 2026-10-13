@@ -18,7 +18,10 @@
       </el-table-column>
       <el-table-column label="操作" width="80">
         <template #default="{ row }">
-          <el-button size="small" @click="$router.push(`/admin/form-editor/${row.id}`)">編輯</el-button>
+          <!-- ⚠️ 帶 formKey＋version：GET /api/forms/{formKey} 以 formKey 查，
+               不帶 version 只回「最新 published」——草稿會被載成另一版。
+               帶 version 時回精確的那一列（getSchema 不篩 status）。 -->
+          <el-button size="small" @click="$router.push(`/admin/form-editor/${row.formKey}?version=${row.version}`)">編輯</el-button>
         </template>
       </el-table-column>
     </el-table>

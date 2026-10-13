@@ -21,6 +21,7 @@
 | [`2026-09-28-adr-001-form-service-consolidation.md`](2026-09-28-adr-001-form-service-consolidation.md) | form-service 併入 bpm-core 的決策紀錄 | ✅ 已完成（＝升級 Stage 3，2026-09-28） | 0 |
 | [`2026-10-05-adr-002-bpmn-as-code.md`](2026-10-05-adr-002-bpmn-as-code.md) | R-08 選項 A：BPMN-as-code（repo 單一來源、`POST /api/deployments` 單一入口、classpath 退場） | 📝 **設計完成；T1 ✅（2026-10-06）、T2–T5 進行中**（閘道過渡＋CI 專用權限碼已拍板） | **~2** |
 | [`2026-09-28-remediation-backlog.md`](2026-09-28-remediation-backlog.md) | 工程品質與安全性改進項（R-01 ~ R-25） | R-01／02／03／05／06／09／10／11／12／13／14／17／18／19／20／23 ✅；R-04 步驟 1 ✅（剩 0.5）；**R-21／22／24／25 ✅（2026-10-05）**；**R-08 實作進行中（T1 ✅）**；R-07／15／16 待開工 | **~6** |
+| [`2026-10-12-uniform-form-refactor.md`](2026-10-12-uniform-form-refactor.md) | uni-form 表單重構（DSL v1／`uniform:access`／Envelope／`validateV1`；3 subagent＋PM 整合） | ✅ **已交付（2026-10-13）**：E2E 13/13、`mvn verify` 1677、前端 259、acceptance 7/0；文件保留為施工契約與介面權威 | 0 |
 
 剩餘約 **6 人日**（全部在 remediation；R-08 T1 ✅、T2–T5 剩 ~2；升級已結案）。功能 backlog `docs/backend-development-backlog.md`
 已於 **2026-10-04 結清：97 項 ✅ 97／🟡 0／⬜ 0**。security-audit 文末殘餘待估。
@@ -61,10 +62,12 @@
   `seed-data.sh` 路徑與 `name` 修正；**testResources 映射依實測延後至 T4**（雙 root 會 same-key 起不來）。
 - **Q1／Q2 拍板**：CI 先用**閘道密鑰過渡**（IdP JWT 為退出條件）、prod 走 **CI 專用權限碼**（O2 併入 T2）。
 
-**下一個開工點：R-08 續作（T2 待 R-07 runner 前提；Q1／Q2 已拍板）、
-remediation 其餘（R-04 步驟 2–5／R-07／R-15／R-16）與部署前檢查清單（round22 §5）。
+**下一個開工點（2026-10-13 更新）：uni-form 表單重構已交付**（[計畫](2026-10-12-uniform-form-refactor.md)／
+[交接](../handoff/2026-10-13-uniform-form-refactor-handoff.md)）。續作：**uni-form P5**（動態選項／file／
+richtext／`bpm:` pack／BPMN lint）、**R-08 T2–T5**（待 R-07 runner 前提）、**remediation 其餘**
+（R-04 步驟 2–5／R-07／R-15／R-16）與部署前檢查清單（round22 §5＋uni-form jar 取得方式）。
 CI/CD 平台決策已定：保留 GitLab CI。功能 backlog 已於 2026-10-04 全數結清（97/97）；
-派工 prompt 見 `docs/handoff/2026-10-04-next-agent-prompt.md`（B 批次已勾消；C～E 仍有效、R-08 以 ADR-002 為準）。**
+派工 prompt 見 `docs/handoff/2026-10-13-next-agent-prompt.md`（取代 10-04 版的大部分內容；R-08 以 ADR-002 為準）。
 
 ## 三個必須知道的結論
 

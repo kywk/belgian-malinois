@@ -4,6 +4,7 @@ import com.bpm.core.support.IntegrationTestBase;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
+import org.flowable.task.api.Task;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -49,6 +50,9 @@ class AuditFailClosedTest extends IntegrationTestBase {
 
     private static final String KEY = "audit-fail-closed-single";
 
+    /** 帶動態表單（seed 的 leave-request）的單關卡流程，供表單提交路徑使用。 */
+    private static final String FORM_KEY = "audit-fail-closed-form";
+
     private static final String FAIL_TRIGGER = "trg_test_audit_fail_closed";
 
     /** 讓符合 LIKE 樣式的 operation_type 寫入時直接失敗。 */
@@ -78,8 +82,7 @@ class AuditFailClosedTest extends IntegrationTestBase {
 
     @BeforeEach
     void deploy() {
-        if (repositoryService.createProcessDefinitionQuery().processDefinitionKey(KEY).count() > 0) return;
-        String xml = """
+        deployIfAbsent(KEY, """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
                              xmlns:flowable="http://flowable.org/bpmn"
@@ -92,8 +95,39 @@ class AuditFailClosedTest extends IntegrationTestBase {
                     <endEvent id="end"/>
                   </process>
                 </definitions>
-                """.formatted(KEY);
-        repositoryService.createDeployment().addString(KEY + ".bpmn20.xml", xml).name(KEY).deploy();
+                """);
+        // 表單提交路徑用的流程：節點掛 seed 的 leave-request，Access Profile 為
+        // fill／readonly＋reason editable（與 BPMN seed 的補件關卡同形狀）。
+        deployIfAbsent(FORM_KEY, """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                             xmlns:flowable="http://flowable.org/bpmn"
+                             xmlns:uniform="http://bpm.com/uniform"
+                             targetNamespace="test">
+                  <process id="%s" name="表單單關卡" isExecutable="true">
+                    <startEvent id="start"/>
+                    <sequenceFlow id="f0" sourceRef="start" targetRef="formTask"/>
+                    <userTask id="formTask" name="填寫" flowable:assignee="user001"
+                              flowable:formKey="leave-request">
+                      <extensionElements>
+                        <uniform:access mode="fill" default="readonly">
+                          <uniform:field key="reason" state="editable"/>
+                        </uniform:access>
+                      </extensionElements>
+                    </userTask>
+                    <sequenceFlow id="f1" sourceRef="formTask" targetRef="end"/>
+                    <endEvent id="end"/>
+                  </process>
+                </definitions>
+                """);
+    }
+
+    private void deployIfAbsent(String key, String xmlTemplate) {
+        if (repositoryService.createProcessDefinitionQuery().processDefinitionKey(key).count() > 0) return;
+        repositoryService.createDeployment()
+                .addString(key + ".bpmn20.xml", xmlTemplate.formatted(key))
+                .name(key)
+                .deploy();
     }
 
     private void auditAlwaysFails() {
@@ -168,23 +202,23 @@ class AuditFailClosedTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("表單送出（bpm_form_db）時稽核失敗 → 503，且表單資料沒有落地")
+    @DisplayName("表單提交（bpm_form_db）時稽核失敗 → 503，且表單資料沒有落地")
     void formSubmitRollsBackWhenAuditFails() throws Exception {
-        // ⚠️ 必須是真實的流程實例（#72）：FormDataController 的 POST 現在要求
-        // 呼叫者是該 processInstanceId 的參與者。改動前這裡用隨機字串
-        // 「fail-closed-<uuid>」是可行的（當時沒有任何檢查），現在會先被守衛
-        // 以 404 擋下 —— 而那個 404 與「守衛壞掉」的 404 無法分辨，
-        // 斷言 503 會失敗，失敗訊息會把排查方向帶到完全無關的地方。
-        //
-        // 所以改成真實實例而不是放寬預期值：這條測試要驗的是
-        // 「稽核寫不進去 → 表單資料不得落地」，與守衛無關。
-        String pid = startDirectly();
-        auditAlwaysFails();
+        // ⚠️ uni-form 重構後唯一的提交入口是「完成任務＋formData」。
+        // 這條測試要驗的命題不變：「稽核寫不進去 → 表單資料不得落地」，
+        // 而且因為表單交易先 commit、主交易才走 beforeCommit，
+        // 這裡同時驗到 afterCompletion 的補償刪除（沒有 XA 的窗口）。
+        String pid = runtimeService.startProcessInstanceByKey(FORM_KEY,
+                Map.of("initiator", "user001")).getId();
+        Task task = taskService.createTaskQuery().processInstanceId(pid).singleResult();
+        assertThat(task).as("前置條件：表單案件必須停在唯一關卡").isNotNull();
+        failAuditInsertsWhere("FORM_SUBMIT");
 
-        mockMvc.perform(post("/api/form-data")
+        mockMvc.perform(put("/api/tasks/{id}", task.getId())
+                        .header("X-User-Id", "user001")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"formDefinitionId\":\"x\",\"processInstanceId\":\"" + pid
-                                + "\",\"dataJson\":\"{}\"}"))
+                        .content("{\"action\":\"complete\","
+                                + "\"formData\":{\"dataJson\":\"{\\\"reason\\\":\\\"稽核失敗測試\\\"}\"}}"))
                 .andExpect(status().isServiceUnavailable());
 
         int[] rows = {-1};
@@ -197,8 +231,13 @@ class AuditFailClosedTest extends IntegrationTestBase {
                 rows[0] = rs.getInt(1);
             }
         });
-        assertThat(rows[0]).as("表單 DB 與稽核 DB 不同，交易必須開在 formTransactionManager 上才回滾得掉")
+        assertThat(rows[0])
+                .as("form 交易已 commit、主交易回捲 —— 必須由補償刪除，"
+                        + "留下來就是「有表單、沒有完成任務」的孤兒列")
                 .isZero();
+        assertThat(taskService.createTaskQuery().taskId(task.getId()).count())
+                .as("稽核失敗時任務不得被完成")
+                .isEqualTo(1);
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.bpm.core.form;
 
 import com.bpm.core.form.model.FormDefinition;
 import com.bpm.core.form.repository.FormDefinitionRepository;
+import com.bpm.core.support.UniformTestDsl;
 import org.junit.jupiter.api.DisplayName;
 import com.bpm.core.support.IntegrationTestBase;
 import org.junit.jupiter.api.Test;
@@ -64,7 +65,9 @@ class FormRevisionTest extends IntegrationTestBase {
         d.setName("原始表單");
         d.setVersion(version);
         d.setStatus("published");
-        d.setSchemaJson("{\"fields\":[{\"id\":\"v" + version + "\"}]}");
+        // V7 之後 schemaJson 的世界只有 DSL；由 repository 直接種入（繞過 API gate）
+        // 仍要是合法 DSL，因為 createNextDraft 會複製它、publish 會驗它。
+        d.setSchemaJson(UniformTestDsl.withKeys(formKey, "v" + version));
         return defRepo.save(d);
     }
 
@@ -96,7 +99,8 @@ class FormRevisionTest extends IntegrationTestBase {
                         .header("X-User-Id", DESIGNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"改版後的表單\","
-                                + "\"schemaJson\":\"{\\\"fields\\\":[{\\\"id\\\":\\\"newField\\\"}]}\"}"))
+                                + "\"schemaJson\":\"" + UniformTestDsl.embedded(
+                                        UniformTestDsl.withKeys(key, "newField")) + "\"}"))
                 .andExpect(status().isOk());
 
         // 發布
@@ -122,7 +126,7 @@ class FormRevisionTest extends IntegrationTestBase {
                         .header("X-User-Id", DESIGNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"formKey\":\"" + key + "\",\"name\":\"新表單\","
-                                + "\"schemaJson\":\"{\\\"fields\\\":[]}\"}"))
+                                + "\"schemaJson\":\"" + UniformTestDsl.minimalEmbedded(key) + "\"}"))
                 .andExpect(status().isOk()).andReturn();
         String id = res.getResponse().getContentAsString()
                 .replaceAll(".*\"id\":\"([^\"]*)\".*", "$1");
@@ -167,11 +171,16 @@ class FormRevisionTest extends IntegrationTestBase {
         String key = uniqueKey();
         publishedForm(key, 1);
 
+        // ⚠️ 這裡只驗狀態碼：MockMvc 不做 error dispatch，所以
+        // ResponseStatusException 的訊息（「請改用 POST /api/forms/{key}/revisions」）
+        // 不會出現在 MockMvc 取得的 body 裡。訊息本身由
+        // FormService.create 的 400 提供，且被 FormDesignAuthorizationTest
+        // 的真實 HTTP 版本覆蓋（那裡讀得到 error dispatch 後的 body）。
         mockMvc.perform(post("/api/forms")
                         .header("X-User-Id", DESIGNER)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"formKey\":\"" + key + "\",\"name\":\"重複\","
-                                + "\"schemaJson\":\"{}\"}"))
+                                + "\"schemaJson\":\"" + UniformTestDsl.minimalEmbedded(key) + "\"}"))
                 .andExpect(status().isBadRequest());
 
         assertThat(versionsOf(key)).hasSize(1);

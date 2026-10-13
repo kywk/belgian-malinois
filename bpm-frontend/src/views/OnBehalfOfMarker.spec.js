@@ -71,16 +71,25 @@ vi.mock('../services/flowableApi.js', () => ({
   getProcessDefinitionXml: vi.fn(async () => ''),
 }))
 
+// DocumentDetail 的表單區會打 GET /api/tasks/{id}/form 拿 uni-form Envelope。
+// 給它一份合法的空 envelope（view 模式、沒有欄位）—— 因為「格式錯誤」那條
+// 路徑會顯示錯誤提示，測試輸出會摻雜與 #68b 無關的雜訊。
 vi.mock('../services/http', () => ({
-  default: { get: vi.fn(async () => ({ data: {} })) },
-}))
-
-// DocumentDetail 會連帶渲染 DynamicForm，而它 onMounted 會去讀表單 schema。
-// 給它一份合法的空 schema（而不是讓它失敗）—— 因為 DynamicForm 把失敗記成
-// console.error 之後繼續，測試仍然是綠的，但輸出裡會有雜訊，
-// 而且「這個測試是走正常路徑還是走錯誤路徑」就分辨不出來了。
-vi.mock('../services/formApi.js', () => ({
-  getFormSchema: vi.fn(async () => ({ schemaJson: { fields: [] } })),
+  default: {
+    get: vi.fn(async (url) => ({
+      data: typeof url === 'string' && url.endsWith('/form')
+        ? {
+            uniform: '1.0',
+            mode: 'view',
+            frame: 'form',
+            schemaRef: { key: 'leave-request', version: 1, hash: 'test' },
+            schema: { $uniform: '1.0', key: 'leave-request', requires: { core: '^1.0' }, root: [] },
+            data: {},
+            meta: { locale: 'zh-TW', states: {}, required: [] },
+          }
+        : {},
+    })),
+  },
 }))
 
 // DocumentDetail.vue 用 useRoute() 讀 taskId、用 useRouter() 導航。

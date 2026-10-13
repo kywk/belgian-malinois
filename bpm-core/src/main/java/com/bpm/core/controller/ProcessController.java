@@ -10,7 +10,8 @@ import com.bpm.core.dto.StartProcessRequest;
 import com.bpm.core.form.model.FormData;
 import com.bpm.core.form.model.FormDefinition;
 import com.bpm.core.form.service.FormService;
-import com.bpm.core.form.validation.FormSchemaValidator;
+import com.bpm.core.uniform.FormAccessResolver;
+import com.bpm.core.uniform.FormSubmissionService;
 import com.bpm.core.notify.NotifyPublisher;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.security.ProcessAccessGuard;
@@ -21,6 +22,7 @@ import org.flowable.engine.HistoryService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
+import org.flowable.engine.repository.ProcessDefinition;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
 import org.slf4j.Logger;
@@ -30,13 +32,9 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
-import tools.jackson.core.JacksonException;
-import tools.jackson.core.type.TypeReference;
-import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/process-instances")
@@ -84,7 +82,16 @@ public class ProcessController {
             java.util.Set.of("initiator", "effectiveInitiator",
                     InitialAssigneeResolver.ON_BEHALF_OF_VAR);
 
-    private static boolean isProtectedVariable(String name) {
+    /**
+     * 受保護的流程變數名（共用名單）。
+     *
+     * <p>公開給 {@code TaskController} 重用：complete 的 formData 推導與
+     * 啟動路徑必須是同一份名單 —— 兩處各自維護時會出現「啟動擋掉、
+     * 完成路徑放行」的組合型差異，那種差異比沒有檢查更難察覺。
+     * ⚠️ 名單內容與理由見上方 {@link #PROTECTED_VARIABLES} 的註解，
+     * 不得在呼叫端另立一份。
+     */
+    public static boolean isProtectedVariable(String name) {
         if (name == null || name.isBlank()) return true;
         return name.startsWith("_") || PROTECTED_VARIABLES.contains(name);
     }
@@ -120,10 +127,6 @@ public class ProcessController {
 
     private static final Logger log = LoggerFactory.getLogger(ProcessController.class);
 
-    /** {@code formData.dataJson} 的型別：JSON 物件 → 流程變數 map（#60）。 */
-    private static final TypeReference<Map<String, Object>> FORM_DATA_TYPE =
-            new TypeReference<>() {};
-
     private final RuntimeService runtimeService;
     private final RepositoryService repositoryService;
     private final TaskService taskService;
@@ -135,11 +138,12 @@ public class ProcessController {
     private final ApplicantIdentityLookup applicantLookup;
     private final NotifyPublisher notifyPublisher;
     // #60：表單資料隨啟動落地。FormService 是唯一的表單寫入入口；
-    // FormSchemaValidator 是唯一的 schema 規則（與 FormDataController.submit
-    // 同一份，不在此重寫「哪些欄位必填、型別是什麼」）。
+    // uni-form 重構後，內容驗證改走 FormSubmissionService（SDK validateV1，
+    // 與 TaskController.complete 的 formData 同一份），Access Profile 由
+    // BPMN startEvent 決定（FormAccessResolver）。
     private final FormService formService;
-    private final FormSchemaValidator schemaValidator;
-    private final ObjectMapper objectMapper;
+    private final FormSubmissionService formSubmissionService;
+    private final FormAccessResolver formAccessResolver;
 
     public ProcessController(RuntimeService runtimeService, RepositoryService repositoryService,
                              TaskService taskService, HistoryService historyService,
@@ -150,8 +154,8 @@ public class ProcessController {
                              ApplicantIdentityLookup applicantLookup,
                              NotifyPublisher notifyPublisher,
                              FormService formService,
-                             FormSchemaValidator schemaValidator,
-                             ObjectMapper objectMapper) {
+                             FormSubmissionService formSubmissionService,
+                             FormAccessResolver formAccessResolver) {
         this.runtimeService = runtimeService;
         this.repositoryService = repositoryService;
         this.taskService = taskService;
@@ -163,8 +167,8 @@ public class ProcessController {
         this.applicantLookup = applicantLookup;
         this.notifyPublisher = notifyPublisher;
         this.formService = formService;
-        this.schemaValidator = schemaValidator;
-        this.objectMapper = objectMapper;
+        this.formSubmissionService = formSubmissionService;
+        this.formAccessResolver = formAccessResolver;
     }
 
     /**
@@ -236,19 +240,24 @@ public class ProcessController {
      * —— 與 {@link AuditEventPublisher} 記載的取捨相同（多記可反查，
      * 漏記無從發現）。
      *
-     * <h2>#60：formData 的欄位語意</h2>
+     * <h2>#60：formData 的欄位語意（uni-form 重構後）</h2>
      *
      * <ul>
      *   <li>{@code formDefinitionId} 先當定義 id 查、查不到再當 formKey 查
      *       最新 published（前端只知道 BPMN 的 formKey），見
-     *       {@link FormService#findDefinitionByIdOrKey}。</li>
-     *   <li>{@code dataJson} 的規則不在此重寫：{@link FormSchemaValidator}
-     *       是唯一一份，與 {@code FormDataController.submit} 共用。</li>
+     *       {@link FormService#findDefinitionByIdOrKey}。
+     *       <b>解析不到 → 400</b>：uni-form 重構（2026-10-12）消滅了
+     *       「查不到定義就略過驗證」的 #55 缺口，不再有讓整包 dataJson
+     *       跳過驗證的路徑。</li>
+     *   <li>{@code dataJson} 的驗證規則不在此重寫：
+     *       {@link FormSubmissionService}（SDK {@code validateV1}）是唯一一份，
+     *       與 {@code TaskController} 的 formData 完成路徑共用；Access Profile
+     *       取 startEvent 的 {@code uniform:access}（無 access → fill／editable）。</li>
      *   <li><b>與 {@code variables} 重疊 → 400</b>：同一欄位兩處都給時
      *       靜默選一邊，呼叫端會以為另一邊生效了。</li>
      *   <li><b>推導出的變數逐 key 過 {@link #isProtectedVariable}</b>：
-     *       schema 驗證在「查不到定義」時會略過（#55 已知缺口），
-     *       這道檢查是那個缺口下仍必須存在的第二層。</li>
+     *       與 body 的 {@code variables} 同一份名單（啟動路徑與完成路徑
+     *       必須一致，否則會出現「一處放行、一處擋掉」的組合型差異）。</li>
      * </ul>
      */
     @PostMapping
@@ -296,8 +305,11 @@ public class ProcessController {
                 });
 
         // ── #60：formData 的形狀、驗證與變數推導（全部在任何寫入之前）────
-        // 解析後的定義 id 要留給最後的 submitData，因此宣告在區塊之外。
+        // 解析後的定義與資料要留到存在性檢查之後（validateV1 需要 startEvent
+        // 的 Access Profile，而 profile 需要最新的流程定義），因此宣告在區塊之外。
         String formDefinitionId = null;
+        FormDefinition formDefinition = null;
+        Map<String, Object> derivedFormData = null;
         if (req.formData() != null) {
             StartProcessRequest.FormDataPayload formData = req.formData();
             if (formData.formDefinitionId() == null || formData.formDefinitionId().isBlank()
@@ -308,26 +320,22 @@ public class ProcessController {
             }
 
             // 前端只知道 BPMN 的 formKey；FormData.formDefinitionId 存的是定義 id。
-            // 解析不到時沿用原值，讓 FormSchemaValidator 走既有的「查不到 → 略過」
-            // 路徑（#55 已知缺口），而不是在這裡另外發明一種 404。
+            // ⚠️ uni-form 重構（計畫 §五 A6）消滅了「查不到定義就略過驗證」的缺口：
+            // 解析不到一律 400，不再有讓整包 dataJson 跳過驗證的路徑。
             FormDefinition def = formService.findDefinitionByIdOrKey(formData.formDefinitionId());
-            formDefinitionId = def != null ? def.getId() : formData.formDefinitionId();
-
-            // 內容驗證：與 FormDataController.submit 同一份規則、同一種訊息形狀。
-            // 違規在此中止 —— 流程與表單都不會動（零副作用）。
-            List<FormSchemaValidator.Violation> violations =
-                    schemaValidator.validate(formDefinitionId, formData.dataJson());
-            if (!violations.isEmpty()) {
+            if (def == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "表單資料不符表單定義的 schema：" + violations.stream()
-                                .map(v -> "'" + v.fieldId() + "' " + v.reason())
-                                .collect(Collectors.joining("；")));
+                        "formData.formDefinitionId 查不到表單定義: " + formData.formDefinitionId()
+                                + "（可傳定義 id 或 BPMN 的 formKey；請確認表單已發布）");
             }
+            formDefinitionId = def.getId();
+            formDefinition = def;
 
-            Map<String, Object> derived = parseFormDataJson(formData.dataJson());
+            derivedFormData = formSubmissionService.parseDataJson(
+                    formData.dataJson(), "formData.dataJson");
 
             // 同一欄位不可兩處都給：靜默選一邊會讓呼叫端以為另一邊生效。
-            for (String name : derived.keySet()) {
+            for (String name : derivedFormData.keySet()) {
                 if (vars.containsKey(name)) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "變數 '" + name + "' 同時出現在 variables 與 formData。"
@@ -335,10 +343,9 @@ public class ProcessController {
                 }
             }
 
-            // 推導出的變數與 variables 一樣會進引擎，必須過同一條保護名單。
-            // 尤其 formDefinitionId 查不到定義時 schema 驗證會略過（#55），
-            // 這一層是那個缺口下的實際防線（initiator／onBehalfOf／_ 前綴）。
-            derived.keySet().stream()
+            // 推導出的變數與 variables 一樣會進引擎，必須過同一條保護名單
+            // （名單只有一份：ProcessController.isProtectedVariable）。
+            derivedFormData.keySet().stream()
                     .filter(ProcessController::isProtectedVariable)
                     .findFirst()
                     .ifPresent(name -> {
@@ -346,14 +353,31 @@ public class ProcessController {
                                 "不允許以表單欄位指定受保護的變數: " + name
                                         + "（initiator 由登入身分決定；_ 前綴為伺服器內部狀態）");
                     });
-
-            vars.putAll(derived);
         }
 
         // 存在性檢查放在所有 400 之後：請求形狀不對與資源不存在是兩件事，
         // 先把形狀講清楚，呼叫端才知道要改 payload 還是改流程選擇。
-        if (repositoryService.createProcessDefinitionQuery().processDefinitionKey(key).count() == 0) {
+        // 取 latestVersion 的實體（不是 count）：它是 startEvent Access Profile
+        // 的來源，且與 startProcessInstanceByKey 會用到的版本一致。
+        ProcessDefinition processDefinition = repositoryService.createProcessDefinitionQuery()
+                .processDefinitionKey(key).latestVersion().singleResult();
+        if (processDefinition == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "流程定義不存在: " + key);
+        }
+
+        // ── uni-form：以 startEvent 的 Access Profile 驗證提交（計畫 §五 A6）──
+        // 排在存在性檢查之後（profile 需要定義）、任何寫入之前。違規 400
+        // 零副作用；通過才把提交值併入流程變數。
+        if (formDefinition != null) {
+            Map<String, Object> startProfile =
+                    formAccessResolver.profileForStartEvent(processDefinition.getId());
+            List<String> errors = formSubmissionService.validate(
+                    formDefinition, startProfile, derivedFormData, new LinkedHashMap<>());
+            if (!errors.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "表單資料不符表單定義的 schema：" + String.join("；", errors));
+            }
+            vars.putAll(derivedFormData);
         }
 
         // ⚠️ 必須在 startProcessInstanceByKey 之前寫入：BPMN 在流程啟動的當下
@@ -416,28 +440,11 @@ public class ProcessController {
 
             // 主交易 commit 失敗時補償刪除（form 交易已 commit，回滾不了它）。
             // 註冊需要進行中的交易同步；本方法有 @Transactional，必定成立。
-            registerFormDataCompensation(saved.getId());
+            registerFormDataCompensation(formService, saved.getId());
 
             result.put("formDataId", saved.getId());
         }
         return result;
-    }
-
-    /**
-     * {@code formData.dataJson} → 流程變數 map（#60）。
-     *
-     * <p>先經過 {@link FormSchemaValidator#validate} 才呼叫這裡，正常情況
-     * 必定是合法 JSON 物件；但仍明確擋下例外 —— validator 在查不到定義時
-     * 會略過驗證（#55 已知缺口），那條路徑的資料形狀沒有保證。違規一律 400：
-     * dataJson 的形狀是呼叫端的輸入問題，不是伺服器故障。
-     */
-    private Map<String, Object> parseFormDataJson(String dataJson) {
-        try {
-            return objectMapper.readValue(dataJson, FORM_DATA_TYPE);
-        } catch (JacksonException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "formData.dataJson 必須是 JSON 物件（{...}）：" + e.getOriginalMessage());
-        }
     }
 
     /**
@@ -450,8 +457,13 @@ public class ProcessController {
      * <p>⚠️ 補償失敗只記 ERROR：此時沒有進行中的交易可以回滾，也無法把
      * 失敗轉成對呼叫端的回應（主交易已經失敗）。留下的是「有表單、
      * 沒有案件」的孤兒列，可由日誌追查 —— 這是沒有 XA 時接受的取捨。
+     *
+     * <p>package-private static：{@code TaskController} 的
+     * {@code formData} 完成路徑與本方法共用同一份補償實作（規則只能有一份）。
+     * {@code FormService} 由呼叫端傳入，讓這個方法不依賴任何一個 controller
+     * 的欄位。
      */
-    private void registerFormDataCompensation(String formDataId) {
+    static void registerFormDataCompensation(FormService formService, String formDataId) {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCompletion(int status) {

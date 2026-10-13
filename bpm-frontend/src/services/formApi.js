@@ -26,11 +26,11 @@ export const updateForm = (id, data) =>
 export const publishForm = (id) =>
   http.post(`/api/forms/${id}/publish`).then(r => r.data)
 
-export const submitFormData = (data) =>
-  http.post('/api/form-data', data).then(r => r.data)
-
+// 表單資料的寫入路徑已整併：
+//   申請／補件 → POST /api/process-instances 與 PUT /api/tasks/{id} 的 formData
+//                payload（DocumentDetail 直接組 request，不經 formApi）。
+//   讀取      → getFormData（稽核／其他頁面用）。
+// 舊的 POST /api/form-data 與 PUT /api/form-data/{id} 已隨 uni-form 重構移除，
+// 這裡刻意不再提供對應函式（避免有新的呼叫端接上空端點）。
 export const getFormData = (processInstanceId) =>
   http.get(`/api/form-data/${processInstanceId}`).then(r => r.data)
-
-export const updateFormData = (id, data) =>
-  http.put(`/api/form-data/${id}`, data).then(r => r.data)

@@ -1,8 +1,8 @@
 # docs/handoff — 交接文件索引
 
-**最後更新**：2026-10-05（remediation B 批次：R-21／R-22／R-24／R-25 完成）
-**最新交接**：`2026-10-05-round22-handoff.md`
-**下一批工作 prompt**：`2026-10-04-next-agent-prompt.md`（B 批次已勾消；C 平台決策＝GitLab CI）
+**最後更新**：2026-10-13（uni-form 表單重構：DSL v1／Envelope／validateV1；E2E 13/13）
+**最新交接**：`2026-10-13-uniform-form-refactor-handoff.md`
+**下一批工作 prompt**：`2026-10-13-next-agent-prompt.md`
 
 ---
 
@@ -10,13 +10,13 @@
 
 | | |
 |---|---|
-| 後端 | Spring Boot **4.1.1** + Flowable **8.0.0** + Jackson **3** + JGit **7.8**（#70 全數完成，EOL 安全債清償） |
-| 前端 | Vue 3.4 + Vite 5 + Element Plus |
-| 測試 | 後端 **1656**（`mvn clean verify`）、前端 **211**（Vitest）、`acceptance-test.sh` **PASS 7 / FAIL 0** |
-| `main` | `0eda767`（＋R-08 T1 merge、文件收尾；`nsl` 主機不可達，約 **146 顆** commit 待推） |
+| 後端 | Spring Boot **4.1.1** + Flowable **8.0.0** + Jackson **3** + JGit **7.8** + **uni-form SDK**（`vendor/uni-form` pin `89708ef`；uniform-core／jackson3／boot4-starter） |
+| 前端 | Vue 3.4 + Vite 5 + Element Plus + **UfRenderer／UfDesigner**（表單已全面 uni-form） |
+| 測試 | 後端 **1677**（`mvn verify`）、前端 **259**（Vitest）、`acceptance-test.sh` **PASS 7 / FAIL 0**、E2E（localenv）**13/13** |
+| `main` | `5b81ffb`（＝`nsl/main`）；重構交付於分支 **`uni-form`**（22 commits，2026-10-13 推 `nsl`） |
 | dev DB | core schema **v9**、Flowable schema **8.0.0.0**（不可逆）；audit 鏈 broken=19／unverifiable=123 為歷史債 |
-| dev 容器 | compose project `greyhound`；跑最新 build、預設設定（mock 組織/權限、Git 版控關閉） |
-| 功能 backlog | **97 項：✅ 97、🟡 0、⬜ 0** |
+| dev 環境 | **localenv-first**：`bash ~/nanshan/scripts/localenv.sh greyhound ready`（:18110）；`scripts/localdev.sh`（偵測不到 localenv 才走 compose fallback） |
+| 功能 backlog | **97 項：✅ 97、🟡 0、⬜ 0**；uni-form P5 後續見 §3.F |
 | remediation backlog | 開放 **~6 人日**（見 §3.B；R-21～R-25 已完成；R-08 T1 ✅、T2–T5 剩 ~2） |
 
 **閱讀順序**：① 最新 round（22）→ ② 本 README 的「未完成總表」→ ③ `2026-10-04-next-agent-prompt.md` →
@@ -52,12 +52,19 @@
 | `2026-10-04-round20-handoff.md` | #63（+198 單元）／#64（端到端＋flake 修復＋`PROCESS_COMPLETE result` 真 bug 修復） |
 | `2026-10-04-round21-handoff.md` | **#8／#9 外圍 client 正式化——97 項全清**；含部署前檢查清單 |
 | `2026-10-05-round22-handoff.md` | **remediation B 批次：R-21／R-22／R-24／R-25**；含部署清單增補 |
-| `2026-10-04-next-agent-prompt.md` | 未完成事項的派工 prompt（B 批次已完成；C／D／E 仍有效） |
+| `2026-10-13-uniform-form-refactor-handoff.md` | **uni-form 表單重構（DSL v1／uniform:access／Envelope／validateV1）；E2E 13/13** |
+| `2026-10-13-next-agent-prompt.md` | 下一批工作（uni-form P5＋remediation 殘餘＋功能殘餘） |
+| `2026-10-04-next-agent-prompt.md` | 未完成事項的派工 prompt（B 批次已完成；C／D／E 仍有效，部分已由 10-13 版取代） |
 
 ---
 
-## 2. 已完成大事記（2026-10-03～05）
+## 2. 已完成大事記（2026-10-03～13）
 
+- **uni-form 表單重構（2026-10-12～13）**：表單 UI 與資料全面改用 uni-form SDK —— DSL v1
+  （`$uniform:"1.0"`）、BPMN `uniform:access`（缺省 fail-closed）、Envelope／`validateV1`；
+  前端 UfRenderer／UfDesigner；3 subagent 分工＋PM 整合。證據：`mvn verify` 1677、前端 259、
+  E2E 13/13（localenv）、acceptance 7/0、fallback 容器 smoke 13/13。詳見
+  `2026-10-13-uniform-form-refactor-handoff.md`。
 - **remediation B 批次（2026-10-05）**：R-21（授權設定寫入端驗證＋UI 多選）、R-22（反向代理後真實
   client IP）、R-24（擁有權查詢與篩選分離）、R-25（API key v2／寬限期／失敗節流）；後端 1656、前端
   211、acceptance 7/0（round22）。
@@ -77,7 +84,7 @@
 
 | 項目 | 說明 |
 |---|---|
-| **push `nsl`** | `nsl`（10.127.42.141）不可達；恢復後 `git push nsl main`（**唯一允許的 push**，永不裸 push） |
+| **push** | `nsl`（10.127.42.141）已可達（2026-10-13）；分支 `uni-form` 已推（`git push -u nsl uni-form`）。合併到 `main`／`dev` 的策略依使用者指示（**永不裸 push**） |
 | **部署前檢查清單** | 見 `round21 §4`：prod secrets（含 `ORG_AUTH_TOKEN`／`PERM_AUTH_TOKEN`）、Teams webhook、`BPM_BPMN_GIT_ENABLED`、backfill、表單 schema 修復、權限碼指派等 |
 | **部署前 DB／secrets 盤點** | `bpm_external_system` 無 seed SQL：撈 `allowedProcessKeys`（fail-closed 恐中斷）與 `ipWhitelist`（nginx IP 語意翻轉）；prod 必須注入 `API_KEY_HMAC_SECRET`（未設即啟動失敗）。見 round22 §5 |
 
@@ -102,10 +109,10 @@
 | #28 | spec §11.4 的 `headers` 自訂未做 | round17 |
 | #22 | 外部 worker：UI 無 `external_worker` 勾選；complete／fail／unacquire 不查 topic | round13 |
 | #32 | 通知設定沒有前端管理頁（API only） | round17 |
-| #60 | 前端 StartProcess 實際瀏覽器提交未測；啟動路徑無 `FORM_SUBMIT` 稽核 | round18 |
-| #61 | CI/CD 仍缺（＝R-07／R-08）；本地 repo 無 remote／不 push；多實例共用工作目錄不支援 | round18 |
-| #56 | `options` 是 formKey 保留字；`optionsUrl` 存檔不驗 | round13 |
-| #58 | `PUT` 不驗 schemaJson；狀態競態無鎖；多列語意待前端配合 | round13 |
+| #60 | StartProcess／DocumentDetail 已重寫（UfRenderer＋formData）；**瀏覽器實測仍 NOT_RUN** | round18／10-13 |
+| #61 | CI/CD 仍缺（＝R-07／R-08）；**新增**：CI 取得 submodule（`.gitmodules` 為本機 URL） | round18／10-13 |
+| #56 | `optionsUrl` 已從設計器退場（端點暫留，B1 處理）；`options` 保留字限制不變 | round13／10-13 |
+| #58 | **已解**：`PUT /api/form-data/{id}` 已移除；`PUT /api/forms/{id}` 有 DSL gate；提交統一 `formData`＋`validateV1` | round13／10-13 |
 | #97 | DNS rebinding TOCTOU 仍在（3xx 重導已修） | round14 |
 
 ### D. 環境待實測（需要真實系統或 prod 環境）
@@ -123,3 +130,13 @@
 - dev DB 的 probe 殘留（`probe-*` 多個 process／版本）與已停用外部系統。
 - `AuditDeliveryTest` flake 已修（round20）；若再現請看該測試的隔離註解。
 - 已完成的「程序教訓」見 round20 §3（agent 驗證 run 可能在 session 結束後仍在跑；合併前必看 `git status`＋最新 surefire 報告）。
+
+### F. uni-form 重構後續（P5；派工 prompt 見 `2026-10-13-next-agent-prompt.md` §B）
+
+| 項目 | 估時 | 說明 |
+|---|---|---|
+| B1 動態選項 OptionsProvider | 1.5d | `optionsSource`＋`host:` provider；`GET /api/forms/options` 代理退場；設計器開放設定 |
+| B2 file 欄位（FileVault） | 2d | upload adapter＋`FileStore` verify／bind；附件生命週期（purge） |
+| B3 richtext 欄位 | 1.5d | `uniform-tiptap`＋後端 `RichTextService` 重驗；palette 開放 |
+| B4 `bpm:` pack（orgSelector 等） | 2d | manifest＋Vue widget＋Java hook（資料走 MockOrg） |
+| B5 BPMN lint＋面板強化 | 1d | `uniform:access` 引用的 field key 必須存在於已發布 DSL；面板 field key 下拉 |

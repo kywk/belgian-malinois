@@ -72,7 +72,7 @@ class ExternalApiDelegateIntegrationTest extends IntegrationTestBase {
                     </boundaryEvent>
                     <sequenceFlow id="alt" sourceRef="apiFailed" targetRef="altReview"/>
                     <userTask id="altReview" name="外部系統失敗-人工處理"
-                              flowable:assignee="mgr001" flowable:formKey="leave-review"/>
+                              flowable:assignee="mgr001" flowable:formKey="leave-request"/>
                     <sequenceFlow id="altEnd" sourceRef="altReview" targetRef="end"/>
                 """.formatted(boundaryCode);
         String xml = """
@@ -94,7 +94,7 @@ class ExternalApiDelegateIntegrationTest extends IntegrationTestBase {
                     <sequenceFlow id="ok" sourceRef="callApi" targetRef="manualReview"/>
                     %s
                     <userTask id="manualReview" name="人工複核"
-                              flowable:assignee="mgr001" flowable:formKey="leave-review"/>
+                              flowable:assignee="mgr001" flowable:formKey="leave-request"/>
                     <sequenceFlow id="okEnd" sourceRef="manualReview" targetRef="end"/>
                     <endEvent id="end"/>
                   </process>

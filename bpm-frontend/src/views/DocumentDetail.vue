@@ -26,12 +26,15 @@
           <!-- External form -->
           <ExternalFormLink v-if="isExternal" :form-key="task.formKey"
             :process-instance-id="task.processInstanceId" :task-id="taskId" />
-          <!-- Dynamic form: editable for revision tasks, readonly for review -->
-          <DynamicForm v-else-if="task?.formKey" ref="dynamicFormRef" :form-key="task.formKey"
-            :form-version="task.formVersion"
-            :process-instance-id="task.processInstanceId"
-            :mode="isRevision ? 'revision' : 'review'" :variables="variables"
-            @submit="handleRevisionSubmit" />
+          <!-- uni-form Envelope：fill＝補件（可編輯）、view＝審核（唯讀）。
+               載入失敗必須顯示原因 —— 空白卡片會讓審核者以為「這張單沒有內容」。 -->
+          <template v-else>
+            <el-skeleton v-if="formLoading" :rows="3" animated />
+            <el-alert v-else-if="formError" type="error" show-icon :closable="false" :title="formError" />
+            <UfRenderer v-else-if="envelope" ref="rendererRef" :envelope="envelope"
+              v-model="formData" v-model:errors="formErrors" />
+            <p v-else style="color:#909399;margin:0">此任務沒有動態表單。</p>
+          </template>
         </el-card>
       </el-col>
       <el-col :span="8">
@@ -59,18 +62,22 @@
     </el-row>
 
     <el-card style="margin-top: 16px">
-      <!-- Revision task: show resubmit button -->
+      <!-- 權限的唯一來源是 Envelope.mode：fill＝補件、view＝審核。
+           ⚠️ fail-closed：Envelope 還沒到（載入中／失敗／此任務無表單）時
+           「不顯示任何任務動作」——以任務名稱猜測會讓補件任務在後端失聯時
+           露出一整排審核按鈕（同意／拒絕），而補件任務的受指派人是申請人本人。
+           載入狀態與失敗原因由上方表單區呈現。 -->
       <el-space v-if="isRevision">
-        <el-button type="primary" @click="handleRevisionSubmit()">補件重送</el-button>
+        <el-button type="primary" :loading="submitting" @click="handleRevisionSubmit()">補件重送</el-button>
       </el-space>
-      <!-- Review task: show approval actions -->
-      <el-space v-else>
+      <el-space v-else-if="envelope?.mode === 'view'">
         <el-button type="success" @click="openAction('approve')">同意</el-button>
         <el-button type="warning" @click="openAction('return')">退件</el-button>
         <el-button type="danger" @click="openAction('reject')">拒絕</el-button>
         <el-button @click="openAction('delegate')">轉發</el-button>
         <el-button @click="csVisible = true">加簽</el-button>
       </el-space>
+      <p v-else style="color:#909399;margin:0">{{ actionHint }}</p>
     </el-card>
 
     <ActionDialog v-model:visible="actionVisible" :action="currentAction"
@@ -82,11 +89,11 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import http from '../services/http'
 import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
+import { UfRenderer } from '@nanshan/uniform-vue'
 import { getTasks, getSubtasks, updateTask } from '../services/flowableApi.js'
-import DynamicForm from '../components/DynamicForm.vue'
+import { fetchTaskForm } from '../uniform/api.js'
 import ExternalFormLink from '../components/ExternalFormLink.vue'
 import ActionDialog from '../components/ActionDialog.vue'
 import CountersignDialog from '../components/CountersignDialog.vue'
@@ -99,15 +106,30 @@ const router = useRouter()
 const auth = useAuthStore()
 const taskId = route.params.taskId
 const task = ref(null)
-const variables = ref({})
 const subtasks = ref([])
 const actionVisible = ref(false)
 const csVisible = ref(false)
 const currentAction = ref('')
-const dynamicFormRef = ref()
+
+// ── uni-form Envelope ────────────────────────────────────────────
+// envelope.mode 是唯一的權限來源（fill＝補件、view＝審核），
+// 不再從任務名稱推測；Envelope 未載入時任務動作一律不顯示（fail-closed），
+// 載入狀態與失敗原因呈現在表單區。
+const envelope = ref(null)
+const formData = ref({})
+const formErrors = ref([])
+const formLoading = ref(false)
+const formError = ref('')
+const rendererRef = ref()
+const submitting = ref(false)
 
 const isExternal = computed(() => task.value?.formKey?.startsWith('external:'))
-const isRevision = computed(() => task.value?.taskName?.includes('補件'))
+const isRevision = computed(() => envelope.value?.mode === 'fill')
+const actionHint = computed(() =>
+  !task.value?.formKey || isExternal.value
+    ? '此任務沒有動態表單。'
+    : '表單載入完成後才能執行任務操作；載入失敗請重新整理。',
+)
 
 function openAction(action) {
   currentAction.value = action
@@ -119,21 +141,51 @@ function onActionDone() {
   router.push('/tasks')
 }
 
-async function handleRevisionSubmit() {
-  // Collect form data as task variables and complete the revision task
-  const formData = dynamicFormRef.value?.formData || {}
-  const vars = Object.entries(formData)
-    .filter(([, v]) => v != null)
-    .map(([name, value]) => {
-      if (Array.isArray(value)) return { name, value: value.join('~') }
-      return { name, value }
-    })
+async function loadForm() {
+  if (!task.value?.formKey || isExternal.value) return
+  formLoading.value = true
+  formError.value = ''
   try {
-    await updateTask(taskId, { action: 'complete', assignee: auth.userId, variables: vars })
+    const env = await fetchTaskForm(taskId)
+    // Envelope 是後端產物，但載入路徑可能遇到代理錯誤／舊快取；UfRenderer
+    // 假定 envelope.data 存在（SDK 契約），缺件時在 setup 就拋錯 —— 這裡先擋，
+    // 讓畫面顯示明確原因而不是破圖。
+    if (!env || typeof env !== 'object' || !env.schemaRef || env.data === undefined) {
+      throw new Error('表單回應格式不正確')
+    }
+    envelope.value = env
+    formData.value = { ...env.data }
+    formErrors.value = []
+  } catch (e) {
+    envelope.value = null
+    formError.value = '表單載入失敗：' + (e.response?.data?.message || e.message)
+  } finally {
+    formLoading.value = false
+  }
+}
+
+async function handleRevisionSubmit() {
+  // 前端 validate 只是提示（計畫 §三決策 6）——後端仍會以 validateV1 重驗。
+  // 有錯誤就不送，讓使用者先修正；renderer 已同步把錯誤畫在畫面上。
+  const errors = rendererRef.value?.validate?.() ?? []
+  if (errors.length) {
+    ElMessage.error('表單驗證未通過，請修正後再送出')
+    return
+  }
+  submitting.value = true
+  try {
+    // 補件走 FormData（計畫 §五 A.5）：後端驗證通過後存新版本列、
+    // 推導流程變數再完成任務。不再送 variables／assignee。
+    await updateTask(taskId, {
+      action: 'complete',
+      formData: { dataJson: JSON.stringify(formData.value) },
+    })
     ElMessage.success('補件重送成功')
     router.push('/tasks')
   } catch (e) {
     ElMessage.error('重送失敗：' + (e.response?.data?.message || e.message))
+  } finally {
+    submitting.value = false
   }
 }
 
@@ -150,12 +202,7 @@ onMounted(async () => {
   ;[...assigned, ...candidate].forEach(t => map.set(t.taskId, t))
   task.value = map.get(taskId) || null
 
-  if (task.value?.processInstanceId) {
-    try {
-      const { data } = await http.get(`/api/process-instances/${task.value.processInstanceId}/variables`)
-      variables.value = data
-    } catch { /* ignore */ }
-  }
+  await loadForm()
   await loadSubtasks()
 })
 </script>

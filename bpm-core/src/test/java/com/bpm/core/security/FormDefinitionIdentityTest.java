@@ -4,6 +4,7 @@ import com.bpm.core.form.model.FormDefinition;
 import com.bpm.core.form.repository.FormDefinitionRepository;
 import com.bpm.core.support.IntegrationTestBase;
 import com.bpm.core.support.TestGatewayMockMvcCustomizer;
+import com.bpm.core.support.UniformTestDsl;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -127,7 +128,19 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
     /** 通配權限 {@code *} → {@code ROLE_ADMIN}。攻擊者想冒充的那個「看起來很有權威」的身分。 */
     private static final String ADMIN = "admin001";
 
-    private static final String SCHEMA = "{\\\"fields\\\":[{\\\"id\\\":\\\"amount\\\"}]}";
+    /**
+     * 最小合法 DSL；{@code key} 必須等於 formKey（{@code FormDefinitionValidator}
+     * 的一致性 gate），而本檔的 formKey 是每條測試動態產生的，因此 schema
+     * 也必須跟著 formKey 產生。
+     */
+    private static String schemaFor(String formKey) {
+        return UniformTestDsl.embedded(
+                "{\"$uniform\":\"1.0\",\"key\":\"" + formKey + "\","
+                        + "\"title\":{\"zh-TW\":\"測試表單\"},"
+                        + "\"requires\":{\"core\":\"^1.0\"},"
+                        + "\"root\":[{\"id\":\"n_amount\",\"type\":\"number\","
+                        + "\"key\":\"amount\",\"label\":\"金額\"}]}");
+    }
 
     @Autowired
     private FormDefinitionRepository defRepo;
@@ -287,7 +300,7 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
         createdFormKeys.add(formKey);
 
         var res = post("/api/forms", DESIGNER,
-                createBody(formKey, "冒用測試", SCHEMA,
+                createBody(formKey, "冒用測試", schemaFor(formKey),
                         "\"createdBy\":\"" + ADMIN + "\""));
 
         assertThat(res.statusCode())
@@ -309,7 +322,7 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
         createdFormKeys.add(formKey);
 
         assertThat(post("/api/forms", DESIGNER,
-                createBody(formKey, "稽核誠實性", SCHEMA,
+                createBody(formKey, "稽核誠實性", schemaFor(formKey),
                         "\"createdBy\":\"" + OTHER_DESIGNER + "\"")).statusCode())
                 .as("前置條件：冒用必須先被擋下").isEqualTo(400);
 
@@ -334,7 +347,7 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
 
         // 先由合法呼叫者建立一列，作為「原本的樣子」。
         assertThat(post("/api/forms", DESIGNER,
-                createBody(formKey, "原本的名字", SCHEMA, "")).statusCode())
+                createBody(formKey, "原本的名字", schemaFor(formKey), "")).statusCode())
                 .as("前置條件：省略 createdBy 時必須放行，否則下面的對照無意義")
                 .isEqualTo(200);
         FormDefinition before = defRepo.findByFormKeyAndVersion(formKey, 1).orElseThrow();
@@ -344,7 +357,8 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
         // 沒有非空斷言的話，這條測試分不出 400 來自哪一個 ——
         // 而分不出來就等於沒驗到「守衛排在 service 之前」這件事。
         var res = post("/api/forms", DESIGNER,
-                createBody(formKey, "被改掉的名字", "{\\\"fields\\\":[{\\\"id\\\":\\\"injected\\\"}]}",
+                createBody(formKey, "被改掉的名字", UniformTestDsl.embedded(
+                                UniformTestDsl.withKeys(formKey, "injected")),
                         "\"createdBy\":\"" + ADMIN + "\""));
 
         assertThat(res.statusCode()).isEqualTo(400);
@@ -373,7 +387,7 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
         String formKey = uniqueFormKey("T81-omitted");
         createdFormKeys.add(formKey);
 
-        var res = post("/api/forms", DESIGNER, createBody(formKey, "省略", SCHEMA, ""));
+        var res = post("/api/forms", DESIGNER, createBody(formKey, "省略", schemaFor(formKey), ""));
 
         assertThat(res.statusCode())
                 .as("省略 createdBy 時必須放行 —— 表單設計是這個平台的核心功能")
@@ -404,7 +418,7 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
         createdFormKeys.add(formKey);
 
         var res = post("/api/forms", DESIGNER,
-                createBody(formKey, "自己", SCHEMA, "\"createdBy\":\"" + DESIGNER + "\""));
+                createBody(formKey, "自己", schemaFor(formKey), "\"createdBy\":\"" + DESIGNER + "\""));
 
         assertThat(res.statusCode())
                 .as("送出與自己相同的值不得被拒絕 —— 有一種合理的呼叫形狀就是"
@@ -424,10 +438,10 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
         createdFormKeys.add(blankKey);
 
         assertThat(post("/api/forms", DESIGNER,
-                createBody(nullKey, "null", SCHEMA, "\"createdBy\":null")).statusCode())
+                createBody(nullKey, "null", schemaFor(nullKey), "\"createdBy\":null")).statusCode())
                 .isEqualTo(200);
         assertThat(post("/api/forms", DESIGNER,
-                createBody(blankKey, "blank", SCHEMA, "\"createdBy\":\"   \"")).statusCode())
+                createBody(blankKey, "blank", schemaFor(blankKey), "\"createdBy\":\"   \"")).statusCode())
                 .isEqualTo(200);
 
         assertThat(createdByOfEveryRow(nullKey)).containsExactly(DESIGNER);
@@ -447,7 +461,7 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
         String formKey = uniqueFormKey("T81-both");
         createdFormKeys.add(formKey);
 
-        var created = post("/api/forms", DESIGNER, createBody(formKey, "兩端點", SCHEMA, ""));
+        var created = post("/api/forms", DESIGNER, createBody(formKey, "兩端點", schemaFor(formKey), ""));
         assertThat(created.statusCode()).isEqualTo(200);
         String firstId = idField(created.body());
 
@@ -482,11 +496,11 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
                 + "\"createdBy\":\"%s\"}";
         // 冒用 ADMIN → 400
         assertThat(post("/api/forms", DESIGNER,
-                body.formatted(blockedKey, SCHEMA, ADMIN)).statusCode())
+                body.formatted(blockedKey, schemaFor(blockedKey), ADMIN)).statusCode())
                 .isEqualTo(400);
         // 唯一差別：body 的 createdBy 改成「呼叫者自己」→ 200
         var ok = post("/api/forms", DESIGNER,
-                body.formatted(allowedKey, SCHEMA, DESIGNER));
+                body.formatted(allowedKey, schemaFor(allowedKey), DESIGNER));
         assertThat(ok.statusCode())
                 .as("同一個 payload 只換 createdBy 為自己的身分就必須放行 —— "
                         + "少了這條，守衛可以靠「擋掉所有人」達成空斷言")
@@ -503,7 +517,7 @@ class FormDefinitionIdentityTest extends IntegrationTestBase {
         String formKey = uniqueFormKey("T81-forbidden");
         createdFormKeys.add(formKey);
 
-        var res = post("/api/forms", "user001", createBody(formKey, "沒權限", SCHEMA, ""));
+        var res = post("/api/forms", "user001", createBody(formKey, "沒權限", schemaFor(formKey), ""));
 
         assertThat(res.statusCode())
                 .as("授權矩陣必須維持在 URL 層 —— 這個工項只處理物件層的身分欄位")

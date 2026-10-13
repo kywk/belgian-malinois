@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
              xmlns:flowable="http://flowable.org/bpmn"
+             xmlns:uniform="http://bpm.com/uniform"
              targetNamespace="http://bpm.com/countersign">
 
   <!--
@@ -85,8 +86,10 @@
     <userTask id="countersignReview"
               name="${execution.getVariable('countersignTaskName') != null ? execution.getVariable('countersignTaskName') : '加簽複核'}"
               flowable:assignee="${countersignAssignee}"
-              flowable:formKey="purchase-review">
+              flowable:formKey="purchase-request">
       <extensionElements>
+        <!-- ADR-23／uni-form 重構：加簽複核以申請表 DSL 的 view 模式呈現（全唯讀）。 -->
+        <uniform:access mode="view" default="readonly"/>
         <flowable:taskListener event="create" delegateExpression="${notifyTaskListener}"/>
         <flowable:taskListener event="all" delegateExpression="${webhookTaskListener}"/>
       </extensionElements>

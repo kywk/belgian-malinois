@@ -49,7 +49,7 @@ Nginx 路由（`infra/nginx/nginx.conf`）：`/api/` → bpm-core，`/` → SPA�
 1. **稽核已併入 bpm-core**（2026-04-24，`docs/history/2026-04-24-architecture-refactor/summary.md`，commit `a955a06`）。稽核 API 在 bpm-core 的 `/api/audit-logs`，資料仍在獨立的 `bpm_audit_db`。原 `audit-log-service/` 模組目錄已於 2026-09-28 刪除。`docs/history/**` 中仍提及 :8082 的內容屬歷史紀錄，**不要修改**。
 
    **form-service 亦已於 2026-09-28 併入**（同樣的模式：合併部署單元、保留獨立 DB）。`docs/history/**` 與部分計畫文件仍提及 :8081，屬歷史紀錄。
-2. **表單欄位 `id` == Flowable 流程變數名**（spec §8.5）。這是貫穿前後端的關鍵約定，改表單 schema 前務必確認。
+2. **表單資料鍵＝DSL `key`，且等於 Flowable 流程變數名**（spec §8.5 ＋ uni-form 重構）。DSL 的 `key` 必須等於 `formKey`（`FormDefinitionValidator` 在存檔／發布以 400 擋下）；提交經 SDK `validateV1` 重驗，資料以 canonical 值落地（`dateRange` 是 `{start,end}` 物件、不再是 `"a~b"`）。
 3. **退回 vs 駁回**靠流程變數區分：`approved=false` 為退回；必須再加 `rejected=true` 才是終止。
 4. **表單版本鎖定**：`FormVersionLocker` 在流程啟動時把 `_formVersions`（formKey→version）寫入流程變數，進行中案件不受表單改版影響。`TaskController.toMap()` 會回傳 `formVersion`。
 5. **組織／權限仍是 Mock**：`MockOrgController` / `MockPermController` 提供 `orgService`、`permService`、`bpmQueryService` 的資料來源。真正的權限中心是另一個尚未開工的專案（`docs/rbac-enterprise-backlog.md`）。
@@ -65,19 +65,18 @@ Nginx 路由（`infra/nginx/nginx.conf`）：`/api/` → bpm-core，`/` → SPA�
 ## 開發與測試流程
 
 ```bash
-# 啟動（必須帶 dev overlay，純 docker-compose up 會讓 bpm-core mail health 失敗）
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
-
-./scripts/seed-data.sh        # 部署兩支 BPMN + 驗證 4 個 form key
-./scripts/acceptance-test.sh  # curl 黑箱驗收（需要 python3）
-
-# 自動化測試（Testcontainers：真實 MSSQL / RabbitMQ / Redis，不用 H2）
-cd bpm-core && mvn verify
+# 本機開發入口（localenv 優先；偵測不到時 fallback 專案 compose＋主機 jar）
+./scripts/localdev.sh up          # localenv：greyhound ready（infra → 服務 → 健康）
+./scripts/localdev.sh seed        # 部署 BPMN＋驗證 uni-form DSL 表單
+./scripts/localdev.sh acceptance  # curl 黑箱驗收（需要 python3）
+./scripts/localdev.sh frontend    # Vite dev（:3000，proxy 指向本機 API）
+./scripts/localdev.sh down
 ```
 
-兩支腳本的 `FORM_URL` 預設已與 `BPM_URL` 相同（form-service 併入後表單 API 在同一個服務），不帶參數直接跑即可。
+- **localenv 是本機環境的權威**（`~/nanshan/scripts/localenv`）：服務定義與 env 在 `scripts/localenv/config/env/greyhound.env`（⚠️ JWT dev secret 必須 ≥32 bytes 且等於 `scripts/dev-token.sh` 的預設值，否則 app 起不來或 token 驗不過）。`localdev.sh` 偵測到 localenv 一律調用；偵測不到才走 fallback（完整 compose：容器內先從 `vendor/uni-form` pinned submodule 建置 SDK 再建 bpm-core —— SNAPSHOT 不在任何 registry，由 submodule 原始碼可重現；需先 `git submodule update --init vendor/uni-form`）。
+- 自動化測試（Testcontainers：真實 MSSQL／RabbitMQ／Redis，不用 H2）：`cd bpm-core && mvn verify`。
 
-前端開發：`cd bpm-frontend && npm run dev`（:3000，proxy `/api` → :80）。
+兩支腳本的 `FORM_URL` 預設已與 `BPM_URL` 相同（form-service 併入後表單 API 在同一個服務），不帶參數直接跑即可。
 
 測試帳號：`user001`–`user005`、`mgr001`/`mgr002`、`dir001`、`admin001`。詳見 `docs/README-testing.md`。
 
@@ -113,3 +112,9 @@ cd bpm-core && mvn verify
 9. ~~**潛在 bug**：`data.sql` 的 snake_case 與 `@UniqueConstraint` 的 camelCase~~ —— **已於 2026-09-28 在乾淨 DB 上驗證為非問題**，Hibernate 正確解析成 `(form_key, version)`。
 
    但同一次驗證發現了真正的問題並已修復：**全 schema 的文字欄位都是 VARCHAR 而定序是 Latin1**，中文寫入時被靜默換成問號。已造成表單名稱全毀、通知信主旨全毀，以及稽核 `operator_name` 損壞後使 `integrityCheck` 全面誤報。56 個欄位已轉為 NVARCHAR（migration `nvarchar_all_text_columns`），並加上 `hibernate.use_nationalized_character_data` 與 `SchemaEncodingGuardTest` 防止復發。
+10. **表單已全面改用 uni-form SDK**（2026-10-12～13 重構；計畫 [2026-10-12-uniform-form-refactor.md](docs/plan/2026-10-12-uniform-form-refactor.md)）。要知道的事：
+    - `schema_json` 存 uni-form DSL v1（`$uniform:"1.0"`）；舊扁平 `fields[]` 不再被接受，seed 只有 `leave-request`／`purchase-request` 兩張（review 表已廢除）。
+    - 審核／補件權限在 BPMN `uniform:access`（`bpmn-definitions/` 與 `src/main/resources/processes/` 兩份 byte-identical）；**缺省 fail-closed 為 view／readonly**，補件要明列 editable 欄位。
+    - 回應是 Envelope（`GET /api/tasks/{id}/form`、`GET /api/process-definitions/{key}/start-form`、`POST /api/forms/preview`）；提交走 `validateV1`（`POST /api/process-instances`、`PUT /api/tasks/{id}` 的 `formData.dataJson`；`POST/PUT /api/form-data` 已移除）。
+    - SDK 以 submodule `vendor/uni-form`（pin `89708ef`）引入；npm tarball 在 `vendor/uni-form/dist/npm/`、Java jar 由該 SHA `mvn -f java install`（`~/.m2`）。
+    - 前端 `UfRenderer`／`UfDesigner`＋`src/uniform/`（plugin／Element Plus widgets／api）；`VITE_API_PROXY` 可覆寫 dev proxy。

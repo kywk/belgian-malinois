@@ -25,3 +25,7 @@ Thumbs.db
 # Env
 .env
 *.log
+
+# BPMN 部署帳本與附件（runtime；本機執行 jar／容器時寫入 workspace）
+bpm-core/bpmn-definitions/
+bpm-core/uploads/

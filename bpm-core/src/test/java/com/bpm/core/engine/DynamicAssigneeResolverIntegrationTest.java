@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * 那條路徑由 {@code DynamicAssigneeResolverTest} 的單元測試釘住。
  * 本測試證明的是引擎接線與挑人結果。
  *
- * <p>BPMN 的 {@code formKey} 用 {@code leave-review}（V5 migration 已 seed），
+ * <p>BPMN 的 {@code formKey} 用 {@code leave-request}（V7 的 DSL seed；review 表已於 V7 刪除），
  * 讓測試 BPMN 也能通過 lint 的 {@code formkey-exists} 規則。
  */
 class DynamicAssigneeResolverIntegrationTest extends IntegrationTestBase {
@@ -93,7 +93,7 @@ class DynamicAssigneeResolverIntegrationTest extends IntegrationTestBase {
         return """
                 <sequenceFlow id="f1" sourceRef="start" targetRef="review"/>
                 <userTask id="review" name="審核"
-                          flowable:assignee="%s" flowable:formKey="leave-review"/>
+                          flowable:assignee="%s" flowable:formKey="leave-request"/>
                 <sequenceFlow id="f2" sourceRef="review" targetRef="end"/>
                 """.formatted(assigneeExpr);
     }
@@ -105,11 +105,11 @@ class DynamicAssigneeResolverIntegrationTest extends IntegrationTestBase {
                 <sequenceFlow id="f1" sourceRef="start" targetRef="review1"/>
                 <userTask id="review1" name="一階主管審核"
                           flowable:assignee="${dynamicAssignee.managerAtLevel(initiator, 1)}"
-                          flowable:formKey="leave-review"/>
+                          flowable:formKey="leave-request"/>
                 <sequenceFlow id="f2" sourceRef="review1" targetRef="review2"/>
                 <userTask id="review2" name="二階主管審核"
                           flowable:assignee="${dynamicAssignee.managerAtLevel(initiator, 2)}"
-                          flowable:formKey="leave-review"/>
+                          flowable:formKey="leave-request"/>
                 <sequenceFlow id="f3" sourceRef="review2" targetRef="end"/>
                 """);
 
