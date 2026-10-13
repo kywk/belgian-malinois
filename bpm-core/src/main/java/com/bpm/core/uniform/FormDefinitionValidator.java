@@ -5,6 +5,7 @@ import com.nanshan.uniform.core.compile.CompileDiagnostic;
 import com.nanshan.uniform.core.compile.CompileOptions;
 import com.nanshan.uniform.core.compile.CompileResult;
 import com.nanshan.uniform.core.compile.SchemaCompiler;
+import com.nanshan.uniform.core.compile.ValueSchemaRegistry;
 import com.nanshan.uniform.core.model.UfError;
 import com.nanshan.uniform.core.model.UniformDocumentReader;
 import com.nanshan.uniform.core.registry.TypeRegistry;
@@ -37,6 +38,13 @@ import java.util.stream.Collectors;
  *       不是「還不能用的定義」—— 它會在投影或提交時才炸。</li>
  * </ol>
  *
+ * <p>⚠️ compile 必須<b>注入 value schema 註冊表</b>（{@code ValueSchemaRegistry}）：
+ * manifest 的 {@code valueSchema} 用 {@code uniform:values/<stem>} 簡寫
+ * （seed 的 {@code dateRange} 就是），少了註冊表會得到
+ * {@code MANIFEST-VALUESCHEMA-01} —— 症狀是「含 dateRange 的表單存不進去」。
+ * stems 的建法與 {@code EnvelopeProjectionV1} 相同（kebab 與 camel 兩種寫法）。
+ * （2026-10-13 修：E2E 首次以真表單存檔時發現；BE 首輪測試只用了 textarea。）
+ *
  * <h2>為什麼在建立／更新／發布都擋</h2>
  *
  * <p>舊格式（扁平 {@code fields[]}）不再被任何路徑接受（計畫 §三 1）。
@@ -66,6 +74,8 @@ public class FormDefinitionValidator {
     private final TypeRegistry registry;
     private final UniformSpecResources specResources;
     private final ObjectMapper objectMapper;
+    /** {@code uniform:values/<stem>} 的註冊表；compile 必需（見類別註解）。 */
+    private final ValueSchemaRegistry valueSchemas;
 
     public FormDefinitionValidator(JsonSchemaValidator schemaValidator, TypeRegistry registry,
                                    UniformSpecResources specResources, ObjectMapper objectMapper) {
@@ -73,6 +83,34 @@ public class FormDefinitionValidator {
         this.registry = registry;
         this.specResources = specResources;
         this.objectMapper = objectMapper;
+        this.valueSchemas = buildValueSchemas(specResources);
+    }
+
+    /**
+     * 由 spec 資源建 value schema 註冊表（stems 的建法與
+     * {@code EnvelopeProjectionV1} 相同：kebab 與 camel 兩種寫法都註冊）。
+     */
+    private static ValueSchemaRegistry buildValueSchemas(UniformSpecResources resources) {
+        final String base = "https://uniform.nanshan.com.tw/spec/v1/values/";
+        Map<String, String> stems = new java.util.LinkedHashMap<>();
+        for (String id : resources.schemas().keySet()) {
+            if (id.startsWith(base) && id.endsWith(".schema.json")) {
+                String stem = id.substring(base.length(), id.length() - ".schema.json".length());
+                stems.put(stem, id);
+                StringBuilder camel = new StringBuilder();
+                boolean upper = false;
+                for (char ch : stem.toCharArray()) {
+                    if (ch == '-') {
+                        upper = true;
+                    } else {
+                        camel.append(upper ? Character.toUpperCase(ch) : ch);
+                        upper = false;
+                    }
+                }
+                stems.put(camel.toString(), id);
+            }
+        }
+        return ValueSchemaRegistry.of(stems);
     }
 
     /**
@@ -155,9 +193,10 @@ public class FormDefinitionValidator {
         CompileResult compiled;
         try {
             compiled = SchemaCompiler.compileStatic(UniformDocumentReader.read(dsl), registry,
-                    // validator 讓 defaultValue 的型別也被檢查（通道②）；其餘檢查全開，
+                    // value schemas 必需（dateRange 等 $ref 型別）；validator 讓
+                    // defaultValue 的型別也被檢查（通道②）。其餘檢查全開，
                     // 與設計器「存檔當下就把壞的定義擋下」的目標一致。
-                    CompileOptions.all().withValidator(schemaValidator));
+                    CompileOptions.all().withValueSchemas(valueSchemas).withValidator(schemaValidator));
         } catch (RuntimeException e) {
             // UniformDocumentReader／JsonReader 對結構問題會丟例外；schema gate 之後
             // 這裡只會是「schema 允許但 reader 讀不動」的邊界。仍是 400（定義問題）。

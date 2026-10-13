@@ -125,6 +125,26 @@ class FormDefinitionValidatorTest {
                 .hasMessageContaining("formKey");
     }
 
+    /**
+     * V7 seed 的 leave-request 形狀（含 dateRange）—— 2026-10-13 E2E 迴歸：
+     * compile 未注入 value schema 註冊表時，這個形狀會以
+     * {@code MANIFEST-VALUESCHEMA-01} 被拒（含 dateRange 的表單存不進去）。
+     */
+    private static final String DATE_RANGE_DSL = """
+            {"$uniform":"1.0","key":"leave-request","title":{"zh-TW":"請假申請表"},
+             "requires":{"core":"^1.0"},
+             "root":[{"id":"n_leaveType","type":"select","key":"leaveType","label":"假別","required":true,
+                      "props":{"options":[{"value":"annual","label":"特休"}]}},
+                     {"id":"n_dateRange","type":"dateRange","key":"dateRange","label":"請假期間","required":true}]}
+            """;
+
+    @Test
+    @DisplayName("含 dateRange（uniform:values 簡寫）→ 通過：compile 已注入 value schema 註冊表")
+    void dateRangeDslPasses() throws Exception {
+        validator().validate(DATE_RANGE_DSL);
+        validator().validate(DATE_RANGE_DSL, "leave-request");
+    }
+
     @Test
     @DisplayName("validate(Map) 與 validate(String) 同一份判定（設計器預覽用）")
     void parsedOverloadSharesTheSameGate() throws Exception {
