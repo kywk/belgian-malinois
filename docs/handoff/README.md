@@ -13,7 +13,7 @@
 | 後端 | Spring Boot **4.1.1** + Flowable **8.0.0** + Jackson **3** + JGit **7.8** + **uni-form SDK**（`vendor/uni-form` pin `89708ef`；uniform-core／jackson3／boot4-starter） |
 | 前端 | Vue 3.4 + Vite 5 + Element Plus + **UfRenderer／UfDesigner**（表單已全面 uni-form） |
 | 測試 | 後端 **1677**（`mvn verify`）、前端 **259**（Vitest）、`acceptance-test.sh` **PASS 7 / FAIL 0**、E2E（localenv）**13/13** |
-| `main` | `beaffb4`（2026-10-13 合併 `uni-form`：uni-form 表單重構）；`nsl/main` 已同步 |
+| `main` | merge `beaffb4`（2026-10-13 合併 `uni-form`：uni-form 表單重構）；`nsl/main` 已同步（含後續 docs 提交） |
 | dev DB | core schema **v9**、Flowable schema **8.0.0.0**（不可逆）；audit 鏈 broken=19／unverifiable=123 為歷史債 |
 | dev 環境 | **localenv-first**：`bash ~/nanshan/scripts/localenv.sh greyhound ready`（:18110）；`scripts/localdev.sh`（偵測不到 localenv 才走 compose fallback） |
 | 功能 backlog | **97 項：✅ 97、🟡 0、⬜ 0**；uni-form P5 後續見 §3.F |
