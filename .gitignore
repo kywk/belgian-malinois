@@ -25,3 +25,6 @@ Thumbs.db
 # Env
 .env
 *.log
+
+# localdev fallback（主機 jar 的 pid／log）
+.localdev/

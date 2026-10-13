@@ -48,6 +48,8 @@
 - [x] 本計畫文件（介面凍結）。
 - [x] uni-form main 迴歸修正（fix 分支 `43bf983`，待回報／接受）。
 - [x] 合併 BE／FE／BPMN 三分支；PM 收斂修正（`9b79c5c` 及後續）：DocumentDetail 任務動作 fail-closed、FormList→FormEditor 帶 `formKey+version`、`uniform:field` 空列語意（決策 8）、`key==formKey` gate（決策 9）、前端 dev proxy `VITE_API_PROXY`、formApi 移除已無端點的函式。
+- [x] **端到端驗收 PASS（2026-10-13）**：localenv `greyhound`（:18110）——E2E 13/13（preview→啟流程→view 審核→退回→fill 補件→竄改 400→重送→版本列→核准結案）、`acceptance-test.sh` 7/0。過程中修掉 `FormDefinitionValidator` 未注入 value schema 的真 bug（`b21c138`：含 `dateRange` 的表單無法存檔）。
+- [x] **本機開發改以 localenv 為準（使用者指示）**：新增 `scripts/localdev.sh`（偵測 `~/nanshan/scripts/localenv` 即調用；否則 compose＋主機 jar fallback）；修正 `greyhound.env` 的 JWT dev secret（原 22 bytes 不足 HS256 下限，greyhound 從未能在 localenv 啟動）；CLAUDE.md 開發流程改寫。
 
 ## 五、凍結介面（施工不得自行變更；有問題回報 PM）
 
