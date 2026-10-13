@@ -4,10 +4,9 @@
 # 規則（使用者指示 2026-10-13）：
 #   1. 偵測得到 localenv（$LOCALENV_SH 或 ~/nanshan/scripts/localenv.sh）→ 一律調用它，
 #      專案端不重複 infra／建置邏輯。
-#   2. 偵測不到 → 自足 fallback：專案 compose 只起 infra，bpm-core 以
-#      「主機 Maven 建置＋主機 jar」執行（與 localenv 相同的埠位語意）。
-#      ⚠️ fallback 的建置需要 uni-form SDK 已安裝在 ~/.m2（見 vendor/uni-form：
-#      `mvn -f java install`）；這是本機產物，不是 registry 依賴。
+#   2. 偵測不到 → 自足 fallback：完整專案 compose。容器內先從 vendor/uni-form
+#      （pinned submodule）建置 uni-form SDK，再建 bpm-core —— SNAPSHOT 不在任何
+#      registry，由 submodule 原始碼可重現；需要已初始化的 submodule。
 #
 # 用法：
 #   ./scripts/localdev.sh up [--debug]      起服務（含 infra）
@@ -19,7 +18,7 @@
 #   ./scripts/localdev.sh acceptance [URL]  平台 curl 驗收（scripts/acceptance-test.sh）
 #
 # 埠：localenv 由 `localenv.sh greyhound env` 的 SERVER_PORT 決定（預設 18110）；
-#     fallback 為主機 jar 的 http://127.0.0.1:8080。
+#     fallback：API http://127.0.0.1:8080、網站（nginx）http://localhost:80。
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -34,9 +33,6 @@ fi
 MODE="compose"; [[ -n "$LOCALENV_SH" ]] && MODE="localenv"
 
 compose() { docker compose -f docker-compose.yml -f docker-compose.dev.yml "$@"; }
-RUN_DIR="$ROOT/.localdev"
-JAR="$ROOT/bpm-core/target/bpm-core-0.0.1-SNAPSHOT.jar"
-
 localenv_port() { bash "$LOCALENV_SH" greyhound env 2>/dev/null | awk -F= '/^SERVER_PORT=/{print $2; exit}'; }
 api_url() {
   if [[ "$MODE" == localenv ]]; then
@@ -47,76 +43,41 @@ api_url() {
 }
 
 compose_up() {
-  # 只起 infra：bpm-core 以主機 jar 執行（SNAPSHOT 相依不在任何 registry，
-  # 容器內 `mvn dependency:go-offline` 抓不到 —— 見 localenv 為準的說明）。
-  compose up -d mssql rabbitmq redis mailhog
-  compose up -d --wait mssql rabbitmq redis mailhog >/dev/null 2>&1 || true
-}
-
-compose_start_app() {
-  [[ -f "$JAR" ]] || {
-    echo "[localdev] 建置 bpm-core（mvn -o package -DskipTests）…"
-    (cd bpm-core && mvn -o package -DskipTests -q)
+  [[ -d vendor/uni-form/java ]] || {
+    echo "[localdev] 缺少 vendor/uni-form（容器內要從它建 SDK）——請先 git submodule update --init vendor/uni-form" >&2
+    exit 1
   }
-  mkdir -p "$RUN_DIR"
-  if [[ -f "$RUN_DIR/bpm-core.pid" ]] && kill -0 "$(cat "$RUN_DIR/bpm-core.pid")" 2>/dev/null; then
-    echo "[localdev] bpm-core 已在執行（pid $(cat "$RUN_DIR/bpm-core.pid")）"; return 0
-  fi
-  BPM_API_KEY_HMAC_SECRET="${BPM_API_KEY_HMAC_SECRET:-bpm-dev-api-key-hmac-secret-do-not-use-in-production}" \
-    nohup java -jar "$JAR" > "$RUN_DIR/bpm-core.log" 2>&1 &
-  echo $! > "$RUN_DIR/bpm-core.pid"
-  echo "[localdev] bpm-core 啟動中（pid $(cat "$RUN_DIR/bpm-core.pid")，log: $RUN_DIR/bpm-core.log）"
-  for _ in $(seq 1 60); do
-    curl -sf "http://127.0.0.1:8080/actuator/health" >/dev/null && { echo "[localdev] bpm-core 就緒"; return 0; }
+  echo "[localdev] 未偵測到 localenv → 專案 fallback（完整 compose；容器內從 pinned submodule 建 SDK）"
+  compose up -d --build --scale bpm-frontend=0
+  echo "[localdev] 等待 bpm-core 健康…"
+  for _ in $(seq 1 150); do
+    if curl -sf http://127.0.0.1:8080/actuator/health >/dev/null; then
+      echo "[localdev] bpm-core 就緒（$(api_url)）"; return 0
+    fi
     sleep 2
   done
-  echo "[localdev] bpm-core 未就緒，請看 $RUN_DIR/bpm-core.log" >&2
-  return 1
+  echo "[localdev] bpm-core 未就緒：docker compose logs bpm-core" >&2
+  exit 1
 }
 
 cmd="${1:-}"; shift || true
 case "$cmd" in
   up)
     if [[ "$MODE" == localenv ]]; then
-      echo "[localdev] localenv 模式：bash $LOCALENV_SH greyhound ready $*"
       bash "$LOCALENV_SH" greyhound ready "$@"
       echo "[localdev] API: $(api_url)（前端：./scripts/localdev.sh frontend）"
     else
-      echo "[localdev] 未偵測到 localenv → 專案 fallback（compose infra ＋ 主機 jar）"
       compose_up
-      compose_start_app
-      echo "[localdev] API: $(api_url)"
     fi
     ;;
   down)
-    if [[ "$MODE" == localenv ]]; then
-      bash "$LOCALENV_SH" greyhound stop
-    else
-      if [[ -f "$RUN_DIR/bpm-core.pid" ]]; then
-        kill "$(cat "$RUN_DIR/bpm-core.pid")" 2>/dev/null || true
-        rm -f "$RUN_DIR/bpm-core.pid"
-      fi
-      compose down
-    fi
+    if [[ "$MODE" == localenv ]]; then bash "$LOCALENV_SH" greyhound stop; else compose down; fi
     ;;
   status)
-    if [[ "$MODE" == localenv ]]; then
-      bash "$LOCALENV_SH" greyhound status
-    else
-      if [[ -f "$RUN_DIR/bpm-core.pid" ]] && kill -0 "$(cat "$RUN_DIR/bpm-core.pid")" 2>/dev/null; then
-        echo "bpm-core: running (pid $(cat "$RUN_DIR/bpm-core.pid"))"
-      else
-        echo "bpm-core: stopped"
-      fi
-      compose ps
-    fi
+    if [[ "$MODE" == localenv ]]; then bash "$LOCALENV_SH" greyhound status; else compose ps; fi
     ;;
   logs)
-    if [[ "$MODE" == localenv ]]; then
-      bash "$LOCALENV_SH" greyhound logs "$@"
-    else
-      tail -n 100 -f "$RUN_DIR/bpm-core.log" 2>/dev/null || echo "沒有 log（尚未啟動？）"
-    fi
+    if [[ "$MODE" == localenv ]]; then bash "$LOCALENV_SH" greyhound logs "$@"; else compose logs -f --tail=100 bpm-core; fi
     ;;
   frontend)
     local_api="$(api_url)"
@@ -130,7 +91,7 @@ case "$cmd" in
     url="${1:-$(api_url)}"; bash scripts/acceptance-test.sh "$url" "${2:-$url}"
     ;;
   *)
-    sed -n '2,20p' "$0"
+    sed -n '2,17p' "$0"
     exit 2
     ;;
 esac

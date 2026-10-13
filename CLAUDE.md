@@ -73,7 +73,7 @@ Nginx 路由（`infra/nginx/nginx.conf`）：`/api/` → bpm-core，`/` → SPA�
 ./scripts/localdev.sh down
 ```
 
-- **localenv 是本機環境的權威**（`~/nanshan/scripts/localenv`）：服務定義與 env 在 `scripts/localenv/config/env/greyhound.env`（⚠️ JWT dev secret 必須 ≥32 bytes 且等於 `scripts/dev-token.sh` 的預設值，否則 app 起不來或 token 驗不過）。`localdev.sh` 偵測到 localenv 一律調用；偵測不到才走 fallback（compose 只起 infra，bpm-core 以主機 jar 執行 —— uni-form 的 `0.1.0-SNAPSHOT` 不在任何 registry，容器內 `dependency:go-offline` 抓不到）。
+- **localenv 是本機環境的權威**（`~/nanshan/scripts/localenv`）：服務定義與 env 在 `scripts/localenv/config/env/greyhound.env`（⚠️ JWT dev secret 必須 ≥32 bytes 且等於 `scripts/dev-token.sh` 的預設值，否則 app 起不來或 token 驗不過）。`localdev.sh` 偵測到 localenv 一律調用；偵測不到才走 fallback（完整 compose：容器內先從 `vendor/uni-form` pinned submodule 建置 SDK 再建 bpm-core —— SNAPSHOT 不在任何 registry，由 submodule 原始碼可重現；需先 `git submodule update --init vendor/uni-form`）。
 - 自動化測試（Testcontainers：真實 MSSQL／RabbitMQ／Redis，不用 H2）：`cd bpm-core && mvn verify`。
 
 兩支腳本的 `FORM_URL` 預設已與 `BPM_URL` 相同（form-service 併入後表單 API 在同一個服務），不帶參數直接跑即可。

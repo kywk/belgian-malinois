@@ -51,12 +51,17 @@ bpm-core:docker:
   <<: *docker-build
   stage: docker
   script:
-    - docker build -t $REGISTRY/bpm-core:$CI_COMMIT_SHA -t $REGISTRY/bpm-core:latest bpm-core/
+    # context = repo root：容器內要先從 vendor/uni-form（submodule）建置 uni-form
+    # SDK（SNAPSHOT 不在 registry），再建 bpm-core —— 見 bpm-core/Dockerfile。
+    # ⚠️ 需要 checkout 時取得 submodule（GIT_SUBMODULE_STRATEGY: recursive）；
+    # 目前 .gitmodules 仍是本機 file URL、未 push，CI 取得 submodule 前此 job
+    # 會在 COPY 步驟明確失敗（不是靜默產出壞映像）。
+    - docker build -t $REGISTRY/bpm-core:$CI_COMMIT_SHA -t $REGISTRY/bpm-core:latest -f bpm-core/Dockerfile .
     - docker push $REGISTRY/bpm-core:$CI_COMMIT_SHA
     - docker push $REGISTRY/bpm-core:latest
   needs: [bpm-core:test]
   rules:
-    - changes: [bpm-core/**]
+    - changes: [bpm-core/**, vendor/uni-form]
 
 bpm-core:deploy-dev:
   <<: *deploy-template

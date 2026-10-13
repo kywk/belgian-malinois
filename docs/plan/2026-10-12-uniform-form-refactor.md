@@ -49,7 +49,9 @@
 - [x] uni-form main 迴歸修正（fix 分支 `43bf983`，待回報／接受）。
 - [x] 合併 BE／FE／BPMN 三分支；PM 收斂修正（`9b79c5c` 及後續）：DocumentDetail 任務動作 fail-closed、FormList→FormEditor 帶 `formKey+version`、`uniform:field` 空列語意（決策 8）、`key==formKey` gate（決策 9）、前端 dev proxy `VITE_API_PROXY`、formApi 移除已無端點的函式。
 - [x] **端到端驗收 PASS（2026-10-13）**：localenv `greyhound`（:18110）——E2E 13/13（preview→啟流程→view 審核→退回→fill 補件→竄改 400→重送→版本列→核准結案）、`acceptance-test.sh` 7/0。過程中修掉 `FormDefinitionValidator` 未注入 value schema 的真 bug（`b21c138`：含 `dateRange` 的表單無法存檔）。
-- [x] **本機開發改以 localenv 為準（使用者指示）**：新增 `scripts/localdev.sh`（偵測 `~/nanshan/scripts/localenv` 即調用；否則 compose＋主機 jar fallback）；修正 `greyhound.env` 的 JWT dev secret（原 22 bytes 不足 HS256 下限，greyhound 從未能在 localenv 啟動）；CLAUDE.md 開發流程改寫。
+- [x] **本機開發改以 localenv 為準（使用者指示）**：新增 `scripts/localdev.sh`（偵測 `~/nanshan/scripts/localenv` 即調用；否則完整 compose fallback —— 容器內從 pinned submodule 建 SDK，可重現）；修正 `greyhound.env` 的 JWT dev secret（原 22 bytes 不足 HS256 下限，greyhound 從未能在 localenv 啟動）；CLAUDE.md 開發流程改寫。
+- [x] **容器建置可重現（fallback smoke PASS，2026-10-13）**：`docker compose build bpm-core`（容器內先建 uni-form SDK）→ `up` → HEALTH 200 → seed → **E2E 13/13（:8080 容器路徑）** → `down -v`；不需要主機 `~/.m2`。CI 的 docker build 指令同步改為新 context（submodule 取得仍是未解前提）。
+- [x] **localenv secrets 一致性（使用者指示 1）**：`localenv`／`cms_local`／`cms_runtime`／`forms_local` 四個 pg roles 對齊現行 `secrets.env`，重啟 cms／authz；四方形狀（容器／資料／服務／設定）一致，`secrets.env` 為唯一真相。
 
 ## 五、凍結介面（施工不得自行變更；有問題回報 PM）
 
@@ -114,7 +116,7 @@ PM 保留：整合／合併、`scripts/` 對齊（seed 檢查清單 4→2）、C
 
 ## 八、開放問題
 
-- CI 尚不能 clone submodule（本機 file transport；未 push）。部署階段前需指定可取得的 Git URL 或 CI 先行 build。
+- CI 尚不能 clone submodule（本機 file transport；未 push）。部署階段前需指定可取得的 Git URL 或 CI 先行 build。**容器建置已改為從 pinned submodule 建 SDK（`docker-compose.yml` context=repo root＋Dockerfile 步驟 1），本機可重現；CI 仍需能取得 submodule**。
 - `optionsSource`／OptionsProvider 遷移（P5）；`file`／FileVault（P5）；BPMN lint 檢查 access 引用的 field key 存在（P5）。
 - uni-form `43bf983` 接受後更新 submodule pin（並重跑兩端）。
 - **required 語意（SDK）**：必填以「鍵存在」判定；text/textarea 空字串在 API 直送時**不**報必填（舊 validator 視空白為缺漏）。前端 widgets 會把空輸入轉 `undefined`，UI 行為與舊版一致；差異僅限直接呼叫 API 的呼叫端。
