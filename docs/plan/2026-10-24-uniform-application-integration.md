@@ -1,0 +1,103 @@
+# Greyhound／UniForm 申請流程整合檢視
+
+狀態：需求與版本政策已確認；以下施工方案待依批次實作，不代表已交付功能。
+
+## 需求與已確認決策
+
+使用者於 2026-10-24 明確指出：BPMN 申請流程必須對應表單；流程設計者同時設計申請表，發布後申請人才能填寫送件。
+
+同日確認版本政策：**流程不必重新發布；新申請自動使用最新已發布表單，既有案件維持原表單版本。**
+
+整合單位應是「可供申請的流程＋主申請表」，提供連續的設計、預覽與發布操作。申請表是流程的必要內容，不是設計完 BPMN 後再手動輸入一個外部資源代碼。
+
+- 每個申請流程以穩定的 `formKey` 指向一份主申請表；一般表單改版不要求重新部署 BPMN。
+- 案件鎖定送件時實際通過驗證的表單版本，後續審核與補件沿用該版本。
+- 審核與補件使用同一張主表，由節點 Access Profile 決定唯讀／可編輯欄位，不另做 review 表單。
+- 技術子流程、外部系統入口是否需要主表，應依各入口用途處理，不將「申請流程必須有表單」直接套到所有 BPMN。
+- 一份表單是否允許跨流程共用尚未另定；本批不新增全域一對一限制。
+
+## 查核基準與證據
+
+| 來源 | 基準 |
+|---|---|
+| Greyhound | `316598c`；目前 SDK gitlink 為 `89708ef` |
+| UniForm 最新工作區 | `67f6047`；規格權威為該提交的 `spec/`，搭配 `agent-kit/` 與實作核對 |
+| UniForm 已記錄內部交付 | `team-submodule-20261022` 的來源為 `7caa6b3`，不等同最新 HEAD；未把交付紀錄當成最新 HEAD 全量驗收證據 |
+
+本次為兩個獨立 worktree 的原生 subagent 只讀查核與主代理交叉核對。沒有更新 SDK pin、應用程式、資料庫或測試；既有修改保留。文件驗收只檢查來源、連結與差異，不沿用上一批測試數宣稱本方案已驗收。
+
+## 現有實作與缺口
+
+| 項目 | 已查證事實 | 影響與調整 |
+|---|---|---|
+| 設計入口 | [FormProps](../../bpm-frontend/src/bpmn/FormProps.js) 要求手輸已發布 formKey；[FlowablePropertiesProvider](../../bpm-frontend/src/bpmn/FlowablePropertiesProvider.js) 已有 StartEvent 設定入口 | 缺的是選取／建立／編輯申請表與返回流程的操作，不是缺少 StartEvent 面板 |
+| 草稿與發布 | [BpmnEditor](../../bpm-frontend/src/views/BpmnEditor.vue) 草稿存在單一 localStorage key；[FormEditor](../../bpm-frontend/src/views/FormEditor.vue) 分開儲存與發布，`handlePublish` 不先處理 dirty 草稿 | 使用者可能發布上一份已儲存內容；必須辨識尚未保存及 SDK pending／invalid 狀態 |
+| 部署驗證 | [BpmnLintService](../../bpm-core/src/main/java/com/bpm/core/lint/BpmnLintService.java) 353–410 行只在 UserTask 分支核對表單 | 申請流程還需檢查起始表單存在、可用，以及節點表單／欄位引用符合主表 |
+| 送件契約 | [ProcessController](../../bpm-core/src/main/java/com/bpm/core/controller/ProcessController.java) 313–332 行容許省略 formData，亦由 request id/key 解析定義；371–397 行未核對起始 formKey，按流程 key 啟動後再鎖版 | 申請入口必須以伺服器解析出的流程／主表綁定驗證，不接受任意表單替代；UUID 查詢還須核對 published |
+| 版本政策 | [FormVersionLocker](../../bpm-core/src/main/java/com/bpm/core/service/FormVersionLocker.java) 在啟動後再查最新；[FormContextResolver](../../bpm-core/src/main/java/com/bpm/core/uniform/FormContextResolver.java) 缺鎖版資料時會查最新 | 方向符合「新案用最新」，但填寫、驗證、鎖版間有競爭窗口，必須鎖同一個已驗證版本 |
+| 可沿用能力 | [FormService](../../bpm-core/src/main/java/com/bpm/core/form/service/FormService.java) 已禁止改寫 published，提供新版 draft；[請假流程](../../bpmn-definitions/leave-approval.bpmn20.xml) 已共用申請表並區分審核與補件權限 | 保留現有表單版本、Envelope、Access Resolver 與案件資料，不重做通用表單平台 |
+
+## 目標操作流程
+
+```text
+建立／編輯申請流程
+  → 在同一工作區設計主申請表（或選取已有表單）
+  → 設計 BPMN、指定審核人與各節點欄位權限
+  → 預覽填寫／審核／補件，儲存並檢查可發布性
+  → 首次發布表單及部署流程，開放申請
+  → 之後表單獨立改版發布，新申請採用最新版
+```
+
+宿主提供「流程、申請表、節點權限、預覽／發布」分頁及狀態；表單內容繼續由 `UfDesigner` 編輯。設計者不必記憶 formKey，也不必在彼此無關的管理頁間手動配對。
+
+首次發布時，表單發布成功但流程部署失敗，應明確保留「流程尚未開放申請」狀態並可重試；不刪除已發布表單、不宣稱多資料庫操作天然原子。優先沿用現有資料與部署入口，不先新增通用發布框架。
+
+### 最新表單與送件版本
+
+以下為依使用者版本政策推導的施工建議：
+
+1. 開啟申請：伺服器解析可用流程與穩定 formKey，載入最新 published，回傳確切流程定義 ID、表單定義 ID／version 與 Envelope。
+2. 送件：重新授權、解析相同流程綁定，確認 request 版本確實是該 formKey 的最新 published，而非接受任意 definitionId。
+3. 填寫途中改版：回明確的版本衝突（建議 409），保留本機填寫內容並提示重載／比對；不得靜默套用新版 schema，也不得自動丟棄不再存在的答案。
+4. 驗證成功：以同一次解析的流程定義 ID 啟動，將同一份已驗證 form version 寫入案件；不可再查一次 latest 決定鎖版。
+5. 既有案件：一律載入鎖定版本。新增受此契約管理的案件若缺鎖定資料，應拒絕處理而非靜默跟隨 latest；歷史無鎖版案件另列修復策略。
+
+一般表單改版可獨立發布；但移除／變更 BPMN 或 `uniform:access` 明確引用的欄位，仍須先修正依賴，否則可能讓既有部署無法受理新案。發布檢查須列清楚可檢查的依賴範圍，不能聲稱只比對 formKey 就已證明所有運算式相容。最新版本檢查與送件的線性化時點、交易／鎖策略於後端批次落實。
+
+## UniForm 最新契約對整合的影響
+
+以下路徑均指 **UniForm@67f6047**，不能用 Greyhound 舊 vendor checkout 的同名文件代替。
+
+| 最新契約／實作 | Greyhound 的責任 |
+|---|---|
+| `docs/architecture/designer-studio.md`：SDK 提供 DSL 編輯，宿主負責草稿 revision、正式版本、發布及業務交易 | 綁定、設計工作區與發布狀態放在 Greyhound；不期待 SDK 自動提供流程管理 |
+| `packages/vue/src/designer.ts`：emit modelValue／pending／invalid；沒有公開 selection event 或 slot | 保存／發布必須處理 pending／invalid；不能假設已有動態來源擴充面板 API |
+| `packages/vue/src/types.ts`：沒有 options.load adapter；native 選項 widget 遇 optionsSource 不會自行讀網路 | 動態選項讀取需要宿主 widget／讀取 adapter；舊派工 prompt 所寫 options.load 不可視為已存在 API |
+| `spec/validate/service-execution.md`：`ServiceValidation.validateWithServicesV1` 執行真正 resolve；`validateV1` 僅純驗證 | 接受選項值前必須由後端重載可信定義、provider registry 與授權 context，不能採 client 自稱有效或傳入 labels |
+| 同一規格：dependsOn 不自動產生 params，list 為宿主讀取接點；privateLabels 不直接公開 | 來源設定、查詢及送件驗證分工；成功保存後才保存授權的標籤快照，歷史顯示不依賴即時 list |
+| `spec/types/choice-editing.md`：select 僅單選，multiple=true 已移除；複選用 checkbox | 升版前盤點舊 DSL 與自訂 widgets，不可截取舊陣列首項或只換套件就宣稱相容 |
+| `spec/richtext/markdown/semantics.md`：新 authoring 為 RAW Markdown，core3／richtext3、content2 | 舊 P5「直接接 uniform-tiptap」需重寫；AST v2 相容與新表單 authoring 分開處理 |
+
+服務驗證契約在舊 pin 已存在，不能把 Greyhound 尚未接入的能力說成 SDK 最新才增加。是否升至最新 HEAD 與選項接線分開驗收；採固定 SHA，TS／Java／spec／manifest 一致，不追浮動 main。SDK 全量 persistence builder 是可選組裝，不作為本批前置。
+
+## P5 OptionsProvider 修訂範圍
+
+1. **來源清冊**：宿主註冊可用 provider 與參數規格；設計者選來源名稱，DSL 僅保存 optionsSource 引用，不接受任意 URL／script／SQL。
+2. **設計器接線**：短期可由宿主另設來源面板，依穩定 node.id 選欄位、修改候選 DSL；套用前處理 pending／invalid 與未送出的局部草稿。若要與 SDK 選題同步，需先在 UniForm 明訂 selection／slot 契約，不讀取私有狀態。
+3. **填寫接線**：宿主 widget 透過已授權的 form／field 讀取入口載入選項；伺服器由可信定義決定 provider。輸入相依值依欄位型別及權限核對；認證身分與業務 context 不從瀏覽器宣稱值取得。處理取消、過期回應與相依變更，不讓舊回應覆蓋新選項。
+4. **送件接線**：以同一份可信綁定執行 resolve，確認送來的值仍被允許；候選 list 與前端驗證都不是授權證據。既有 `FormSubmissionService` 的 submitted/context 混用與空 behavior registry 必須一起收斂。
+5. **標籤與失敗**：伺服器核准並成功保存後保留顯示快照。公開 `$labels` 只涵蓋契約允許的頂層 scalar；多選／repeater 標籤保存先明訂宿主格式，不自行發明 SDK 格式。來源失敗顯示可重試錯誤，不默默改用靜態清單放行非法值。
+6. **舊端點**：`GET /api/forms/options` 的 URL 代理不作新版 DSL 的整合介面；確認剩餘呼叫者後再決定移除或相容包裝，不能只更名就視為 provider resolve 已完成。
+
+## 實作順序與驗收
+
+| 批次 | 可驗收成果 | 併行安排 |
+|---|---|---|
+| A | 對齊 SDK 支援矩陣；固定申請主表、最新版本與版本衝突契約 | 主代理先凍結接口，避免兩端各自推定 |
+| B | 申請入口必填／一致性檢查、同一版本驗證與鎖定；流程工作區可建立或選取並編輯主表 | 後端版本／送件與前端工作區分別獨立 worktree |
+| C | OptionsProvider：來源設定→載入→後端 resolve→保存標籤 | 接口固定後，後端 registry／resolve 與前端 panel／widget 併行 |
+| D | 真實操作與必要回歸、增量交接、commit；不 push | 主代理整合驗收，build lease 串行 |
+
+驗收至少涵蓋：缺主表不能開放申請；不能省略／偷換／提交 draft 表單；流程不重發即可取得新表單；填寫中改版明確衝突；舊案件仍用原版；審核唯讀與補件範圍不變；動態選項成功／失敗／過期回應／非法值拒絕；標籤快照授權與保存一致。沿用既有檢查及手動驗收，不因任務卡列案例就新增未授權測試。
+
+本文件取代 2026-10-13 P5 prompt 中與此處衝突的整合假設；歷史交接保留，OptionsProvider 尚未實作或驗收。

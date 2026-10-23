@@ -4,6 +4,8 @@
 **最新交接**：[`2026-10-24-dynamic-assignee-handoff.md`](2026-10-24-dynamic-assignee-handoff.md)
 **下一批工作 prompt**：`2026-10-13-next-agent-prompt.md`
 
+**P5 整合修訂（2026-10-24）**：[申請流程與最新 UniForm 整合檢視](../plan/2026-10-24-uniform-application-integration.md)。使用者已確認「流程不必重發，新申請使用最新已發布表單，既有案件維持原版」。舊 P5 prompt 與本檢視衝突時以本檢視為準；目前僅完成規格與程式查核，尚未實作 OptionsProvider。
+
 ---
 
 ## 0. 現況快照（給新接手的人）
