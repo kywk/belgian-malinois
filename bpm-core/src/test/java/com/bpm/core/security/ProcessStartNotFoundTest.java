@@ -97,7 +97,9 @@ class ProcessStartNotFoundTest extends IntegrationTestBase {
     @Test
     @DisplayName("#69：已部署的流程必須仍能啟動（404 的預先檢查不得擋掉正常路徑）")
     void existingProcessStillStarts() throws Exception {
-        var res = start("{\"processDefinitionKey\":\"leave-approval\"}");
+        var payload = applicationStartPayload("leave-approval", TestGatewayMockMvcCustomizer.DEFAULT_USER,
+                "{\"leaveType\":\"annual\",\"dateRange\":{\"start\":\"2026-10-01\",\"end\":\"2026-10-02\"},\"reason\":\"有效申請\"}");
+        var res = start(new tools.jackson.databind.ObjectMapper().writeValueAsString(payload));
         assertThat(res.statusCode())
                 .as("預先檢查寫錯（例如用 deploymentId 比對）會讓所有正常啟動都變 404")
                 .isEqualTo(200);

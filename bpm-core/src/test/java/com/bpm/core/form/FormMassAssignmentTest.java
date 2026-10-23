@@ -185,13 +185,10 @@ class FormMassAssignmentTest extends IntegrationTestBase {
     // ── 小工具 ──────────────────────────────────────────────────────
 
     private String startWithFormData(String initiator, String reason) throws Exception {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("processDefinitionKey", "leave-approval");
-        payload.put("formData", Map.of("formDefinitionId", "leave-request",
-                "dataJson", objectMapper.writeValueAsString(Map.of(
+        Map<String, Object> payload = applicationStartPayload("leave-approval", initiator, objectMapper.writeValueAsString(Map.of(
                         "leaveType", "annual",
                         "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
-                        "reason", reason))));
+                        "reason", reason)));
         var res = mockMvc.perform(post("/api/process-instances")
                         .header("X-User-Id", initiator)
                         .contentType(MediaType.APPLICATION_JSON)

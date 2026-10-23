@@ -146,7 +146,7 @@ public class FormAccessResolver {
     }
 
     /**
-     * 主流程的第一個 {@link StartEvent}（{@code null} 代表找不到）。
+     * 主流程的唯一一般 {@link StartEvent}（排除 timer／message 等事件觸發入口）（{@code null} 代表找不到）。
      *
      * <p>公開給呼叫端取 {@code formKey}（start-form 端點）與 profile 使用
      * <b>同一次</b>走訪 —— 「start event 是哪一個」只允許一份實作。
@@ -156,12 +156,7 @@ public class FormAccessResolver {
         if (model == null || model.getMainProcess() == null) {
             return null;
         }
-        for (FlowElement element : model.getMainProcess().getFlowElements()) {
-            if (element instanceof StartEvent startEvent) {
-                return startEvent;
-            }
-        }
-        return null;
+        return ApplicationFormBinding.ordinaryStart(model.getMainProcess());
     }
 
     // ── 解析 ────────────────────────────────────────────────────────

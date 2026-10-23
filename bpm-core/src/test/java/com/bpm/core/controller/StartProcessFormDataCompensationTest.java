@@ -17,7 +17,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -141,12 +140,11 @@ class StartProcessFormDataCompensationTest extends IntegrationTestBase {
         return http.send(req, HttpResponse.BodyHandlers.ofString());
     }
 
-    private String startBody(String formDefinitionId, Map<String, Object> values) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("processDefinitionKey", LEAVE);
-        payload.put("formData", Map.of(
-                "formDefinitionId", formDefinitionId,
-                "dataJson", objectMapper.writeValueAsString(values)));
+    private String startBody(String formDefinitionId, Map<String, Object> values) throws Exception {
+        Map<String, Object> payload = applicationStartPayload(LEAVE, USER, objectMapper.writeValueAsString(values));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> formData = (Map<String, Object>) payload.get("formData");
+        formData.put("formDefinitionId", formDefinitionId);
         return objectMapper.writeValueAsString(payload);
     }
 

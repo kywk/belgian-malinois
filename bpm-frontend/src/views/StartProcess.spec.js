@@ -11,7 +11,8 @@ import { installUniformPlugin } from '../uniform/setup.js'
  *   - 清單來自 GET /api/process-definitions?latestVersion=true，只列
  *     有 startFormKey 的流程；選了之後 GET /api/process-definitions/{key}/start-form。
  *   - 送出 POST /api/process-instances：
- *     {processDefinitionKey, formData:{formDefinitionId: Envelope.schemaRef.key, dataJson}}。
+ *     {processDefinitionKey, processDefinitionId,
+ *      formData:{formDefinitionId, formVersion, dataJson}}，版本來自 applicationContext。
  *     **不得**送 variables（與 formData 重疊會 400）或 initiator（#66）。
  */
 
@@ -39,6 +40,12 @@ const DEFINITIONS = [
 ]
 
 const START_ENVELOPE = {
+  applicationContext: {
+    processDefinitionId: 'leave-approval:4:process-definition-uuid',
+    formDefinitionId: '2acde2fe-8c83-4656-9ed1-abd87bb49f6e',
+    formKey: 'leave-request',
+    formVersion: 1,
+  },
   uniform: '1.0',
   mode: 'fill',
   frame: 'form',
@@ -155,7 +162,7 @@ describe('StartProcess：選流程 → Envelope 表單', () => {
 })
 
 describe('StartProcess：送出 payload', () => {
-  it('formData.formDefinitionId 是 Envelope.schemaRef.key，不含 variables／initiator', async () => {
+  it('沿用 applicationContext 的流程 ID、表單 UUID 與版本，不含 variables／initiator', async () => {
     const wrapper = mountPage()
     await loadAndSelect(wrapper)
     wrapper.vm.formData = { leaveType: 'annual', reason: '家庭因素' }
@@ -169,11 +176,14 @@ describe('StartProcess：送出 payload', () => {
     expect(http.post).toHaveBeenCalledTimes(1)
     const [url, payload] = http.post.mock.calls[0]
     expect(url).toBe('/api/process-instances')
-    expect(Object.keys(payload).sort()).toEqual(['formData', 'processDefinitionKey'])
+    expect(Object.keys(payload).sort()).toEqual(['formData', 'processDefinitionId', 'processDefinitionKey'])
     expect(payload.processDefinitionKey).toBe('leave-approval')
     expect(payload.variables).toBeUndefined()
     expect(payload.initiator).toBeUndefined()
-    expect(payload.formData.formDefinitionId).toBe('leave-request')
+    expect(payload.processDefinitionId).toBe(START_ENVELOPE.applicationContext.processDefinitionId)
+    expect(payload.formData.formDefinitionId).toBe(START_ENVELOPE.applicationContext.formDefinitionId)
+    expect(payload.formData.formVersion).toBe(START_ENVELOPE.applicationContext.formVersion)
+    expect(Object.keys(payload.formData).sort()).toEqual(['dataJson', 'formDefinitionId', 'formVersion'])
     expect(JSON.parse(payload.formData.dataJson)).toEqual({ leaveType: 'annual', reason: '家庭因素' })
     expect(wrapper.text()).toContain('申請已送出')
   })

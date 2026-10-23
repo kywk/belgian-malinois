@@ -101,3 +101,13 @@
 驗收至少涵蓋：缺主表不能開放申請；不能省略／偷換／提交 draft 表單；流程不重發即可取得新表單；填寫中改版明確衝突；舊案件仍用原版；審核唯讀與補件範圍不變；動態選項成功／失敗／過期回應／非法值拒絕；標籤快照授權與保存一致。沿用既有檢查及手動驗收，不因任務卡列案例就新增未授權測試。
 
 本文件取代 2026-10-13 P5 prompt 中與此處衝突的整合假設；歷史交接保留，OptionsProvider 尚未實作或驗收。
+
+## 2026-10-24 第一批實作與驗收
+
+- 起始表單回傳 `applicationContext: {processDefinitionId, formDefinitionId, formKey, formVersion}`；申請 POST 必須帶流程 key、確切 ID 與 `formData: {formDefinitionId, formVersion, dataJson}`。表單識別必須是綁定主表的已發布 UUID，舊版 formKey／variables-only 申請格式回 400；無主表的技術流程保留原入口。
+- 單次最新已發布查詢是送件版本的線性化點；同一不可變定義用於驗證、資料列與啟動前 `_formVersions`。查詢後才完成的並行發布視為後續改版，不重新解析最新版。流程依解析出的 ID 啟動；新申請以 `_formVersionPolicy=application-v1` 標記，缺鎖拒絕。舊案件的相容回退不代表完成歷史資料補正。
+- BPMN 設計頁內嵌主表編輯，發布前儲存、正式版唯讀並可建立新版草稿；發布表單與部署流程的狀態分開。409 保留逐次答案快照，重載僅帶入同 key／type 的答案並要求確認。
+- 獨立審查：Standards 無確認缺失；Spec 發現事件觸發入口誤列與多次409答案保留問題，已修正。
+- Maven 完整首輪 1,677 案例：1,675 通過，2 個舊契約 fixture 失敗；更新該兩組既有案例後 `mvn -Dtest=ProcessStartNotFoundTest,StartProcessWithFormDataTest verify` 12/12 通過。未新增測試案例。
+- 前端 `npm test` 25 檔、259 案例通過；`npm run build` 通過，既有大 bundle 警告仍在。瀏覽器確認建立／發布主表並返回 BPMN 後綁定保留。
+- 本機 API 驗收通過：缺表單／錯誤綁定拒絕、舊版本409、表單 v2 發布後新案使用 v2（不重部署）、既有案維持 v1。跨資料庫仍沿用補償，未宣稱 XA 或 crash-safe exactly-once。

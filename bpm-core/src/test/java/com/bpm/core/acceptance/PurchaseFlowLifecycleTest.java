@@ -58,7 +58,6 @@ class PurchaseFlowLifecycleTest extends IntegrationTestBase {
     private static final String MANAGER = "mgr001";
     private static final String FINANCE = "dir001";
     private static final String PURCHASE = "purchase-approval";
-    private static final String PURCHASE_FORM_KEY = "purchase-request";
 
     @Autowired
     private RuntimeService runtimeService;
@@ -93,12 +92,10 @@ class PurchaseFlowLifecycleTest extends IntegrationTestBase {
     }
 
     private Started startWithFormData(Map<String, Object> values) throws Exception {
-        String body = objectMapper.writeValueAsString(Map.of(
-                "processDefinitionKey", PURCHASE,
-                "businessKey", "purchase-e2e-" + UUID.randomUUID(),
-                "formData", Map.of(
-                        "formDefinitionId", PURCHASE_FORM_KEY,
-                        "dataJson", objectMapper.writeValueAsString(values))));
+        Map<String, Object> payload = applicationStartPayload(PURCHASE, APPLICANT,
+                objectMapper.writeValueAsString(values));
+        payload.put("businessKey", "purchase-e2e-" + UUID.randomUUID());
+        String body = objectMapper.writeValueAsString(payload);
         String response = mockMvc.perform(post("/api/process-instances")
                         .header("X-User-Id", APPLICANT)
                         .contentType(MediaType.APPLICATION_JSON)

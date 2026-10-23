@@ -9,6 +9,7 @@ import org.flowable.task.api.Task;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -16,6 +17,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.sql.PreparedStatement;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -64,6 +66,18 @@ class ProcessStartIdentityTest extends IntegrationTestBase {
     private final HttpClient http = HttpClient.newHttpClient();
 
     private static final String LEAVE = "leave-approval";
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    /** 合法的申請基底，負向案例只改動所驗證的身分欄位。 */
+    private Map<String, Object> startPayload(String caller, String leaveType, String reason) throws Exception {
+        var payload = applicationStartPayload(LEAVE, caller, JSON.writeValueAsString(Map.of(
+                "leaveType", leaveType,
+                "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
+                "reason", reason)));
+        payload.put("businessKey", "identity-" + UUID.randomUUID());
+        payload.put("variables", Map.of("days", 1));
+        return payload;
+    }
 
     // ── HTTP 與資料查詢小工具 ─────────────────────────────────────
 
@@ -136,14 +150,14 @@ class ProcessStartIdentityTest extends IntegrationTestBase {
         long auditBefore = auditRowCount();
         long instancesBefore = countRunning(LEAVE);
 
-        var res = post("/api/process-instances", "user001",
-                "{\"processDefinitionKey\":\"" + LEAVE + "\","
-                        + "\"businessKey\":\"forged-" + UUID.randomUUID() + "\","
-                        + "\"initiator\":\"user002\"}");
+        var payload = startPayload("user001", "annual", "身分冒用拒絕");
+        payload.put("initiator", "user002");
+        var res = post("/api/process-instances", "user001", JSON.writeValueAsString(payload));
 
         assertThat(res.statusCode())
                 .as("改動前：body 的 initiator 被直接採信，請求回 200 —— 受害者背上多了一張單")
                 .isEqualTo(400);
+        assertThat(res.body()).contains("initiator");
         assertThat(countRunning(LEAVE))
                 .as("被拒的請求不得留下流程實例（否則錯誤的 400 會讓人重送，變成兩張單）")
                 .isEqualTo(instancesBefore);
@@ -158,10 +172,12 @@ class ProcessStartIdentityTest extends IntegrationTestBase {
         // 政策：body 帶了 initiator 欄位就明確拒絕。理由是呼叫端送出這個欄位
         // 本身就表示它期待該值被採信；「送了對的」與「送了錯的」對呼叫端來說
         // 都是同一份契約，不該一個 400 一個 200。
-        var res = post("/api/process-instances", "user001",
-                "{\"processDefinitionKey\":\"" + LEAVE + "\",\"initiator\":\"user001\"}");
+        var payload = startPayload("user001", "annual", "自稱身分也拒絕");
+        payload.put("initiator", "user001");
+        var res = post("/api/process-instances", "user001", JSON.writeValueAsString(payload));
 
         assertThat(res.statusCode()).isEqualTo(400);
+        assertThat(res.body()).contains("initiator");
     }
 
     // ── (b)(c) variables 夾帶內部／身分變數 ───────────────────────
@@ -175,12 +191,12 @@ class ProcessStartIdentityTest extends IntegrationTestBase {
         // 等於把「需管理員為此系統開啟的授權」變成任何登入者都能行使。
         long instancesBefore = countRunning(LEAVE);
 
-        var res = post("/api/process-instances", "user001",
-                "{\"processDefinitionKey\":\"" + LEAVE + "\","
-                        + "\"variables\":{\"leaveType\":\"annual\",\"days\":1,"
-                        + "\"onBehalfOf\":\"user002\"}}");
+        var payload = startPayload("user001", "annual", "夾帶代發身分拒絕");
+        payload.put("variables", Map.of("days", 1, "onBehalfOf", "user002"));
+        var res = post("/api/process-instances", "user001", JSON.writeValueAsString(payload));
 
         assertThat(res.statusCode()).isEqualTo(400);
+        assertThat(res.body()).contains("onBehalfOf");
         assertThat(countRunning(LEAVE))
                 .as("被拒的請求不得留下流程實例").isEqualTo(instancesBefore);
     }
@@ -195,13 +211,14 @@ class ProcessStartIdentityTest extends IntegrationTestBase {
                 "initiator", "effectiveInitiator")) {
             long before = countRunning(LEAVE);
 
-            var res = post("/api/process-instances", "user001",
-                    "{\"processDefinitionKey\":\"" + LEAVE + "\","
-                            + "\"variables\":{\"" + name + "\":\"injected\"}}");
+            var payload = startPayload("user001", "annual", "夾帶內部變數拒絕");
+            payload.put("variables", Map.of(name, "injected"));
+            var res = post("/api/process-instances", "user001", JSON.writeValueAsString(payload));
 
             assertThat(res.statusCode())
                     .as("夾帶 " + name + " 必須被拒 —— 它改寫的是伺服器內部狀態或身分語意")
                     .isEqualTo(400);
+            assertThat(res.body()).contains(name);
             assertThat(countRunning(LEAVE))
                     .as("夾帶 " + name + " 被拒時不得留下流程實例").isEqualTo(before);
         }
@@ -212,10 +229,8 @@ class ProcessStartIdentityTest extends IntegrationTestBase {
     @Test
     @DisplayName("#66：省略 initiator 時，流程變數的 initiator 與稽核 operatorId 都是登入者")
     void initiatorComesFromTheAuthenticatedCaller() throws Exception {
-        var res = post("/api/process-instances", "user001",
-                "{\"processDefinitionKey\":\"" + LEAVE + "\","
-                        + "\"businessKey\":\"caller-" + UUID.randomUUID() + "\","
-                        + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}");
+        var payload = startPayload("user001", "annual", "登入身分驗證");
+        var res = post("/api/process-instances", "user001", JSON.writeValueAsString(payload));
 
         assertThat(res.statusCode()).isEqualTo(200);
         String pid = pidOf(res.body());
@@ -244,9 +259,8 @@ class ProcessStartIdentityTest extends IntegrationTestBase {
             String caller = c[0];
             String expectedManager = c[1];
 
-            var res = post("/api/process-instances", caller,
-                    "{\"processDefinitionKey\":\"" + LEAVE + "\","
-                            + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}");
+            var payload = startPayload(caller, "annual", "主管路由驗證");
+            var res = post("/api/process-instances", caller, JSON.writeValueAsString(payload));
             assertThat(res.statusCode()).isEqualTo(200);
             String pid = pidOf(res.body());
 
@@ -263,16 +277,15 @@ class ProcessStartIdentityTest extends IntegrationTestBase {
     void normalBusinessVariablesStillWork() throws Exception {
         // 保護的是「改寫引擎與身分語意」的變數，不是所有變數。
         // 依 spec §8.5，欄位 id == 變數名，leaveType／reason 就是流程變數。
-        var res = post("/api/process-instances", "user001",
-                "{\"processDefinitionKey\":\"" + LEAVE + "\","
-                        + "\"businessKey\":\"normal-" + UUID.randomUUID() + "\","
-                        + "\"variables\":{\"leaveType\":\"personal\",\"days\":3,"
-                        + "\"reason\":\"家庭因素\"}}");
+        var payload = startPayload("user001", "personal", "家庭因素");
+        payload.put("variables", Map.of("days", 3));
+        var res = post("/api/process-instances", "user001", JSON.writeValueAsString(payload));
         assertThat(res.statusCode()).isEqualTo(200);
 
         String pid = pidOf(res.body());
         assertThat(runtimeService.getVariable(pid, "leaveType")).isEqualTo("personal");
         assertThat(runtimeService.getVariable(pid, "reason")).isEqualTo("家庭因素");
+        assertThat(runtimeService.getVariable(pid, "days")).isEqualTo(3);
     }
 
     // ── (d) DocumentController 的 createdBy ──────────────────────

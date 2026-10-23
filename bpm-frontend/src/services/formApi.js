@@ -1,11 +1,24 @@
 import http from './http'
 
-export const listForms = () =>
-  http.get('/api/forms').then(r => r.data)
+// 後端回 Spring Page；選取器與列表需要完整版本清單，不能只看到第一頁。
+export const listForms = async () => {
+  const forms = []
+  let page = 0
+  let totalPages = 1
+  do {
+    const { data } = await http.get('/api/forms', { params: { page, size: 100 } })
+    if (Array.isArray(data)) return data
+    if (!Array.isArray(data.content)) throw new Error('表單清單格式不正確，請重新載入')
+    forms.push(...data.content)
+    totalPages = data.totalPages ?? 1
+    page += 1
+  } while (page < totalPages)
+  return forms
+}
 
 export const getFormSchema = (formKey, version) => {
   const params = version ? { version } : {}
-  return http.get(`/api/forms/${formKey}`, { params }).then(r => r.data)
+  return http.get(`/api/forms/${encodeURIComponent(formKey)}`, { params }).then(r => r.data)
 }
 
 /**
@@ -25,6 +38,10 @@ export const updateForm = (id, data) =>
 
 export const publishForm = (id) =>
   http.post(`/api/forms/${id}/publish`).then(r => r.data)
+
+/** 已發布版本不可改寫；以相同 formKey 建立下一版草稿。 */
+export const createFormRevision = (formKey) =>
+  http.post(`/api/forms/${encodeURIComponent(formKey)}/revisions`).then(r => r.data)
 
 // 表單資料的寫入路徑已整併：
 //   申請／補件 → POST /api/process-instances 與 PUT /api/tasks/{id} 的 formData

@@ -1,4 +1,4 @@
-import { ref, shallowRef } from 'vue'
+import { shallowRef } from 'vue'
 import BpmnModeler from 'bpmn-js/lib/Modeler'
 import { BpmnPropertiesPanelModule, BpmnPropertiesProviderModule } from 'bpmn-js-properties-panel'
 import flowableModdle, { uniformModdle } from './flowableModdle.js'
@@ -22,7 +22,7 @@ const EMPTY_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
 
 export function useBpmnModeler() {
   let _modeler = null
-  const selectedElement = ref(null)
+  const selectedElement = shallowRef(null)
 
   function createModeler(container, propertiesPanelContainer, additionalModules = []) {
     if (_modeler) _modeler.destroy()
@@ -75,6 +75,25 @@ export function useBpmnModeler() {
     return _modeler?.get('modeling')
   }
 
+  // 只讓宿主綁定流程層的起始事件；子流程 StartEvent 不是申請入口。
+  function getApplicationStartEvents() {
+    return _modeler?.get('elementRegistry').filter(element => element.type === 'bpmn:StartEvent'
+      && element.businessObject.$parent?.$type === 'bpmn:Process'
+      && !element.businessObject.eventDefinitions?.length) ?? []
+  }
+
+  function selectElement(id) {
+    const element = getElement(id)
+    if (element) _modeler.get('selection').select(element)
+  }
+
+  function bindStartForm(id, formKey) {
+    const element = getApplicationStartEvents().find(start => start.id === id)
+    if (!element) throw new Error('請先選取流程層的申請起始事件')
+    if (element.businessObject.get('flowable:formKey') === formKey) return
+    getModeling().updateProperties(element, { 'flowable:formKey': formKey })
+  }
+
   function on(event, callback) {
     _modeler?.on(event, callback)
   }
@@ -93,6 +112,7 @@ export function useBpmnModeler() {
     selectedElement,
     createModeler, importXml, exportXml, newDiagram,
     getElement, getSelectedElement, getModeling,
+    getApplicationStartEvents, selectElement, bindStartForm,
     on, destroy, EMPTY_BPMN
   }
 }

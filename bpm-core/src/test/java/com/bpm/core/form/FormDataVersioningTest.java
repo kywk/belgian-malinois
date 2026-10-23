@@ -96,12 +96,9 @@ class FormDataVersioningTest extends IntegrationTestBase {
                 "reason", reason));
     }
 
-    /** 以 #60 的 formData 契約啟動請假流程（formKey 由伺服器解析）。 */
+    /** 以申請入口回傳的確切流程與表單版本送件。 */
     private String startWithFormData(String reason) throws Exception {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("processDefinitionKey", LEAVE);
-        payload.put("formData", Map.of("formDefinitionId", "leave-request",
-                "dataJson", leaveValues(reason)));
+        Map<String, Object> payload = applicationStartPayload(LEAVE, APPLICANT, leaveValues(reason));
         var res = post("/api/process-instances", APPLICANT,
                 objectMapper.writeValueAsString(payload));
         assertThat(res.statusCode()).as("前置條件：啟動＋表單落地應成功，實際 " + res.body())

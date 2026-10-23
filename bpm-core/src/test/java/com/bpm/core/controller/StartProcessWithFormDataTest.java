@@ -15,7 +15,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.sql.PreparedStatement;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -50,17 +49,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code ResponseStatusException} 的狀態碼是容器轉出來的；用 MockMvc 寫，
  * {@code SecurityConfig} 的 ERROR dispatch 規則壞掉時測試照樣全綠。
  *
- * <h2>⚠️ formDefinitionId 的 id／formKey 解析（與設計說明的一處差異）</h2>
- *
- * <p>設計說明裡前端送的是 {@code 'leave-request'}，而
- * {@code FormData.formDefinitionId} 的語意是<b>定義資料列的 id</b>（seed 用
- * {@code NEWID()}，是 UUID）。若把 formKey 直接當 id：validator 的
- * {@code findById} 查不到 → 依 #55 的已知缺口<b>整包 dataJson 靜默略過驗證</b>，
- * 落地的那一列也不指向任何定義（封存守衛等以 id 為條件的查詢全部落空）。
- * 因此 {@code ProcessController} 先當 id 查、查不到再當 formKey 查最新
- * published（見 {@code FormService.findDefinitionByIdOrKey}）：
- * {@link #formKeyFromFrontendIsResolvedToDefinitionId()} 就是這條路徑的守門測試。
- * 若 PM 要嚴格照原設計（不解析、接受靜默略過），拿掉解析後這條會紅。
+ * <p>申請送件必須沿用 start-form 回傳的流程定義 ID、表單 UUID 與版本；
+ * formKey 不能代替表單定義 ID，綁定主表的申請也不能省略 formData。
  */
 class StartProcessWithFormDataTest extends IntegrationTestBase {
 
@@ -93,12 +83,11 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
     }
 
     /** 組出「啟動 leave-approval + 帶 formData」的請求 body。 */
-    private String startBody(String formDefinitionId, Map<String, Object> values) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("processDefinitionKey", LEAVE);
-        payload.put("formData", Map.of(
-                "formDefinitionId", formDefinitionId,
-                "dataJson", objectMapper.writeValueAsString(values)));
+    private String startBody(String formDefinitionId, Map<String, Object> values) throws Exception {
+        Map<String, Object> payload = applicationStartPayload(LEAVE, USER, objectMapper.writeValueAsString(values));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> formData = (Map<String, Object>) payload.get("formData");
+        formData.put("formDefinitionId", formDefinitionId);
         return objectMapper.writeValueAsString(payload);
     }
 
@@ -219,18 +208,19 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
     }
 
     @Test
-    @DisplayName("#60：前端只送 formKey（'leave-request'）→ 解析成定義 id 後驗證與落地")
-    void formKeyFromFrontendIsResolvedToDefinitionId() throws Exception {
+    @DisplayName("申請送件：以 formKey 代替表單 UUID → 400，零副作用")
+    void formKeyCannotReplaceExactDefinitionId() throws Exception {
         FormDefinition def = leaveRequest();
+        long instancesBefore = countRunning(LEAVE);
+        int rowsBefore = formRowCount(def.getId());
+        long auditBefore = auditRowCount();
 
-        var res = post(startBody(LEAVE_FORM_KEY, leaveValues("前端只送 formKey")));
+        var res = post(startBody(LEAVE_FORM_KEY, leaveValues("不能用 formKey 代替 UUID")));
 
-        assertThat(res.statusCode()).as("body=%s", res.body()).isEqualTo(200);
-        String formDataId = field(res.body(), "formDataId");
-        assertThat(formRow(formDataId)[1])
-                .as("form_definition_id 必須是解析後的定義 id，而不是 'leave-request'"
-                        + "（後者會讓 schema 驗證與封存守衛全部落空）")
-                .isEqualTo(def.getId());
+        assertThat(res.statusCode()).as("body=%s", res.body()).isEqualTo(400);
+        assertThat(countRunning(LEAVE)).isEqualTo(instancesBefore);
+        assertThat(formRowCount(def.getId())).isEqualTo(rowsBefore);
+        assertThat(auditRowCount()).isEqualTo(auditBefore);
     }
 
     // ── ② 拒絕路徑：400 且零副作用 ────────────────────────────────
@@ -289,14 +279,11 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
     @Test
     @DisplayName("#60：同一欄位同時出現在 variables 與 formData → 400，不得靜默選一邊")
     void overlappingVariablesAndFormDataAreRejected() throws Exception {
-        FormDefinition def = leaveRequest();
         long before = countRunning(LEAVE);
 
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("processDefinitionKey", LEAVE);
+        Map<String, Object> payload = applicationStartPayload(LEAVE, USER,
+                objectMapper.writeValueAsString(leaveValues("重疊")));
         payload.put("variables", Map.of("leaveType", "personal"));
-        payload.put("formData", Map.of("formDefinitionId", def.getId(),
-                "dataJson", objectMapper.writeValueAsString(leaveValues("重疊"))));
 
         var res = post(objectMapper.writeValueAsString(payload));
 
@@ -339,7 +326,7 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
                 .as("改動前：查不到的 id 會讓整包 dataJson 靜默略過驗證（#55 已知缺口）；"
                         + "uni-form 重構後必須明確 400")
                 .isEqualTo(400);
-        assertThat(res.body()).contains(bogus);
+        assertThat(res.body()).contains("流程主表的已發布定義 UUID");
         assertThat(countRunning(LEAVE)).as("被拒的請求不得留下案件").isEqualTo(before);
     }
 
@@ -348,28 +335,35 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
     void incompleteFormDataIsRejected() throws Exception {
         long before = countRunning(LEAVE);
 
-        var res = post("{\"processDefinitionKey\":\"" + LEAVE + "\","
-                + "\"formData\":{\"formDefinitionId\":\"" + LEAVE_FORM_KEY + "\"}}");
+        Map<String, Object> payload = applicationStartPayload(LEAVE, USER, "{}");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> formData = (Map<String, Object>) payload.get("formData");
+        formData.remove("dataJson");
+        var res = post(objectMapper.writeValueAsString(payload));
 
         assertThat(res.statusCode()).as("body=%s", res.body()).isEqualTo(400);
         assertThat(res.body()).contains("formData");
         assertThat(countRunning(LEAVE)).as("被拒的請求不得留下案件").isEqualTo(before);
     }
 
-    // ── ③ 既有呼叫端不受影響 ──────────────────────────────────────
+    // ── ③ 申請流程必須送出主表 ────────────────────────────────────
 
     @Test
-    @DisplayName("#60：只帶 variables 的既有呼叫端行為不變，回應不含 formDataId")
-    void variablesOnlyCallersAreUnaffected() throws Exception {
-        var res = post("{\"processDefinitionKey\":\"" + LEAVE + "\","
-                + "\"businessKey\":\"legacy-" + UUID.randomUUID() + "\","
-                + "\"variables\":{\"leaveType\":\"personal\",\"days\":2}}");
+    @DisplayName("申請流程只帶 variables → 400，不得建立沒有表單的案件")
+    void applicationCannotStartWithVariablesOnly() throws Exception {
+        long instancesBefore = countRunning(LEAVE);
+        int rowsBefore = formRowCount(leaveRequest().getId());
+        long auditBefore = auditRowCount();
+        Map<String, Object> payload = applicationStartPayload(LEAVE, USER, "{}");
+        payload.remove("formData");
+        payload.put("businessKey", "missing-form-" + UUID.randomUUID());
+        payload.put("variables", Map.of("leaveType", "personal", "days", 2));
 
-        assertThat(res.statusCode()).as("body=%s", res.body()).isEqualTo(200);
-        assertThat(res.body()).as("沒有 formData 時回應不該出現 formDataId")
-                .doesNotContain("formDataId");
-        String pid = field(res.body(), "processInstanceId");
-        assertThat(runtimeService.getVariable(pid, "leaveType")).isEqualTo("personal");
-        assertThat(runtimeService.getVariable(pid, "initiator")).isEqualTo(USER);
+        var res = post(objectMapper.writeValueAsString(payload));
+
+        assertThat(res.statusCode()).as("body=%s", res.body()).isEqualTo(400);
+        assertThat(countRunning(LEAVE)).isEqualTo(instancesBefore);
+        assertThat(formRowCount(leaveRequest().getId())).isEqualTo(rowsBefore);
+        assertThat(auditRowCount()).isEqualTo(auditBefore);
     }
 }

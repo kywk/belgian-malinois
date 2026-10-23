@@ -16,6 +16,7 @@ import org.testcontainers.utility.DockerImageName;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
+import java.util.Map;
 
 /**
  * 整合測試的共用基底：一組真實的 MSSQL／RabbitMQ／Redis 容器。
@@ -205,6 +206,31 @@ public abstract class IntegrationTestBase {
                 st.execute("ENABLE TRIGGER trg_audit_log_no_delete ON bpm_audit_log");
             }
         });
+    }
+
+    /** 開啟申請表並沿用伺服器回傳的確切流程與表單版本。 */
+    protected Map<String, Object> applicationStartPayload(String processKey, String caller,
+                                                         String dataJson) throws Exception {
+        var request = java.net.http.HttpRequest.newBuilder(java.net.URI.create(
+                        "http://localhost:" + SERVLET_PORT + "/api/process-definitions/" + processKey + "/start-form"))
+                .header("X-Gateway-Secret", TestGatewayMockMvcCustomizer.GATEWAY_SECRET)
+                .header("X-User-Id", caller).GET().build();
+        var response = java.net.http.HttpClient.newHttpClient().send(request,
+                java.net.http.HttpResponse.BodyHandlers.ofString());
+        org.assertj.core.api.Assertions.assertThat(response.statusCode())
+                .as("開啟申請表：%s", response.body()).isEqualTo(200);
+        var context = new tools.jackson.databind.ObjectMapper().readTree(response.body()).path("applicationContext");
+        org.assertj.core.api.Assertions.assertThat(context.path("processDefinitionId").asText()).isNotBlank();
+        org.assertj.core.api.Assertions.assertThat(context.path("formDefinitionId").asText()).isNotBlank();
+        org.assertj.core.api.Assertions.assertThat(context.path("formKey").asText()).isNotBlank();
+        org.assertj.core.api.Assertions.assertThat(context.path("formVersion").asInt()).isPositive();
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("processDefinitionKey", processKey);
+        payload.put("processDefinitionId", context.path("processDefinitionId").asText());
+        payload.put("formData", new java.util.LinkedHashMap<>(Map.of(
+                "formDefinitionId", context.path("formDefinitionId").asText(),
+                "formVersion", context.path("formVersion").asInt(), "dataJson", dataJson)));
+        return payload;
     }
 
     @FunctionalInterface

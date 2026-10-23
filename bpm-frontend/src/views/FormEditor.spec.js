@@ -17,12 +17,14 @@ import { installUniformPlugin } from '../uniform/setup.js'
 
 const { pushMock, routeRef } = vi.hoisted(() => ({
   pushMock: vi.fn(),
-  routeRef: { value: { params: { id: 'leave-request' } } },
+  routeRef: { value: { params: { id: 'leave-request' }, query: {} } },
 }))
 
 vi.mock('vue-router', () => ({
   useRoute: () => routeRef.value,
   useRouter: () => ({ push: pushMock }),
+  onBeforeRouteLeave: vi.fn(),
+  onBeforeRouteUpdate: vi.fn(),
 }))
 
 vi.mock('../services/http', () => ({
@@ -47,6 +49,13 @@ const DSL = {
   ],
 }
 
+const DRAFT_DEFINITION = {
+  id: 7, name: '請假申請表', formKey: 'leave-request',
+  version: 1, status: 'draft', schemaJson: JSON.stringify(DSL),
+}
+const PUBLISHED_DEFINITION = { ...DRAFT_DEFINITION, status: 'published' }
+const NEXT_DRAFT = { ...DRAFT_DEFINITION, id: 8, version: 2 }
+
 const PREVIEW_ENVELOPE = {
   uniform: '1.0',
   mode: 'fill',
@@ -65,15 +74,23 @@ function mountPage() {
 
 beforeEach(() => {
   document.querySelectorAll('.el-message').forEach((node) => node.remove())
-  routeRef.value = { params: { id: 'leave-request' } }
+  routeRef.value = { params: { id: 'leave-request' }, query: {} }
   http.get.mockReset()
   http.put.mockReset()
   http.post.mockReset()
-  http.get.mockResolvedValue({
-    data: { id: 7, name: '請假申請表', formKey: 'leave-request', schemaJson: JSON.stringify(DSL) },
+  http.get.mockImplementation((url, config) => {
+    if (url === '/api/forms') {
+      return Promise.resolve({ data: {
+        content: config.params.page === 0 ? [PUBLISHED_DEFINITION] : [NEXT_DRAFT],
+        totalPages: 2,
+      } })
+    }
+    return Promise.resolve({ data: config?.params?.version === 2 ? NEXT_DRAFT : DRAFT_DEFINITION })
   })
-  http.put.mockResolvedValue({ data: { id: 7 } })
-  http.post.mockResolvedValue({ data: PREVIEW_ENVELOPE })
+  http.put.mockResolvedValue({ data: DRAFT_DEFINITION })
+  http.post.mockImplementation((url) => Promise.resolve({
+    data: url === '/api/forms/7/publish' ? PUBLISHED_DEFINITION : PREVIEW_ENVELOPE,
+  }))
 })
 
 describe('FormEditor：載入既有表單', () => {
@@ -107,7 +124,7 @@ describe('FormEditor：載入既有表單', () => {
 })
 
 describe('FormEditor：儲存', () => {
-  it('PUT /api/forms/{id} 的 schemaJson 是 JSON 字串（含完整 DSL）', async () => {
+  it('草稿儲存完整 DSL 字串，發布前先儲存，發布後唯讀並可開啟新版草稿', async () => {
     const wrapper = mountPage()
     await flush()
     await flush()
@@ -125,6 +142,32 @@ describe('FormEditor：儲存', () => {
     expect(parsed.$uniform).toBe('1.0')
     expect(parsed.key).toBe('leave-request')
     expect(parsed.root).toHaveLength(2)
+
+    expect(wrapper.emitted('saved')[0][0]).toEqual(DRAFT_DEFINITION)
+    expect(wrapper.findComponent(UfDesigner).props('readonly')).toBe(false)
+
+    await wrapper.findAll('button').find((button) => button.text().includes('儲存並發布')).trigger('click')
+    await flush()
+    await flush()
+
+    expect(http.put).toHaveBeenCalledTimes(2)
+    expect(http.post).toHaveBeenCalledWith('/api/forms/7/publish')
+    expect(http.put.mock.invocationCallOrder[1]).toBeLessThan(http.post.mock.invocationCallOrder[0])
+    expect(JSON.parse(http.put.mock.calls[1][1].schemaJson)).toEqual(parsed)
+    expect(wrapper.emitted('published')[0][0]).toEqual(PUBLISHED_DEFINITION)
+    expect(wrapper.findComponent(UfDesigner).props('readonly')).toBe(true)
+    expect(wrapper.text()).toContain('此版本已發布，內容為唯讀')
+
+    await wrapper.findAll('button').find((button) => button.text().includes('建立／開啟新版草稿')).trigger('click')
+    await flush()
+    await flush()
+
+    expect(http.get).toHaveBeenCalledWith('/api/forms', { params: { page: 0, size: 100 } })
+    expect(http.get).toHaveBeenCalledWith('/api/forms', { params: { page: 1, size: 100 } })
+    expect(http.get).toHaveBeenCalledWith('/api/forms/leave-request', { params: { version: 2 } })
+    expect(wrapper.emitted('saved').at(-1)[0]).toEqual(NEXT_DRAFT)
+    expect(wrapper.findComponent(UfDesigner).props('readonly')).toBe(false)
+    expect(wrapper.text()).toContain('第 2 版・草稿')
   })
 
   it('後端以 400 回 DSL 不合法時顯示後端訊息', async () => {
@@ -176,7 +219,8 @@ describe('FormEditor：預覽', () => {
     await flush()
 
     expect(wrapper.findComponent(UfRenderer).exists()).toBe(false)
-    expect(wrapper.text()).toContain('預覽失敗')
-    expect(wrapper.text()).toContain('DSL 不合法')
+    // 預覽 dialog append-to-body，錯誤訊息在 teleport 的實際顯示位置。
+    expect(document.body.textContent).toContain('預覽失敗')
+    expect(document.body.textContent).toContain('DSL 不合法')
   })
 })

@@ -1,5 +1,8 @@
 package com.bpm.core.lint;
 
+import com.bpm.core.form.model.FormDefinition;
+import com.bpm.core.uniform.ApplicationFormBinding;
+import org.springframework.web.server.ResponseStatusException;
 import org.flowable.bpmn.converter.BpmnXMLConverter;
 import org.flowable.bpmn.model.*;
 import org.springframework.beans.factory.annotation.Value;
@@ -349,6 +352,7 @@ public class BpmnLintService {
         // 所以形狀比照同一段裡的 isExternalAllowed：同樣的資料只取一次，
         // 同樣的原因（同一份事實不該有兩條取得路徑）。
         Map<String, Boolean> declaredVariables = specsByVariableName(process.getId());
+        lintApplicationBinding(process, errors);
 
         for (FlowElement el : process.getFlowElements()) {
             if (el instanceof UserTask ut) {
@@ -374,6 +378,54 @@ public class BpmnLintService {
         lintWebhookPayloadTemplates(process, errors);
 
         return new LintResult(errors.stream().noneMatch(e -> "error".equals(e.severity())), errors);
+    }
+
+    /**
+     * 有明列內部起始表單才形成申請契約；無主表的技術／外部流程不被迫加表單。
+     * 所有明列的內部 StartEvent formKey 仍須固定且已發布（包含內嵌子流程）。
+     */
+    private void lintApplicationBinding(org.flowable.bpmn.model.Process process, List<LintError> errors) {
+        Map<String, FormDefinition> definitions = new HashMap<>();
+        for (FlowElement element : ApplicationFormBinding.elements(process.getFlowElements())) {
+            if (!(element instanceof StartEvent start)) continue;
+            String key = start.getFormKey();
+            if (key == null || key.isBlank() || key.startsWith("external:")) continue;
+            if (!ApplicationFormBinding.isLiteralInternal(key)) {
+                errors.add(new LintError(start.getId(), start.getName(), "start-formkey-literal",
+                        "起始表單必須使用固定的 formKey，不接受運算式", "error"));
+                continue;
+            }
+            try {
+                FormDefinition definition = definitions.get(key);
+                if (definition == null) {
+                    definition = formService.getSchema(key, null);
+                    if (definition != null) definitions.put(key, definition);
+                }
+                if (definition == null || !"published".equals(definition.getStatus())) {
+                    errors.add(new LintError(start.getId(), start.getName(), "start-formkey-published",
+                            "起始表單 '" + key + "' 不存在或尚未發布", "error"));
+                }
+            } catch (ResponseStatusException e) {
+                if (e.getStatusCode().value() != 404) throw e;
+                errors.add(new LintError(start.getId(), start.getName(), "start-formkey-published",
+                        "起始表單 '" + key + "' 不存在或尚未發布", "error"));
+            }
+        }
+        StartEvent start;
+        try {
+            start = ApplicationFormBinding.ordinaryStart(process);
+        } catch (ResponseStatusException e) {
+            errors.add(new LintError(process.getId(), process.getName(), "application-start",
+                    e.getReason(), "error"));
+            return;
+        }
+        if (start == null || !ApplicationFormBinding.isLiteralInternal(start.getFormKey())) return;
+        FormDefinition mainForm = definitions.get(start.getFormKey());
+        if (mainForm == null || !"published".equals(mainForm.getStatus())) return;
+        for (ApplicationFormBinding.Problem problem : ApplicationFormBinding.problems(process, mainForm)) {
+            errors.add(new LintError(problem.elementId(), problem.elementName(), problem.rule(),
+                    problem.message(), "error"));
+        }
     }
 
     private void lintUserTask(UserTask ut, List<LintError> errors, boolean externalAllowed,

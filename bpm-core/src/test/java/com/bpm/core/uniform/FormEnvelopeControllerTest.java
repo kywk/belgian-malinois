@@ -17,7 +17,6 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -80,13 +79,10 @@ class FormEnvelopeControllerTest extends IntegrationTestBase {
 
     /** 以 formData 啟動一個請假案件（真實 seed 的 leave-request DSL）。 */
     private String startWithFormData(String reason) throws Exception {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("processDefinitionKey", LEAVE);
-        payload.put("formData", Map.of("formDefinitionId", LEAVE_FORM_KEY,
-                "dataJson", objectMapper.writeValueAsString(Map.of(
+        Map<String, Object> payload = applicationStartPayload(LEAVE, APPLICANT, objectMapper.writeValueAsString(Map.of(
                         "leaveType", "annual",
                         "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
-                        "reason", reason))));
+                        "reason", reason)));
         var res = send("POST", "/api/process-instances", APPLICANT,
                 objectMapper.writeValueAsString(payload));
         assertThat(res.statusCode()).as("前置條件：啟動應成功，實際 " + res.body()).isEqualTo(200);
@@ -232,6 +228,12 @@ class FormEnvelopeControllerTest extends IntegrationTestBase {
         assertThat(envelope.get("meta").get("states").get("reason").asText()).isEqualTo("editable");
         assertThat(envelope.get("meta").get("states").get("leaveType").asText()).isEqualTo("editable");
         assertThat(envelope.get("schemaRef").get("key").asText()).isEqualTo(LEAVE_FORM_KEY);
+        JsonNode context = envelope.path("applicationContext");
+        assertThat(context.path("processDefinitionId").asText()).isNotBlank();
+        assertThat(context.path("formDefinitionId").asText()).isNotBlank();
+        assertThat(context.path("formKey").asText()).isEqualTo(LEAVE_FORM_KEY);
+        assertThat(context.path("formVersion").asInt())
+                .isEqualTo(envelope.path("schemaRef").path("version").asInt());
     }
 
     @Test

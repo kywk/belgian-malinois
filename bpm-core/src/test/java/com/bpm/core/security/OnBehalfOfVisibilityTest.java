@@ -17,6 +17,7 @@ import org.springframework.http.MediaType;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -196,12 +197,16 @@ class OnBehalfOfVisibilityTest extends IntegrationTestBase {
     @Test
     @DisplayName("人工發起的案件不得出現代發標示")
     void humanInitiatedCaseHasNoOnBehalfMarker() throws Exception {
+        var payload = applicationStartPayload("leave-approval", "user001", JSON.writeValueAsString(Map.of(
+                "leaveType", "annual",
+                "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
+                "reason", "人工申請標示驗證")));
+        payload.put("businessKey", "R68B-human-" + UUID.randomUUID());
+        payload.put("variables", Map.of("days", 1));
         String body = mockMvc.perform(post("/api/process-instances")
                         .header("X-User-Id", "user001")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"processDefinitionKey\":\"leave-approval\","
-                                + "\"businessKey\":\"R68B-human-" + UUID.randomUUID() + "\","
-                                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}"))
+                        .content(JSON.writeValueAsString(payload)))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         String pid = body.replaceAll(".*\"processInstanceId\":\"([^\"]*)\".*", "$1");
 

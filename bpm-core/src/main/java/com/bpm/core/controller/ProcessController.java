@@ -11,6 +11,7 @@ import com.bpm.core.form.model.FormData;
 import com.bpm.core.form.model.FormDefinition;
 import com.bpm.core.form.service.FormService;
 import com.bpm.core.uniform.FormAccessResolver;
+import com.bpm.core.uniform.ApplicationFormBinding;
 import com.bpm.core.uniform.FormSubmissionService;
 import com.bpm.core.notify.NotifyPublisher;
 import com.bpm.core.security.CallerId;
@@ -194,18 +195,13 @@ public class ProcessController {
      *       那正是最難偵測的組合。</li>
      * </ol>
      *
-     * <h2>為什麼在交易內先檢查再啟動，而不是讓 Flowable 丟例外</h2>
+     * <h2>申請綁定與版本</h2>
      *
-     * <p>{@code startProcessInstanceByKey} 對不存在的 key 會丟
-     * {@code FlowableObjectNotFoundException} → 500。使用者看到 500 的
-     * 直覺是「再按一次」，於是<b>重送造成重複案件</b>。這裡先查
-     * {@code RepositoryService}（該服務本來就注入了，只是從未用於啟動路徑），
-     * 缺 key 立刻 404。
-     *
-     * <p>仍然保留對 {@code FlowableObjectNotFoundException} 的轉譯：
-     * 預先檢查與實際啟動之間定義<b>真的可能</b>被刪（管理員停用流程的
-     * 動作與使用者的啟動請求同時發生）。那是預先檢查無法消除的
-     * 競爭窗口，沒有這一層它就會變回 500。
+     * <p>一般 StartEvent 的固定內部 formKey 是主表。申請須帶 start-form 回傳的
+     * processDefinitionId、定義 UUID 與 formVersion；缺脈絡、換表、draft → 400，
+     * 流程／表單已改版 → 409。送件時的一次 latest-published SELECT 是版本線性化點，
+     * 同一次定義用於驗證、資料落地與 _formVersions，並以確切流程定義 ID 啟動。
+     * 此後才發布的新版不回頭改寫這次申請，不持有跨資料庫鎖，也不宣稱 XA 原子性。
      *
      * <h2>#60：表單資料與流程啟動的跨 DB 原子性</h2>
      *
@@ -240,25 +236,8 @@ public class ProcessController {
      * —— 與 {@link AuditEventPublisher} 記載的取捨相同（多記可反查，
      * 漏記無從發現）。
      *
-     * <h2>#60：formData 的欄位語意（uni-form 重構後）</h2>
-     *
-     * <ul>
-     *   <li>{@code formDefinitionId} 先當定義 id 查、查不到再當 formKey 查
-     *       最新 published（前端只知道 BPMN 的 formKey），見
-     *       {@link FormService#findDefinitionByIdOrKey}。
-     *       <b>解析不到 → 400</b>：uni-form 重構（2026-10-12）消滅了
-     *       「查不到定義就略過驗證」的 #55 缺口，不再有讓整包 dataJson
-     *       跳過驗證的路徑。</li>
-     *   <li>{@code dataJson} 的驗證規則不在此重寫：
-     *       {@link FormSubmissionService}（SDK {@code validateV1}）是唯一一份，
-     *       與 {@code TaskController} 的 formData 完成路徑共用；Access Profile
-     *       取 startEvent 的 {@code uniform:access}（無 access → fill／editable）。</li>
-     *   <li><b>與 {@code variables} 重疊 → 400</b>：同一欄位兩處都給時
-     *       靜默選一邊，呼叫端會以為另一邊生效了。</li>
-     *   <li><b>推導出的變數逐 key 過 {@link #isProtectedVariable}</b>：
-     *       與 body 的 {@code variables} 同一份名單（啟動路徑與完成路徑
-     *       必須一致，否則會出現「一處放行、一處擋掉」的組合型差異）。</li>
-     * </ul>
+     * <p>內容驗證沿用 FormSubmissionService；variables 與表單欄位不可重複，
+     * 兩者都套用同一份受保護變數規則。未綁主表的技術流程保留 variables-only 契約。
      */
     @PostMapping
     @Transactional("primaryTransactionManager")
@@ -304,71 +283,78 @@ public class ProcessController {
                                     + "（initiator 由登入身分決定；_ 前綴為伺服器內部狀態）");
                 });
 
-        // ── #60：formData 的形狀、驗證與變數推導（全部在任何寫入之前）────
-        // 解析後的定義與資料要留到存在性檢查之後（validateV1 需要 startEvent
-        // 的 Access Profile，而 profile 需要最新的流程定義），因此宣告在區塊之外。
-        String formDefinitionId = null;
-        FormDefinition formDefinition = null;
+        // 所有形狀／綁定／版本／內容檢查先於 Flowable 或表單資料寫入。
         Map<String, Object> derivedFormData = null;
         if (req.formData() != null) {
-            StartProcessRequest.FormDataPayload formData = req.formData();
-            if (formData.formDefinitionId() == null || formData.formDefinitionId().isBlank()
-                    || formData.dataJson() == null || formData.dataJson().isBlank()) {
+            var payload = req.formData();
+            if (payload.formDefinitionId() == null || payload.formDefinitionId().isBlank()
+                    || payload.dataJson() == null || payload.dataJson().isBlank()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "formData 需要 formDefinitionId 與 dataJson 兩個非空欄位："
-                                + "前者識別表單定義，後者是 JSON 物件字串。");
+                        "formData 需要 formDefinitionId、formVersion 與 dataJson；請先重新開啟申請表");
             }
-
-            // 前端只知道 BPMN 的 formKey；FormData.formDefinitionId 存的是定義 id。
-            // ⚠️ uni-form 重構（計畫 §五 A6）消滅了「查不到定義就略過驗證」的缺口：
-            // 解析不到一律 400，不再有讓整包 dataJson 跳過驗證的路徑。
-            FormDefinition def = formService.findDefinitionByIdOrKey(formData.formDefinitionId());
-            if (def == null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "formData.formDefinitionId 查不到表單定義: " + formData.formDefinitionId()
-                                + "（可傳定義 id 或 BPMN 的 formKey；請確認表單已發布）");
-            }
-            formDefinitionId = def.getId();
-            formDefinition = def;
-
-            derivedFormData = formSubmissionService.parseDataJson(
-                    formData.dataJson(), "formData.dataJson");
-
-            // 同一欄位不可兩處都給：靜默選一邊會讓呼叫端以為另一邊生效。
+            derivedFormData = formSubmissionService.parseDataJson(payload.dataJson(), "formData.dataJson");
             for (String name : derivedFormData.keySet()) {
+                if (isProtectedVariable(name)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "不允許以表單欄位指定受保護的變數: " + name);
+                }
                 if (vars.containsKey(name)) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                            "變數 '" + name + "' 同時出現在 variables 與 formData。"
-                                    + "同一個欄位只能提供一處，避免兩邊值不同時的靜默分歧。");
+                            "變數 '" + name + "' 同時出現在 variables 與 formData，同一欄位只能提供一處");
                 }
             }
-
-            // 推導出的變數與 variables 一樣會進引擎，必須過同一條保護名單
-            // （名單只有一份：ProcessController.isProtectedVariable）。
-            derivedFormData.keySet().stream()
-                    .filter(ProcessController::isProtectedVariable)
-                    .findFirst()
-                    .ifPresent(name -> {
-                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                                "不允許以表單欄位指定受保護的變數: " + name
-                                        + "（initiator 由登入身分決定；_ 前綴為伺服器內部狀態）");
-                    });
         }
 
-        // 存在性檢查放在所有 400 之後：請求形狀不對與資源不存在是兩件事，
-        // 先把形狀講清楚，呼叫端才知道要改 payload 還是改流程選擇。
-        // 取 latestVersion 的實體（不是 count）：它是 startEvent Access Profile
-        // 的來源，且與 startProcessInstanceByKey 會用到的版本一致。
         ProcessDefinition processDefinition = repositoryService.createProcessDefinitionQuery()
                 .processDefinitionKey(key).latestVersion().singleResult();
         if (processDefinition == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "流程定義不存在: " + key);
         }
+        if (processDefinition.isSuspended()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "此流程已暫停，無法受理新申請");
+        }
+        if (req.processDefinitionId() != null
+                && !req.processDefinitionId().equals(processDefinition.getId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "流程已改版，請保留填寫內容並重新開啟申請表比對後送件");
+        }
 
-        // ── uni-form：以 startEvent 的 Access Profile 驗證提交（計畫 §五 A6）──
-        // 排在存在性檢查之後（profile 需要定義）、任何寫入之前。違規 400
-        // 零副作用；通過才把提交值併入流程變數。
-        if (formDefinition != null) {
+        String mainFormKey = ApplicationFormBinding.formKey(
+                formAccessResolver.startEventOf(processDefinition.getId()));
+        FormDefinition formDefinition = null;
+        String formDefinitionId = null;
+        if (mainFormKey != null) {
+            if (req.processDefinitionId() == null || req.processDefinitionId().isBlank()
+                    || req.formData() == null || req.formData().formVersion() == null
+                    || req.formData().formVersion() < 1) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "申請流程必須提供 processDefinitionId 與 formData（formDefinitionId、formVersion、dataJson）；"
+                                + "舊版送件格式不再適用，請先取得 start-form");
+            }
+            var payload = req.formData();
+            FormDefinition requested = formService.findDefinitionByIdOrKey(payload.formDefinitionId());
+            if (requested == null || !payload.formDefinitionId().equals(requested.getId())
+                    || !mainFormKey.equals(requested.getFormKey()) || !"published".equals(requested.getStatus())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "formData.formDefinitionId 必須是流程主表的已發布定義 UUID，不接受 formKey、草稿或其他表單");
+            }
+
+            // 版本線性化點：一次 latest-published SELECT。其後發布的版本屬於下一次申請；
+            // 直接以本次不可變定義驗證及鎖版，絕不在啟動後再查 latest。
+            try {
+                formDefinition = formService.getSchema(mainFormKey, null);
+            } catch (ResponseStatusException e) {
+                if (e.getStatusCode().value() != 404) throw e;
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "主表目前沒有已發布版本，請保留填寫內容並聯絡流程管理者", e);
+            }
+            if (formDefinition == null || !"published".equals(formDefinition.getStatus())
+                    || !payload.formDefinitionId().equals(formDefinition.getId())
+                    || !payload.formVersion().equals(formDefinition.getVersion())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "申請表已改版或版本資訊不一致，請保留填寫內容並重新載入比對後送件");
+            }
+            formDefinitionId = formDefinition.getId();
             Map<String, Object> startProfile =
                     formAccessResolver.profileForStartEvent(processDefinition.getId());
             List<String> errors = formSubmissionService.validate(
@@ -378,23 +364,29 @@ public class ProcessController {
                         "表單資料不符表單定義的 schema：" + String.join("；", errors));
             }
             vars.putAll(derivedFormData);
+            // 解析全部依賴先於任何副作用；mainFormKey 使用剛才已驗證的同一份定義。
+            Map<String, Integer> versions = formVersionLocker.prepareVersions(
+                    processDefinition.getId(), formDefinition);
+            vars.put(FormVersionLocker.VERSIONS_VARIABLE, new HashMap<>(versions));
+            vars.put(FormVersionLocker.POLICY_VARIABLE, FormVersionLocker.APPLICATION_POLICY);
+        } else if (req.formData() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "此流程沒有一般申請主表，不接受自行附加 formData");
         }
 
-        // ⚠️ 必須在 startProcessInstanceByKey 之前寫入：BPMN 在流程啟動的當下
-        // 就求值 assignee 運算式（見 ExternalApiController 的同型註解）。
-        // 由 server 寫在最後，body 無法蓋掉它。
         vars.put("initiator", callerId);
-
         ProcessInstance pi;
         try {
-            pi = runtimeService.startProcessInstanceByKey(key, req.businessKey(), vars);
+            // 用已核對的定義 ID 啟動；不可再由 key 重新選版本，否則並行部署會換掉綁定。
+            pi = runtimeService.startProcessInstanceById(processDefinition.getId(), req.businessKey(), vars);
         } catch (FlowableObjectNotFoundException e) {
-            // race condition 保險：預先檢查之後、真正啟動之前，定義被刪了。
-            // 沒有這一層它會變成 500 → 使用者重送 → 重複案件。
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "流程定義不存在: " + key, e);
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "流程定義已變更，請保留填寫內容並重新開啟申請", e);
         }
-
-        formVersionLocker.lockVersions(pi.getProcessInstanceId(), pi.getProcessDefinitionId());
+        if (mainFormKey == null) {
+            // 技術／外部入口維持既有版本策略；不把申請主表規則套到所有 BPMN。
+            formVersionLocker.lockVersions(pi.getProcessInstanceId(), pi.getProcessDefinitionId());
+        }
 
         // operatorId 用 callerId，不用 req.initiator() —— 稽核必須記「誰做的」，
         // 而不只是「這張單掛在誰名下」。改動前這裡記的是冒用者，

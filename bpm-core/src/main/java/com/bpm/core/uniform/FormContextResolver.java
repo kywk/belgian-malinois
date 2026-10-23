@@ -3,6 +3,7 @@ package com.bpm.core.uniform;
 import com.bpm.core.form.model.FormData;
 import com.bpm.core.form.model.FormDefinition;
 import com.bpm.core.form.service.FormService;
+import com.bpm.core.service.FormVersionLocker;
 import org.flowable.engine.RuntimeService;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -30,8 +31,8 @@ import java.util.Map;
  * <h2>版本解析：版本鎖定優先</h2>
  *
  * <p>{@code _formVersions}（由 {@code FormVersionLocker} 在啟動時寫入）是
- * 「這個案件用哪一版」的唯一權威。沒有這個 map（舊案件、鎖定失敗）才退回
- * 最新 published。找到的定義用 {@code findById} 不篩 status：
+ * 「這個案件用哪一版」的唯一權威。新申請以 _formVersionPolicy 標記，缺鎖一律拒絕；
+ * 無標記的歷史／技術案件保留既有 latest fallback，須另行修復。鎖定版本仍可封存：
  * <b>已完成或已封存的版本仍必須被進行中的案件用到</b>（封存只影響新案件）。
  */
 @Service
@@ -59,8 +60,14 @@ public class FormContextResolver {
     public FormDefinition definitionFor(String formKey, String processInstanceId) {
         Integer locked = lockedVersion(processInstanceId, formKey);
         try {
-            return formService.getSchema(formKey, locked);
+            FormDefinition definition = formService.getSchema(formKey, locked);
+            if (locked != null && (definition == null || "draft".equals(definition.getStatus()))) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "案件鎖定的表單版本不存在或仍是草稿，拒絕改用最新版");
+            }
+            return definition;
         } catch (ResponseStatusException e) {
+            if (e.getStatusCode().value() != 404) throw e;
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "找不到表單定義（formKey=" + formKey
                             + (locked != null ? "，version=" + locked : "，最新 published 版本")
@@ -80,9 +87,15 @@ public class FormContextResolver {
         if (processInstanceId == null) {
             return null;
         }
-        Object raw = runtimeService.getVariable(processInstanceId, "_formVersions");
-        if (raw instanceof Map<?, ?> versions && versions.get(formKey) instanceof Number number) {
+        Object raw = runtimeService.getVariable(processInstanceId, FormVersionLocker.VERSIONS_VARIABLE);
+        if (raw instanceof Map<?, ?> versions && versions.get(formKey) instanceof Number number
+                && number.intValue() > 0 && number.doubleValue() == number.intValue()) {
             return number.intValue();
+        }
+        if (FormVersionLocker.APPLICATION_POLICY.equals(runtimeService.getVariable(
+                processInstanceId, FormVersionLocker.POLICY_VARIABLE))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "申請案件缺少有效的表單版本鎖定，已停止處理；請由維運修復，不能自動改用最新版");
         }
         return null;
     }

@@ -46,9 +46,17 @@ start_process() {
   # caller 只用來簽 JWT 當 Authorization 標頭；**不可**放進 body。
   # #66 之後 initiator 一律由伺服器從已認證的身分決定，
   # body 帶了 initiator 會被明確拒絕成 400。
-  local processKey="$1" caller="$2" vars="$3"
-  bpm_post "/api/process-instances" "$caller" \
-    "{\"processDefinitionKey\":\"$processKey\",\"variables\":$vars}"
+  local processKey="$1" caller="$2" vars="$3" payload
+  payload=$(bpm_get "/api/process-definitions/$processKey/start-form" "$caller" | python3 -c '
+import sys,json
+env=json.load(sys.stdin)
+ctx=env["applicationContext"]
+print(json.dumps({"processDefinitionKey":sys.argv[1],
+    "processDefinitionId":ctx["processDefinitionId"],
+    "formData":{"formDefinitionId":ctx["formDefinitionId"],
+    "formVersion":ctx["formVersion"],"dataJson":sys.argv[2]}}))
+' "$processKey" "$vars") || return 1
+  bpm_post "/api/process-instances" "$caller" "$payload"
 }
 
 get_task_for() {
@@ -83,7 +91,7 @@ print(json.dumps([{'name':k,'value':v} for k,v in d.items()]))
 # ── TC-L01: 請假流程 — 主管同意 ──────────────────────────────
 info "TC-L01: 請假流程 — 主管同意"
 resp=$(start_process "leave-approval" "user001" \
-  '{"leaveType":"annual","dateRange":"2026-05-01~2026-05-03","reason":"年假"}')
+  '{"leaveType":"annual","dateRange":{"start":"2026-05-01","end":"2026-05-03"},"reason":"年假"}')
 procId=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('processInstanceId',''))" 2>/dev/null)
 if [ -z "$procId" ]; then fail "TC-L01" "無法啟動流程: $resp"; else
   sleep 1
@@ -97,7 +105,7 @@ fi
 # ── TC-L02: 請假流程 — 主管退件 ──────────────────────────────
 info "TC-L02: 請假流程 — 主管退件"
 resp=$(start_process "leave-approval" "user002" \
-  '{"leaveType":"sick","dateRange":"2026-05-05~2026-05-05","reason":"身體不適"}')
+  '{"leaveType":"sick","dateRange":{"start":"2026-05-05","end":"2026-05-05"},"reason":"身體不適"}')
 procId=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('processInstanceId',''))" 2>/dev/null)
 if [ -z "$procId" ]; then fail "TC-L02" "無法啟動流程: $resp"; else
   sleep 1
@@ -111,7 +119,7 @@ fi
 # ── TC-L03: 請假流程 — 主管拒絕 ──────────────────────────────
 info "TC-L03: 請假流程 — 主管拒絕"
 resp=$(start_process "leave-approval" "user003" \
-  '{"leaveType":"personal","dateRange":"2026-05-10~2026-05-10","reason":"私事"}')
+  '{"leaveType":"personal","dateRange":{"start":"2026-05-10","end":"2026-05-10"},"reason":"私事"}')
 procId=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('processInstanceId',''))" 2>/dev/null)
 if [ -z "$procId" ]; then fail "TC-L03" "無法啟動流程: $resp"; else
   sleep 1
@@ -125,7 +133,7 @@ fi
 # ── TC-L04: 請假流程 — 批註後同意 ────────────────────────────
 info "TC-L04: 請假流程 — 批註後同意"
 resp=$(start_process "leave-approval" "user001" \
-  '{"leaveType":"annual","dateRange":"2026-06-01~2026-06-02","reason":"旅遊"}')
+  '{"leaveType":"annual","dateRange":{"start":"2026-06-01","end":"2026-06-02"},"reason":"旅遊"}')
 procId=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('processInstanceId',''))" 2>/dev/null)
 if [ -z "$procId" ]; then fail "TC-L04" "無法啟動流程: $resp"; else
   sleep 1

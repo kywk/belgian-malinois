@@ -129,17 +129,25 @@ public class FormEnvelopeController {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "流程定義不存在: " + key);
         }
         StartEvent startEvent = accessResolver.startEventOf(pd.getId());
-        String formKey = startEvent != null ? startEvent.getFormKey() : null;
-        if (formKey == null || formKey.isBlank()) {
+        if (pd.isSuspended()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "此流程已暫停，無法受理新申請");
+        }
+        String formKey = ApplicationFormBinding.formKey(startEvent);
+        if (formKey == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "此流程沒有起始表單: " + key);
         }
 
-        // 起始表單沒有案件，也就沒有 _formVersions —— 取最新 published
-        // （與 FormVersionLocker 在啟動時會鎖到的版本一致）。
+        // 開啟時取得最新 published；送件必須回傳此脈絡，由伺服器重新核對是否過期。
         FormDefinition def = contextResolver.definitionFor(formKey, null);
+        ApplicationFormBinding.requireCompatible(repositoryService.getBpmnModel(pd.getId()), def);
         Map<String, Object> profile = accessResolver.profileForStartEvent(pd.getId());
-        return envelopeService.envelope(def, profile, new LinkedHashMap<>());
+        Map<String, Object> envelope = new LinkedHashMap<>(
+                envelopeService.envelope(def, profile, new LinkedHashMap<>()));
+        envelope.put("applicationContext", Map.of(
+                "processDefinitionId", pd.getId(), "formDefinitionId", def.getId(),
+                "formKey", def.getFormKey(), "formVersion", def.getVersion()));
+        return envelope;
     }
 
     /**

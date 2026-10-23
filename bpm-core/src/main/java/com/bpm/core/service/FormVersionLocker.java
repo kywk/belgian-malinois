@@ -1,5 +1,9 @@
 package com.bpm.core.service;
 
+import com.bpm.core.form.model.FormDefinition;
+import com.bpm.core.uniform.ApplicationFormBinding;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.bpmn.model.FlowElement;
 import org.flowable.bpmn.model.StartEvent;
@@ -24,6 +28,10 @@ import java.util.Set;
 @Service
 public class FormVersionLocker {
 
+    public static final String VERSIONS_VARIABLE = "_formVersions";
+    public static final String POLICY_VARIABLE = "_formVersionPolicy";
+    public static final String APPLICATION_POLICY = "application-v1";
+
     private static final Logger log = LoggerFactory.getLogger(FormVersionLocker.class);
 
     private final RepositoryService repositoryService;
@@ -38,6 +46,49 @@ public class FormVersionLocker {
     }
 
     /**
+     * 申請入口在啟動前準備完整快照。主表必須直接使用已驗證的不可變定義，
+     * 不得重新查 latest；其餘引用解析失敗即拒絕，不能留下缺鎖的新申請案件。
+     * 回傳值應隨 startProcessInstanceById 的初始變數寫入，第一個 listener 也能讀到。
+     */
+    public Map<String, Integer> prepareVersions(String processDefinitionId, FormDefinition mainForm) {
+        BpmnModel model = repositoryService.getBpmnModel(processDefinitionId);
+        ApplicationFormBinding.requireCompatible(model, mainForm);
+        String boundKey = ApplicationFormBinding.formKey(
+                ApplicationFormBinding.ordinaryStart(model.getMainProcess()));
+        if (!mainForm.getFormKey().equals(boundKey) || !"published".equals(mainForm.getStatus())
+                || mainForm.getVersion() == null || mainForm.getVersion() < 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "流程主表與已驗證版本不一致，拒絕啟動");
+        }
+        Map<String, Integer> versions = new HashMap<>();
+        versions.put(mainForm.getFormKey(), mainForm.getVersion());
+        Set<String> keys = new LinkedHashSet<>();
+        for (FlowElement element : ApplicationFormBinding.elements(model.getMainProcess().getFlowElements())) {
+            String key = element instanceof UserTask task ? task.getFormKey()
+                    : element instanceof StartEvent start ? start.getFormKey() : null;
+            if (ApplicationFormBinding.isLiteralInternal(key)) keys.add(key);
+        }
+        for (String key : keys) {
+            if (versions.containsKey(key)) continue;
+            FormDefinition definition;
+            try {
+                definition = formService.getSchema(key, null);
+            } catch (ResponseStatusException e) {
+                if (e.getStatusCode().value() != 404) throw e;
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "流程引用的表單沒有已發布版本：" + key, e);
+            }
+            if (definition == null || !"published".equals(definition.getStatus())
+                    || definition.getVersion() == null || definition.getVersion() < 1) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "流程引用的表單無法鎖定版本：" + key);
+            }
+            versions.put(key, definition.getVersion());
+        }
+        return versions;
+    }
+
+    /**
+     * 技術／外部入口的既有相容路徑；申請入口必須改用啟動前的 prepareVersions。
      * After process start, resolve all formKey versions and store as process variable.
      */
     public void lockVersions(String processInstanceId, String processDefinitionId) {

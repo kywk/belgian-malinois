@@ -60,7 +60,6 @@ class LeaveFlowLifecycleTest extends IntegrationTestBase {
     private static final String APPLICANT = "user001";
     private static final String MANAGER = "mgr001";
     private static final String LEAVE = "leave-approval";
-    private static final String LEAVE_FORM_KEY = "leave-request";
 
     @Autowired
     private RuntimeService runtimeService;
@@ -92,14 +91,12 @@ class LeaveFlowLifecycleTest extends IntegrationTestBase {
                 "reason", reason);
     }
 
-    /** 以 #60 的 formData 契約啟動請假流程（formKey 由伺服器解析成定義 id）。 */
+    /** 以申請入口回傳的確切流程與表單版本送件。 */
     private Started startWithFormData(String reason) throws Exception {
-        String body = objectMapper.writeValueAsString(Map.of(
-                "processDefinitionKey", LEAVE,
-                "businessKey", "leave-e2e-" + UUID.randomUUID(),
-                "formData", Map.of(
-                        "formDefinitionId", LEAVE_FORM_KEY,
-                        "dataJson", objectMapper.writeValueAsString(leaveValues(reason)))));
+        Map<String, Object> payload = applicationStartPayload(LEAVE, APPLICANT,
+                objectMapper.writeValueAsString(leaveValues(reason)));
+        payload.put("businessKey", "leave-e2e-" + UUID.randomUUID());
+        String body = objectMapper.writeValueAsString(payload);
         String response = mockMvc.perform(post("/api/process-instances")
                         .header("X-User-Id", APPLICANT)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -113,12 +110,15 @@ class LeaveFlowLifecycleTest extends IntegrationTestBase {
         return new Started(pid, formDataId);
     }
 
-    /** 以 variables 啟動（#60 之前的既有呼叫端形狀）。 */
-    private String startWithVariablesOnly() throws Exception {
-        String body = objectMapper.writeValueAsString(Map.of(
-                "processDefinitionKey", LEAVE,
-                "businessKey", "leave-legacy-" + UUID.randomUUID(),
-                "variables", Map.of("leaveType", "personal", "days", 2)));
+    /** 主表以外的非重疊變數仍可與申請表一併送出。 */
+    private String startWithFormAndVariables() throws Exception {
+        Map<String, Object> payload = applicationStartPayload(LEAVE, APPLICANT,
+                objectMapper.writeValueAsString(Map.of("leaveType", "personal",
+                        "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
+                        "reason", "附帶流程變數")));
+        payload.put("businessKey", "leave-with-vars-" + UUID.randomUUID());
+        payload.put("variables", Map.of("days", 2));
+        String body = objectMapper.writeValueAsString(payload);
         String response = mockMvc.perform(post("/api/process-instances")
                         .header("X-User-Id", APPLICANT)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -421,12 +421,12 @@ class LeaveFlowLifecycleTest extends IntegrationTestBase {
                 "PROCESS_COMPLETE|system");
     }
 
-    // ── ⑤ 既有呼叫端：只帶 variables 也要能走完整條路 ───────────────
+    // ── ⑤ 主表搭配流程變數仍能走完整條路 ───────────────
 
     @Test
-    @DisplayName("非回歸：只帶 variables 的既有啟動路徑也能核准結案（#60 不得只修 formData 那條）")
-    void variablesOnlyStartCanStillCompleteTheWholeLifecycle() throws Exception {
-        String pid = startWithVariablesOnly();
+    @DisplayName("申請表搭配非重疊 variables 啟動也能核准結案")
+    void formAndVariablesCanCompleteTheWholeLifecycle() throws Exception {
+        String pid = startWithFormAndVariables();
 
         completeTask(currentTask(pid).getId(), MANAGER,
                 completeWith("approved", "true", "rejected", "false"));
@@ -438,6 +438,6 @@ class LeaveFlowLifecycleTest extends IntegrationTestBase {
                 "PROCESS_START|" + APPLICANT,
                 "TASK_APPROVE|" + MANAGER,
                 "PROCESS_COMPLETE|system");
-        assertThat(formRows(pid)).as("沒有 formData 的案件不該有表單列").isEmpty();
+        assertThat(formRows(pid)).as("申請必須保留主表資料").hasSize(1);
     }
 }

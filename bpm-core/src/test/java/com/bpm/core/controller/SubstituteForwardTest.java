@@ -171,11 +171,15 @@ class SubstituteForwardTest extends IntegrationTestBase {
 
     /** 走正式的內部啟動端點（不是直接 runtimeService），身分＝發起人。 */
     private String startLeaveAs(String user) throws Exception {
+        var payload = applicationStartPayload(LEAVE, user, objectMapper.writeValueAsString(Map.of(
+                "leaveType", "annual",
+                "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
+                "reason", "代理人路由驗證")));
+        payload.put("variables", Map.of("days", 1));
         String body = mockMvc.perform(post("/api/process-instances")
                         .header("X-User-Id", user)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"processDefinitionKey\":\"" + LEAVE + "\","
-                                + "\"variables\":{\"leaveType\":\"annual\",\"days\":1}}"))
+                        .content(objectMapper.writeValueAsString(payload)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         String pid = objectMapper.readTree(body).get("processInstanceId").asText();
