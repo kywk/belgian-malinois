@@ -91,8 +91,9 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
-import { UfRenderer } from '@nanshan/uniform-vue'
+import UfRenderer from '../uniform/UniformForm.vue'
 import { getTasks, getSubtasks, updateTask } from '../services/flowableApi.js'
+import { provideOptionsHost } from '../uniform/options.js'
 import { fetchTaskForm } from '../uniform/api.js'
 import ExternalFormLink from '../components/ExternalFormLink.vue'
 import ActionDialog from '../components/ActionDialog.vue'
@@ -122,6 +123,8 @@ const formLoading = ref(false)
 const formError = ref('')
 const rendererRef = ref()
 const submitting = ref(false)
+
+provideOptionsHost(envelope, computed(() => envelope.value ? { taskId } : null))
 
 const isExternal = computed(() => task.value?.formKey?.startsWith('external:'))
 const isRevision = computed(() => envelope.value?.mode === 'fill')
@@ -178,7 +181,7 @@ async function handleRevisionSubmit() {
     // 推導流程變數再完成任務。不再送 variables／assignee。
     await updateTask(taskId, {
       action: 'complete',
-      formData: { dataJson: JSON.stringify(formData.value) },
+      formData: { dataJson: JSON.stringify(Object.fromEntries(Object.entries(formData.value).filter(([key]) => key !== '$labels'))) },
     })
     ElMessage.success('補件重送成功')
     router.push('/tasks')

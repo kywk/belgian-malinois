@@ -10,7 +10,6 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -33,10 +32,8 @@ import java.util.Map;
  *   <li>{@code fieldTypes:{}}：本階段 palette 無條件型別（計畫 §三 5），
  *       <b>不猜</b> valueKind。有條件的欄位（{@code visibleWhen} 等）等到
  *       真的有宿主型別來源時再注入，否則猜錯會讓 condition 靜默走錯分支。</li>
- *   <li>{@code behaviorRegistry:{providers:[],actions:[],frames:[]}}：
- *       本階段的 DSL 不引用任何 provider／action／自訂 frame；
- *       空清單會讓「DSL 引用了未註冊行為」變成投影拒絕（fail-closed），
- *       而不是回一個前端看不懂的 Envelope。</li>
+ *   <li>{@code behaviorRegistry} 來自宿主固定的 {@link OptionsProviderRegistry}；
+ *       未註冊或尚未支援的動態來源組合會在投影前拒絕，不由瀏覽器指定服務。</li>
  *   <li>{@code data} 是<b>canonical JSON object</b>（表單值語意沿 SDK，
  *       例如 dateRange 是 {@code {start,end}}，不是 {@code "a~b"}）。</li>
  * </ul>
@@ -104,17 +101,14 @@ public class FormEnvelopeService {
 
     private Map<String, Object> project(Map<String, Object> dsl, String key, int version,
                                         Map<String, Object> profile, Map<String, Object> data) {
-        Map<String, Object> behavior = new LinkedHashMap<>();
-        behavior.put("providers", new ArrayList<>());
-        behavior.put("actions", new ArrayList<>());
-        behavior.put("frames", new ArrayList<>());
+        OptionsProviderRegistry.requireSupported(dsl);
         Map<String, Object> input = new LinkedHashMap<>();
         input.put("dsl", dsl);
         input.put("manifests", specResources.manifests());
         input.put("profile", profile);
         input.put("data", data != null ? data : new LinkedHashMap<>());
         input.put("fieldTypes", new LinkedHashMap<>());
-        input.put("behaviorRegistry", behavior);
+        input.put("behaviorRegistry", OptionsProviderRegistry.behavior());
         input.put("uniform", UNIFORM_VERSION);
         input.put("key", key);
         input.put("version", version);

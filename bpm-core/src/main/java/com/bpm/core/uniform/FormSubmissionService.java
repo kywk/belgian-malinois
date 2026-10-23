@@ -1,8 +1,16 @@
 package com.bpm.core.uniform;
 
 import com.bpm.core.form.model.FormDefinition;
+import com.bpm.core.security.CallerIdArgumentResolver;
 import com.nanshan.uniform.boot4.UniformBffService;
 import com.nanshan.uniform.boot4.UniformSpecResources;
+import com.nanshan.uniform.core.access.AccessCalculator;
+import com.nanshan.uniform.core.access.AccessProfile;
+import com.nanshan.uniform.core.access.AccessState;
+import com.nanshan.uniform.core.model.ManifestReader;
+import com.nanshan.uniform.core.model.UniformDocumentReader;
+import com.nanshan.uniform.core.registry.TypeRegistry;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -16,34 +24,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 以 {@code SubmissionValidation.validateV1} 驗證一筆表單提交
- * （docs/plan/2026-10-12-uniform-form-refactor.md §五 A5／§六 BE）。
- *
- * <h2>純驗證、零副作用</h2>
- *
- * <p>SDK 的 validateV1 是<b>純驗證入口</b>：不回傳 candidate、不合併資料、
- * 不存檔、不呼叫 provider。本服務把它的 {ok, errors} 轉成本專案的
- * 「400 訊息清單」或「500 refusal」，<b>一個字都不寫</b>。寫入與版本化是
- * 呼叫端（TaskController／ProcessController）的事，而且一律排在驗證之後。
- *
- * <h2>輸入的三份資料（同名參數不得取自使用者的同名宣稱）</h2>
- *
- * <ul>
- *   <li>{@code submittedData}＝本次提交值（未信任）。</li>
- *   <li>{@code contextData}＝本次提交值（本階段無條件：沒有可信的 Access
- *       快照來源，see {@link #validate}）。</li>
- *   <li>{@code storedData}＝前一列 canonical（可信：伺服器自己寫的），
- *       沒有前一列則為 {@code {}}。</li>
- * </ul>
- *
- * <h2>為什麼 mode 必須是 fill</h2>
- *
- * <p>validateV1 的契約固定 {@code profile.mode = "fill"}（SUB-01）。
- * 呼叫端在進到這裡之前就必須擋掉非 fill 的節點（view 節點沒有可接受的
- * 提交語意），因此本服務把非 fill 視為程式錯誤 → 500，
- * 而不是偷偷替呼叫端改寫 profile。
+ * 以可信定義與 Access Profile 驗證提交；動態來源由 SDK 真正執行 resolve。
+ * contextData 只合併可編輯輸入與既有 canonical。全部通過才更新 submitted
+ * 為可保存 canonical（含伺服器標籤）；本服務不寫資料庫。
  */
 @Service
 public class FormSubmissionService {
@@ -56,12 +42,21 @@ public class FormSubmissionService {
     private final UniformBffService bff;
     private final UniformSpecResources specResources;
     private final ObjectMapper objectMapper;
+    private final OptionsProviderRegistry optionsProviders;
 
+    @Autowired
     public FormSubmissionService(UniformBffService bff, UniformSpecResources specResources,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper, OptionsProviderRegistry optionsProviders) {
         this.bff = bff;
         this.specResources = specResources;
         this.objectMapper = objectMapper;
+        this.optionsProviders = optionsProviders;
+    }
+
+    /** 保留既有純驗證呼叫端；沒有 registry 的實例絕不接受動態來源。 */
+    public FormSubmissionService(UniformBffService bff, UniformSpecResources specResources,
+                                 ObjectMapper objectMapper) {
+        this(bff, specResources, objectMapper, null);
     }
 
     /**
@@ -69,7 +64,7 @@ public class FormSubmissionService {
      *
      * @param def       表單定義（提供 DSL）
      * @param profile   該 BPMN 節點的 Access Profile；{@code mode} 必須是 {@code fill}
-     * @param submitted 本次提交的 canonical JSON 物件
+     * @param submitted 本次提交物件；成功時更新為合併 canonical，須傳可修改 map
      * @param stored    前一列 canonical JSON 物件；無前一列傳空 map
      * @return 錯誤訊息清單（已組裝為面向呼叫端的字串）；<b>空清單＝通過</b>
      * @throws ResponseStatusException 500：SDK refusal（定義或資源問題，不是使用者輸入問題）
@@ -81,12 +76,49 @@ public class FormSubmissionService {
                     "提交驗證只接受 mode=fill 的 Access Profile，收到 mode="
                             + profile.get("mode") + "（呼叫端必須先擋下非 fill 的節點）");
         }
+        if (submitted.containsKey("$labels")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "$labels 由伺服器產生，不可由呼叫端提交");
+        }
         Map<String, Object> dsl = parseSchema(def);
-
-        Map<String, Object> behavior = new LinkedHashMap<>();
-        behavior.put("providers", new ArrayList<>());
-        behavior.put("actions", new ArrayList<>());
-        behavior.put("frames", new ArrayList<>());
+        OptionsProviderRegistry.requireSupported(dsl);
+        Map<String, Object> original = new LinkedHashMap<>(submitted);
+        Map<String, Object> previous = stored == null ? Map.of() : stored;
+        Map<String, AccessState> initialStates = states(dsl, profile, previous);
+        Set<String> editable = new LinkedHashSet<>();
+        initialStates.forEach((key, state) -> { if (state == AccessState.EDITABLE) editable.add(key); });
+        Map<String, Object> candidate;
+        Map<String, AccessState> finalStates;
+        // 只縮小可寫集合，避免唯讀／隱藏輸入影響條件或服務 context。
+        // 每輪至少移除一個 key，最多欄位數輪結束，不打開初始不可編輯欄位。
+        while (true) {
+            candidate = merge(previous, original, editable);
+            finalStates = states(dsl, profile, candidate);
+            Set<String> noLongerEditable = new LinkedHashSet<>();
+            finalStates.forEach((key, state) -> {
+                if (state != AccessState.EDITABLE) noLongerEditable.add(key);
+            });
+            if (!editable.removeAll(noLongerEditable)) break;
+        }
+        Set<String> sourceFields = new LinkedHashSet<>();
+        sourceKeys(dsl.get("root"), sourceFields);
+        Map<String, Object> validationSubmission = new LinkedHashMap<>(original);
+        for (String key : original.keySet()) {
+            AccessState initial = initialStates.get(key), effective = finalStates.get(key);
+            if (initial == AccessState.HIDDEN || effective == AccessState.HIDDEN) {
+                return List.of(UNKNOWN_FIELD_MESSAGE);
+            }
+            if (sourceFields.contains(key)
+                    && (initial == AccessState.READONLY || effective == AccessState.READONLY)) {
+                // 唯讀只允許原值回傳，不以目前審核人的部門重新裁決歷史選擇。
+                // 此 occurrence 不屬本次寫入：保留 canonical 與原標籤，SDK 不執行 resolve。
+                if (!previous.containsKey(key) || !java.util.Objects.equals(previous.get(key), original.get(key))) {
+                    return List.of("'" + key + "' 此欄位目前不可編輯");
+                }
+                validationSubmission.remove(key);
+            } else if (initial == AccessState.EDITABLE && !editable.contains(key)) {
+                return List.of("'" + key + "' 此欄位目前不可編輯");
+            }
+        }
 
         Map<String, Object> input = new LinkedHashMap<>();
         input.put("dsl", dsl);
@@ -94,30 +126,118 @@ public class FormSubmissionService {
         input.put("profile", profile);
         input.put("fieldTypes", new LinkedHashMap<>());
         input.put("rowFieldTypes", new LinkedHashMap<>());
-        input.put("behaviorRegistry", behavior);
+        input.put("behaviorRegistry", OptionsProviderRegistry.behavior());
         input.put("locale", FormEnvelopeService.LOCALE);
-        // contextData 刻意等於 submitted：本階段沒有可信的 Access 快照來源，
-        // 條件求值用「本次提交值」是唯一可解釋的選擇（計畫 §六 BE）。
-        // ⚠️ 不可改成 stored：那會讓條件用舊值求值（readonly 的欄位其實已改）。
-        input.put("contextData", submitted);
-        input.put("submittedData", submitted);
-        input.put("storedData", stored != null ? stored : new LinkedHashMap<>());
+        input.put("contextData", candidate);
+        input.put("submittedData", validationSubmission);
+        input.put("storedData", previous);
         input.put("rowOrigins", new LinkedHashMap<>());
-        input.put("services", new LinkedHashMap<>());
         input.put("fileBindings", new ArrayList<>());
 
-        Map<String, Object> result = bff.validateV1(input);
-        if (!Boolean.TRUE.equals(result.get("ok"))) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
-                    "表單提交驗證被拒絕（定義或資源問題）：formKey=" + def.getFormKey()
-                            + "，version=" + def.getVersion()
-                            + "。請確認表單定義是合法 DSL、manifest 已註冊、且 SDK 版本相符。");
+        Map<String, Object> result;
+        Object privateLabels = List.of();
+        if (OptionsProviderRegistry.hasSources(dsl)) {
+            if (optionsProviders == null) {
+                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "動態選項來源尚未註冊");
+            }
+            String caller = CallerIdArgumentResolver.currentCallerId();
+            AtomicBoolean sourceFailed = new AtomicBoolean();
+            result = bff.validateWithServicesV1(input, optionsProviders.runtime(caller, sourceFailed),
+                    optionsProviders.hostContext(def, caller));
+            // SDK refusal 不公開 callback 例外；來源失敗由宿主明確映射 503。
+            if (sourceFailed.get()) throw OptionsProviderRegistry.unavailable();
+            if (Boolean.TRUE.equals(result.get("ok"))) {
+                privateLabels = result.get("privateLabels");
+                if (!(result.get("validation") instanceof Map<?, ?> validation)) throw refused(def);
+                result = copyMap(validation);
+            }
+        } else {
+            input.put("services", new LinkedHashMap<>());
+            result = bff.validateV1(input);
         }
-        Object rawErrors = result.get("errors");
-        if (!(rawErrors instanceof List<?> items) || items.isEmpty()) {
-            return List.of();
+        if (!Boolean.TRUE.equals(result.get("ok"))) throw refused(def);
+        if (!(result.get("errors") instanceof List<?> items)) throw refused(def);
+        List<String> errors = messages(items, dsl, original);
+        if (!errors.isEmpty()) return errors;
+        attachLabels(candidate, previous, original, editable, dsl, privateLabels);
+        submitted.clear();
+        submitted.putAll(candidate);
+        return List.of();
+    }
+
+    private Map<String, AccessState> states(Map<String, Object> dsl, Map<String, Object> profile,
+                                           Map<String, Object> data) {
+        TypeRegistry registry = new TypeRegistry();
+        for (Map<String, Object> manifest : specResources.manifests()) {
+            if (!registry.register(ManifestReader.read(manifest)).ok()) {
+                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "表單欄位型別註冊失敗");
+            }
         }
-        return messages(items, dsl, submitted);
+        // 來源無 params/dependsOn，沒有額外 provider hidden closure；
+        // 條件採 SDK 相同入口，不從提交值推論 fieldTypes。
+        return AccessCalculator.calculate(UniformDocumentReader.read(dsl), registry,
+                AccessProfile.fromJson(profile), data, Map.of()).states();
+    }
+
+    private static Map<String, Object> merge(Map<String, Object> stored, Map<String, Object> submitted,
+                                              Set<String> editable) {
+        Map<String, Object> candidate = new LinkedHashMap<>(stored);
+        for (String key : editable) if (submitted.containsKey(key)) candidate.put(key, submitted.get(key));
+        return candidate;
+    }
+
+    /** 只揭露固定本人部門來源的頂層 scalar label，不能直接公開私有服務結果。 */
+    private static void attachLabels(Map<String, Object> candidate, Map<String, Object> stored,
+            Map<String, Object> submitted, Set<String> editable, Map<String, Object> dsl, Object rawLabels) {
+        Map<String, Object> labels = new LinkedHashMap<>();
+        if (stored.get("$labels") instanceof Map<?, ?> oldLabels) {
+            oldLabels.forEach((key, label) -> {
+                if (key instanceof String text && label instanceof String && candidate.containsKey(text)) {
+                    labels.put(text, label);
+                }
+            });
+        }
+        Set<String> sources = new LinkedHashSet<>();
+        sourceKeys(dsl.get("root"), sources);
+        for (String key : sources) if (editable.contains(key) && submitted.containsKey(key)) labels.remove(key);
+        if (rawLabels instanceof List<?> occurrences) for (Object raw : occurrences) {
+            if (!(raw instanceof Map<?, ?> occurrence) || !(occurrence.get("path") instanceof String path)
+                    || !path.startsWith("/") || path.indexOf('/', 1) >= 0) continue;
+            String key = path.substring(1).replace("~1", "/").replace("~0", "~");
+            if (!sources.contains(key) || !editable.contains(key) || !submitted.containsKey(key)
+                    || !(occurrence.get("entries") instanceof List<?> entries) || entries.size() != 1
+                    || !(entries.get(0) instanceof Map<?, ?> entry) || !(entry.get("label") instanceof String label)
+                    || !java.util.Objects.equals(candidate.get(key), entry.get("value"))) continue;
+            labels.put(key, label);
+        }
+        if (!labels.isEmpty()) candidate.put("$labels", labels);
+        else candidate.remove("$labels");
+    }
+
+    private static void sourceKeys(Object raw, Set<String> keys) {
+        if (raw instanceof List<?> nodes) { for (Object node : nodes) sourceKeys(node, keys); return; }
+        if (!(raw instanceof Map<?, ?> node)) return;
+        if (node.containsKey("optionsSource") && node.get("key") instanceof String key) keys.add(key);
+        sourceKeys(node.get("children"), keys);
+    }
+
+    private static Map<String, Object> copyMap(Map<?, ?> raw) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        raw.forEach((key, value) -> map.put((String) key, value));
+        return map;
+    }
+
+    private static ResponseStatusException refused(FormDefinition def) {
+        return new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                "表單提交驗證被拒絕（定義或資源問題）：formKey=" + def.getFormKey()
+                        + "，version=" + def.getVersion() + "。請確認表單定義、服務註冊與 SDK 版本。");
+    }
+
+    public String dataJson(Map<String, Object> canonical) {
+        try { return objectMapper.writeValueAsString(canonical); }
+        catch (JacksonException failure) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "表單資料無法序列化");
+        }
     }
 
     // ── 訊息組裝 ────────────────────────────────────────────────────
@@ -222,6 +342,10 @@ public class FormSubmissionService {
             if (parsed == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         what + " 必須是 JSON 物件（{...}）。");
+            }
+            if (parsed.containsKey("$labels")) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "$labels 由伺服器產生，不可由呼叫端提交");
             }
             return parsed;
         } catch (JacksonException e) {

@@ -56,9 +56,10 @@
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { UfRenderer } from '@nanshan/uniform-vue'
+import UfRenderer from '../uniform/UniformForm.vue'
 import http from '../services/http'
 import { fetchProcessDefinitions, fetchStartForm } from '../uniform/api.js'
+import { provideOptionsHost } from '../uniform/options.js'
 import { manifests } from '../uniform/setup.js'
 
 const router = useRouter()
@@ -83,6 +84,18 @@ const loadedSchema = ref(null)
 let requestGeneration = 0
 let redirectTimer
 let active = true
+
+provideOptionsHost(envelope, computed(() => applicationContext.value && !versionConflict.value ? {
+  processKey: processKey.value, applicationContext: applicationContext.value,
+} : null), () => {
+  if (!versionConflict.value) {
+    retainedData.value = [...(retainedData.value || []), {
+      version: applicationContext.value?.formVersion, answers: copy(formData.value),
+    }]
+  }
+  versionConflict.value = true
+  reviewed.value = false
+})
 
 const canSubmit = computed(() => !!envelope.value && !!applicationContext.value && !formLoading.value
   && !submitting.value && !versionConflict.value && (!retainedData.value || reviewed.value)
@@ -184,7 +197,8 @@ async function submit() {
   const generation = requestGeneration
   const key = processKey.value
   const context = { ...applicationContext.value }
-  const dataJson = JSON.stringify(formData.value)
+  const { $labels: _labels, ...answers } = formData.value
+  const dataJson = JSON.stringify(answers)
   submitting.value = true
   result.value = null
   try {

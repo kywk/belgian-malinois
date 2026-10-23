@@ -751,7 +751,7 @@ public class TaskController {
      * 一次任務表單提交的解析結果（已驗證，尚未寫入）。
      *
      * @param definition 提交當下的定義（由任務 formKey ＋ {@code _formVersions} 鎖定版本解析）
-     * @param dataJson   原樣落地的 canonical JSON 字串
+     * @param dataJson   合併既有資料並帶有伺服器標籤的 canonical JSON 字串
      * @param previousRow 前一列（版本化用；沒有＝這是這張單的第一筆）
      */
     private record TaskFormSubmission(FormDefinition definition, String dataJson, FormData previousRow) {}
@@ -787,6 +787,7 @@ public class TaskController {
 
         String dataJson = req.formData().dataJson();
         Map<String, Object> submitted = formSubmissionService.parseDataJson(dataJson, "formData.dataJson");
+        Set<String> submittedKeys = new LinkedHashSet<>(submitted.keySet());
         FormData previousRow = formContextResolver.latestRow(task.getProcessInstanceId());
         Map<String, Object> stored = formContextResolver.storedDataOf(previousRow);
 
@@ -827,11 +828,11 @@ public class TaskController {
         }
 
         for (Map.Entry<String, Object> entry : submitted.entrySet()) {
-            if (!entry.getKey().startsWith("$")) {
+            if (submittedKeys.contains(entry.getKey()) && !entry.getKey().startsWith("$")) {
                 vars.put(entry.getKey(), entry.getValue());
             }
         }
-        return new TaskFormSubmission(def, dataJson, previousRow);
+        return new TaskFormSubmission(def, formSubmissionService.dataJson(submitted), previousRow);
     }
 
     /**

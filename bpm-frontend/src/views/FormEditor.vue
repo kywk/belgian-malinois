@@ -23,6 +23,8 @@
     <el-alert v-if="loadError" :title="loadError" type="error" show-icon :closable="false">
       <el-button @click="loadDefinition">重新載入</el-button>
     </el-alert>
+    <OptionsSourcePanel v-if="dsl" :model-value="dsl" :readonly="!canEdit" :blocked="hasUnappliedChanges"
+      @update:model-value="applyOptionsSource" />
     <div class="editor-body" v-loading="loading">
       <UfDesigner v-if="dsl" v-model="dsl" :palette="palette" :readonly="!canEdit"
         @update:model-value="dirty = true" @pending="onPending" @invalid="onInvalid" />
@@ -42,6 +44,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { UfDesigner, UfRenderer } from '@nanshan/uniform-vue'
 import '@nanshan/uniform-vue/designer.css'
 import { getFormSchema, createForm, updateForm, publishForm, createFormRevision, listForms } from '../services/formApi.js'
+import OptionsSourcePanel from '../components/OptionsSourcePanel.vue'
 import { previewForm } from '../uniform/api.js'
 
 const props = defineProps({ embedded: Boolean, initialFormKey: String, initialVersion: [Number, String] })
@@ -74,6 +77,12 @@ const hasFields = computed(() => Array.isArray(dsl.value?.root) && dsl.value.roo
 const target = computed(() => props.embedded
   ? [props.initialFormKey, props.initialVersion]
   : [route.params.id, route.query.version])
+
+function applyOptionsSource(candidate) {
+  if (!canEdit.value || hasUnappliedChanges.value) return
+  dsl.value = candidate
+  dirty.value = true
+}
 
 function onPending(key, value) { value ? pending.value.add(key) : pending.value.delete(key) }
 function onInvalid(key, value) { value ? invalid.value.add(key) : invalid.value.delete(key) }

@@ -24,3 +24,14 @@ export const previewForm = (schemaJson) =>
 /** GET /api/process-definitions → 流程定義清單（列表項含 startFormKey）。 */
 export const fetchProcessDefinitions = (params) =>
   http.get('/api/process-definitions', { params }).then(r => r.data)
+
+/** 清冊只供設計器選取已註冊來源，不接受任意 URL 或使用者身分參數。 */
+export const fetchOptionProviders = (signal) =>
+  http.get('/api/forms/option-providers', { signal }).then(r => r.data)
+
+export const fetchStartOptions = (key, fieldId, applicationContext, signal) =>
+  http.post(`/api/process-definitions/${encodeURIComponent(key)}/start-form/options`,
+    { fieldId, applicationContext }, { signal }).then(r => r.data)
+
+export const fetchTaskOptions = (taskId, fieldId, signal) =>
+  http.post(`/api/tasks/${encodeURIComponent(taskId)}/form/options`, { fieldId }, { signal }).then(r => r.data)

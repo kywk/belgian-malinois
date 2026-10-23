@@ -175,6 +175,8 @@ public class FormDefinitionValidator {
                     "schemaJson 不符 uni-form DSL schema：" + summarize(schemaErrors));
         }
 
+        OptionsProviderRegistry.requireSupported(dsl);
+
         // ①' DSL 的 key 必須與 formKey 一致：FormEnvelopeService 以 formKey 當
         // Envelope 的 key 送進 projectV1，而 SDK 要求它等於 dsl.key。不一致的定義
         // 存得進去、直到某個案件投影時才以 500 出現 —— 在這裡擋，錯誤留在存檔

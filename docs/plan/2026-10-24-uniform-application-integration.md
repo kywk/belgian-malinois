@@ -1,6 +1,6 @@
 # Greyhound／UniForm 申請流程整合檢視
 
-狀態：需求與版本政策已確認；以下施工方案待依批次實作，不代表已交付功能。
+狀態：申請主表與鎖版已交付；OptionsProvider 第一批已實作，驗收證據與範圍見文末。
 
 ## 需求與已確認決策
 
@@ -100,7 +100,7 @@
 
 驗收至少涵蓋：缺主表不能開放申請；不能省略／偷換／提交 draft 表單；流程不重發即可取得新表單；填寫中改版明確衝突；舊案件仍用原版；審核唯讀與補件範圍不變；動態選項成功／失敗／過期回應／非法值拒絕；標籤快照授權與保存一致。沿用既有檢查及手動驗收，不因任務卡列案例就新增未授權測試。
 
-本文件取代 2026-10-13 P5 prompt 中與此處衝突的整合假設；歷史交接保留，OptionsProvider 尚未實作或驗收。
+本文件取代 2026-10-13 P5 prompt 中與此處衝突的整合假設；歷史交接保留，實作及驗收狀態以文末增量紀錄為準。
 
 ## 2026-10-24 第一批實作與驗收
 
@@ -111,3 +111,15 @@
 - Maven 完整首輪 1,677 案例：1,675 通過，2 個舊契約 fixture 失敗；更新該兩組既有案例後 `mvn -Dtest=ProcessStartNotFoundTest,StartProcessWithFormDataTest verify` 12/12 通過。未新增測試案例。
 - 前端 `npm test` 25 檔、259 案例通過；`npm run build` 通過，既有大 bundle 警告仍在。瀏覽器確認建立／發布主表並返回 BPMN 後綁定保留。
 - 本機 API 驗收通過：缺表單／錯誤綁定拒絕、舊版本409、表單 v2 發布後新案使用 v2（不重部署）、既有案維持 v1。跨資料庫仍沿用補償，未宣稱 XA 或 crash-safe exactly-once。
+
+
+## 2026-10-24 OptionsProvider 第一批
+
+- 固定來源 `org.myDepartmentMembers`（本人部門成員），僅支援 scalar `select`／`radio`；`params`、`dependsOn` 只能省略或為空。來源以登入者查部門與成員，只回 `{value,label}`，超過 500 人或來源不可用回 503，不退回靜態清單。本機組織服務目前為 mock，正式組織服務接入另行驗收。
+- `GET /api/forms/option-providers` 提供設計清冊；`POST /api/process-definitions/{key}/start-form/options` 以 `fieldId`＋確切 `applicationContext` 查詢，版本過期回 409；`POST /api/tasks/{taskId}/form/options` 沿用案件讀取授權及鎖版，僅提供可編輯的公開欄位。Provider 取自可信定義，不接受瀏覽器指定來源或任意 URL。
+- `FormSubmissionService` 呼叫 SDK `validateWithServicesV1` 真正 resolve，重讀來源確認提交值仍有效；成功才合併可編輯輸入與既有 canonical，保存頂層 scalar `$labels`。拒絕 client `$labels`，不把 metadata 放進流程變數。唯讀動態欄位只能回傳原值，保留既有標籤、不以審核者部門重驗歷史選擇。
+- 設計器新增依 node.id 選欄位的來源面板，遵守 SDK pending／invalid；填寫元件處理取消、過期回應及重試。`UniformForm` 僅在呈現副本中把支援的來源換成已授權選項供 SDK 驗證，正式 DSL 保留來源引用；未完成或失敗仍阻擋送件。唯讀／檢視使用保存的標籤。
+- 本批沒有更新 SDK pin，也未移除舊 URL 代理端點。動態複選、repeater、相依參數、其他 provider，以及動態來源混用 file／media:image 尚未支援；定義入口會拒絕未支援組合。後續接可信檔案 verifier 再開放混用。
+- 驗收：完整 `mvn verify` 1,677/1,677 通過；前端 `npm test` 25 檔、259/259 通過，正式建置通過（既有大 bundle 警告）。既有 acceptance 7/7 通過。沒有新增測試案例。
+- 手動 API 通過：部門範圍、非法值與偽造標籤400、過期版本409、未知欄位及無權案件404、無可用組織來源503、editable 重送、跨部門 readonly 原值保留及竄改拒絕。瀏覽器通過來源切換與新版發布、選項載入、實際送件、唯讀姓名快照顯示。
+- 獨立審查：Standards 0、Spec 0 個確認缺失。未更新 SDK pin、未 push；原有腳本與 submodule mode 變更保留。

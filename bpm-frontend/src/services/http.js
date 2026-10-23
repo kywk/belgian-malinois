@@ -37,6 +37,8 @@ http.interceptors.request.use((config) => {
 http.interceptors.response.use(
   (response) => response,
   (error) => {
+    // 切換表單／離開畫面會主動取消舊選項請求，不應顯示連線故障。
+    if (axios.isCancel(error)) return Promise.reject(error)
     const status = error.response?.status
     // 後端以 ResponseStatusException 回傳時訊息在 message，其餘情況退回 axios 訊息
     const detail = error.response?.data?.message || error.response?.data?.error

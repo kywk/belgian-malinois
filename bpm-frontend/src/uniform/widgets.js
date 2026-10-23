@@ -27,6 +27,7 @@
  * 錯誤連結掛在 fieldset 上。
  */
 import { defineComponent, h } from 'vue'
+import { useDynamicOptions } from './options.js'
 import { ElCheckbox, ElCheckboxGroup, ElDatePicker, ElOption, ElRadio, ElRadioGroup, ElSelect } from 'element-plus'
 
 // ── 共用工具 ────────────────────────────────────────────────────────
@@ -114,10 +115,12 @@ function unsupportedValue(context) {
   ])
 }
 
-function optionsUnavailable(context) {
+function optionsUnavailable(context, dynamic) {
   return h('div', { class: 'uf-options-unavailable' }, [
-    h('span', { class: 'uf-value' }, viewValue(context)),
-    h('p', { role: 'status' }, '尚未設定動態選項服務，已停用選取。'),
+    h('span', { class: 'uf-value' }, text(context.value)),
+    h('p', { role: 'status' }, dynamic?.loading.value ? '選項載入中…'
+      : dynamic?.error.value || dynamic?.reason.value || '尚未設定動態選項服務，已停用選取。'),
+    dynamic?.error.value ? h('button', { type: 'button', onClick: dynamic.retry }, '重新載入選項') : null,
   ])
 }
 
@@ -202,14 +205,20 @@ const SelectField = defineComponent({
   name: 'UfGreyhoundSelectField',
   props: { context: { type: Object, required: true } },
   setup(props) {
+    const dynamic = useDynamicOptions(() => props.context)
     return () => {
       const context = props.context
+      if (dynamic.source.value && (context.mode === 'view' || context.state !== 'editable')) {
+        return h('span', { class: 'uf-value' }, dynamic.snapshot.value ?? text(context.value))
+      }
       if (context.mode === 'view') return h('span', { class: 'uf-value' }, viewValue(context))
-      if (context.node.optionsSource) return optionsUnavailable(context)
+      if (dynamic.source.value && (dynamic.loading.value || dynamic.error.value || dynamic.reason.value)) {
+        return optionsUnavailable(context, dynamic)
+      }
       const multiple = context.props['multiple'] === true
       if (multiple && context.value != null && !Array.isArray(context.value)) return unsupportedValue(context)
       const readonly = context.state !== 'editable'
-      const list = optionList(context)
+      const list = dynamic.source.value ? dynamic.list.value : optionList(context)
       const values = multiple && Array.isArray(context.value) ? context.value : []
       const limit = maxSelect(context.props)
       const unknown = multiple
@@ -262,12 +271,18 @@ const RadioField = defineComponent({
   name: 'UfGreyhoundRadioField',
   props: { context: { type: Object, required: true } },
   setup(props) {
+    const dynamic = useDynamicOptions(() => props.context)
     return () => {
       const context = props.context
+      if (dynamic.source.value && (context.mode === 'view' || context.state !== 'editable')) {
+        return h('span', { class: 'uf-value' }, dynamic.snapshot.value ?? text(context.value))
+      }
       if (context.mode === 'view') return h('span', { class: 'uf-value' }, viewValue(context))
-      if (context.node.optionsSource) return optionsUnavailable(context)
+      if (dynamic.source.value && (dynamic.loading.value || dynamic.error.value || dynamic.reason.value)) {
+        return optionsUnavailable(context, dynamic)
+      }
       const readonly = context.state !== 'editable'
-      const list = optionList(context)
+      const list = dynamic.source.value ? dynamic.list.value : optionList(context)
       const unknown = context.value != null && !list.some(option => Object.is(option.value, context.value))
         ? [context.value]
         : []

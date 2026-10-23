@@ -285,6 +285,7 @@ public class ProcessController {
 
         // 所有形狀／綁定／版本／內容檢查先於 Flowable 或表單資料寫入。
         Map<String, Object> derivedFormData = null;
+        String canonicalFormJson = null;
         if (req.formData() != null) {
             var payload = req.formData();
             if (payload.formDefinitionId() == null || payload.formDefinitionId().isBlank()
@@ -363,7 +364,10 @@ public class ProcessController {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "表單資料不符表單定義的 schema：" + String.join("；", errors));
             }
-            vars.putAll(derivedFormData);
+            canonicalFormJson = formSubmissionService.dataJson(derivedFormData);
+            for (Map.Entry<String, Object> entry : derivedFormData.entrySet()) {
+                if (!entry.getKey().startsWith("$")) vars.put(entry.getKey(), entry.getValue());
+            }
             // 解析全部依賴先於任何副作用；mainFormKey 使用剛才已驗證的同一份定義。
             Map<String, Integer> versions = formVersionLocker.prepareVersions(
                     processDefinition.getId(), formDefinition);
@@ -426,7 +430,7 @@ public class ProcessController {
             FormData formData = new FormData();
             formData.setProcessInstanceId(pi.getProcessInstanceId());
             formData.setFormDefinitionId(formDefinitionId);
-            formData.setDataJson(req.formData().dataJson());
+            formData.setDataJson(canonicalFormJson);
             formData.setSubmittedBy(callerId);
             FormData saved = formService.submitData(formData);
 
