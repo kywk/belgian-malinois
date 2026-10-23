@@ -16,7 +16,10 @@ export const ASSIGNEE_TYPES = [
   { value: 'specific', label: '特定人員' },
   { value: 'manager1', label: '直屬主管（一階）' },
   { value: 'managerN', label: '直屬主管（N階）' },
-  { value: 'permission', label: '特定權限' },
+  { value: 'dynamicManager', label: '動態：第 N 階主管（含代理人）' },
+  { value: 'firstAvailable', label: '動態：首位可受理的權限持有人（含代理人）' },
+  { value: 'managerWithPermission', label: '動態：具指定權限的最近主管（含代理人）' },
+  { value: 'permission', label: '特定權限（候選人認領）' },
   { value: 'department', label: '特定單位（指定代碼）' },
   { value: 'ownDept', label: '發起人所屬單位' }
 ]
@@ -78,6 +81,15 @@ export function propertiesForType(type) {
     case 'managerN':
       p['flowable:assignee'] = managerAtLevelExpr(DEFAULT_MANAGER_LEVEL)
       break
+    case 'dynamicManager':
+      p['flowable:assignee'] = dynamicManagerAtLevelExpr(DEFAULT_MANAGER_LEVEL)
+      break
+    case 'firstAvailable':
+      p['flowable:assignee'] = firstAvailableExpr('')
+      break
+    case 'managerWithPermission':
+      p['flowable:assignee'] = managerWithPermissionExpr('')
+      break
     case 'permission':
       p['flowable:candidateUsers'] = usersByPermissionExpr('')
       break
@@ -100,11 +112,17 @@ export function propertiesForType(type) {
  * 看到的是「特定人員」，改不到那個壞掉的運算式。
  */
 export function detectAssigneeType({ assignee = '', candidateUsers = '', candidateGroups = '' }) {
-  if (candidateGroups.includes('getDeptId')) return 'ownDept'
-  if (candidateGroups) return 'department'
-  if (candidateUsers.includes('permService')) return 'permission'
-  if (assignee.includes('getManagerAtLevel') || assignee.includes('getManagerChain')) return 'managerN'
-  if (assignee.includes('getDirectManager')) return 'manager1'
+  const dynamic = parseDynamicAssignee(assignee)
+  if (dynamic && !candidateUsers && !candidateGroups) return dynamic.type
+  // 未知或帶有其他參數／來源的動態運算式不得誤認成可編輯欄位。
+  if (assignee.includes('dynamicAssignee')) return 'custom'
+  if (candidateGroups === ownDepartmentExpr()) return 'ownDept'
+  if (candidateGroups) return candidateGroups.includes('${') && !/^\$\{\w+\}$/.test(candidateGroups) ? 'custom' : 'department'
+  if (/^\$\{permService\.getUsersByPermission\('[^']*'\)\}$/.test(candidateUsers)) return 'permission'
+  if (/^\$\{orgService\.getManagerAtLevel\(initiator,\s*\d+\)\}$/.test(assignee) ||
+      /^\$\{orgService\.getManagerChain\(initiator,\s*\d+\)\[\d+\]\}$/.test(assignee)) return 'managerN'
+  if (assignee === directManagerExpr()) return 'manager1'
+  if ([assignee, candidateUsers, candidateGroups].some(value => value.includes('${'))) return 'custom'
   return 'specific'
 }
 
@@ -112,4 +130,42 @@ export function detectAssigneeType({ assignee = '', candidateUsers = '', candida
 export function referencedBeans(expr) {
   if (!expr) return []
   return [...expr.matchAll(/\$\{(\w+)\./g)].map((m) => m[1])
+}
+
+/** JUEL 字串常值只跳脫反斜線與單引號；參數仍是單一權限碼。 */
+const quoteElString = value => "'" + String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"
+
+export function managerLevelError(level) {
+  return (typeof level === 'number' || typeof level === 'string') &&
+    String(level).trim() !== '' && Number.isInteger(Number(level)) &&
+    Number(level) >= 1 && Number(level) <= 2147483647
+    ? undefined : '請輸入 1 到 2147483647 的整數階數'
+}
+
+export const dynamicManagerAtLevelExpr = level => {
+  if (managerLevelError(level)) throw new RangeError(managerLevelError(level))
+  return '${dynamicAssignee.managerAtLevel(initiator, ' + Number(level) + ')}'
+}
+
+export const firstAvailableExpr = permCode =>
+  '${dynamicAssignee.firstAvailable(' + quoteElString(permCode) + ')}'
+
+export const managerWithPermissionExpr = permCode =>
+  '${dynamicAssignee.managerWithPermission(initiator, ' + quoteElString(permCode) + ')}'
+
+/** 只解析設計器支援的完整呼叫；其他運算式保持原文，不猜參數或變數來源。 */
+export function parseDynamicAssignee(expression = '') {
+  if (typeof expression !== 'string') return null
+  const manager = expression.match(/^\$\{\s*dynamicAssignee\.managerAtLevel\(\s*initiator\s*,\s*(\d+)\s*\)\s*\}$/)
+  if (manager && !managerLevelError(manager[1])) {
+    return { type: 'dynamicManager', level: Number(manager[1]) }
+  }
+  const literal = "'((?:[^'\\\\]|\\\\['\\\\])*)'"
+  const first = expression.match(new RegExp('^\\$\\{\\s*dynamicAssignee\\.firstAvailable\\(\\s*' + literal + '\\s*\\)\\s*\\}$'))
+  const supervisor = expression.match(new RegExp('^\\$\\{\\s*dynamicAssignee\\.managerWithPermission\\(\\s*initiator\\s*,\\s*' + literal + '\\s*\\)\\s*\\}$'))
+  const match = first || supervisor
+  return match ? {
+    type: first ? 'firstAvailable' : 'managerWithPermission',
+    permCode: match[1].replace(/\\(['\\])/g, '$1')
+  } : null
 }

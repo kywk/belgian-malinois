@@ -7,6 +7,11 @@ import {
   departmentCodeValue,
   detectAssigneeType,
   managerAtLevelExpr,
+  dynamicManagerAtLevelExpr,
+  firstAvailableExpr,
+  managerWithPermissionExpr,
+  managerLevelError,
+  parseDynamicAssignee,
   propertiesForType,
   usersByPermissionExpr
 } from './assigneeExpressions'
@@ -38,19 +43,70 @@ function AssigneeTypeSelect(props) {
     candidateGroups: bo.get('flowable:candidateGroups') || ''
   })
 
-  const setValue = (value) => modeling.updateProperties(element, propertiesForType(value))
+  const setValue = (value) => {
+    if (value !== 'custom') modeling.updateProperties(element, propertiesForType(value))
+  }
 
-  return h(SelectEntry, { id: 'assigneeType', label: '審核對象類型', element, debounce, getOptions: () => ASSIGNEE_TYPES, getValue, setValue })
+  return h(SelectEntry, {
+    id: 'assigneeType', label: '審核對象類型', element, debounce,
+    getOptions: () => getValue() === 'custom'
+      ? [...ASSIGNEE_TYPES, { value: 'custom', label: '自訂運算式（保留原值）' }]
+      : ASSIGNEE_TYPES,
+    getValue, setValue
+  })
 }
 
 function AssigneeValueInput(props) {
   const { element } = props
   const modeling = useService('modeling')
   const debounce = useService('debounceInput')
+  return assigneeValueVNode({ element, modeling, debounce })
+}
+
+/** 與面板共用的欄位決策及存檔路徑，可直接驗證產生的控制項。 */
+export function assigneeValueVNode({ element, modeling, debounce }) {
   const bo = element.businessObject
   const assignee = bo.get('flowable:assignee') || ''
   const candidateUsers = bo.get('flowable:candidateUsers') || ''
   const candidateGroups = bo.get('flowable:candidateGroups') || ''
+
+  const type = detectAssigneeType({ assignee, candidateUsers, candidateGroups })
+  const dynamic = parseDynamicAssignee(assignee)
+
+  if (type === 'custom') {
+    return h('div', { className: 'bio-properties-panel-description' },
+      h('p', null, '此指派運算式保留原值。若要使用引導設定，請選擇其他審核對象類型。'),
+      ...[assignee, candidateUsers, candidateGroups].filter(Boolean).map(value =>
+        h('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, value)))
+  }
+
+  if (dynamic?.type === 'dynamicManager') {
+    return h(NumberFieldEntry, {
+      id: 'assigneeValue', label: '發起人的主管階數', element, debounce,
+      min: 1, max: 2147483647, step: 1,
+      description: '1 代表直屬主管；主管鏈不足時取最高階，並套用代理人。完全沒有主管時無法建立任務。',
+      getValue: () => dynamic.level,
+      validate: managerLevelError,
+      setValue: value => {
+        if (!managerLevelError(value)) modeling.updateProperties(element, {
+          'flowable:assignee': dynamicManagerAtLevelExpr(value)
+        })
+      }
+    })
+  }
+
+  if (dynamic) {
+    const build = dynamic.type === 'firstAvailable' ? firstAvailableExpr : managerWithPermissionExpr
+    return h(TextFieldEntry, {
+      id: 'assigneeValue', label: '指定權限碼', element, debounce,
+      description: dynamic.type === 'firstAvailable'
+        ? '直接指派給第一位可受理的權限持有人；全員不在時使用第一位的代理人。找不到持有人時無法建立任務。'
+        : '沿發起人的主管鏈，由近到遠找第一位持有此權限的主管，並套用代理人。找不到時無法建立任務。',
+      getValue: () => dynamic.permCode,
+      validate: value => !String(value ?? '').trim() ? '請輸入單一權限碼' : undefined,
+      setValue: value => modeling.updateProperties(element, { 'flowable:assignee': build(value) })
+    })
+  }
 
   if (assignee.includes('getManagerAtLevel') || assignee.includes('getManagerChain')) {
     const match = assignee.match(/,\s*(\d+)/)
