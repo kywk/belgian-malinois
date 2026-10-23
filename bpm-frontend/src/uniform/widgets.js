@@ -1,13 +1,13 @@
 /**
  * greyhound 的 uni-form widget 覆寫（Element Plus 版）。
  *
- * 覆寫 date／dateRange／select（含 multiple）／radio／checkbox 五種型別；
+ * 覆寫 date／dateRange／select／radio／checkbox 五種型別；
  * text／textarea／number／boolean 沿用 @nanshan/uniform-element-plus，
  * grid／section／divider／freeText 沿用 SDK native 實作（見 setup.js）。
  *
  * 值語意的權威是 SDK `packages/vue/src/widgets.ts`：
  *   - select／radio 值是 option 的 scalar value（string／number／boolean）；
- *   - checkbox 與 multiple select 值是 option value 的陣列；
+ *   - checkbox 值是 option value 的陣列（動態 select 僅單選）；
  *   - dateRange 值是 canonical `{start,end}`（元件內以 el-date-picker
  *     daterange 編輯，輸出時才轉 canonical）；
  *   - maxSelect 是「成長上限」：超過就整次變更丟棄（縮小不受限，
@@ -244,7 +244,7 @@ const SelectField = defineComponent({
             if (selected.length > limit && selected.length >= values.length) return
             context.updateValue(selected)
           } else {
-            context.updateValue(value == null || value === '' ? undefined : value)
+            context.updateValue(value == null || value === '' ? (dynamic.source.value ? null : undefined) : value)
           }
         },
       }, () => [
@@ -299,6 +299,10 @@ const RadioField = defineComponent({
           ...list.map((option, index) => h(ElRadio, { key: String(index), value: option.value }, () => optionLabel(option))),
           ...unknown.map((value, index) => h(ElRadio, { key: 'unknown-' + index, value }, () => text(value) + '（原值）')),
         ]),
+        dynamic.source.value && context.value != null ? h('button', {
+          type: 'button', disabled: readonly,
+          onClick: () => { if (!readonly) context.updateValue(null) },
+        }, '清除選取') : null,
       ])
     }
   },
@@ -310,13 +314,20 @@ const CheckboxField = defineComponent({
   name: 'UfGreyhoundCheckboxField',
   props: { context: { type: Object, required: true } },
   setup(props) {
+    const dynamic = useDynamicOptions(() => props.context)
     return () => {
       const context = props.context
+      if (dynamic.source.value && (context.mode === 'view' || context.state !== 'editable')) {
+        const fallback = Array.isArray(context.value) ? context.value.map(text).join('、') || '未填寫' : text(context.value)
+        return h('span', { class: 'uf-value' }, dynamic.snapshot.value ?? fallback)
+      }
       if (context.mode === 'view') return h('span', { class: 'uf-value' }, viewValue(context))
-      if (context.node.optionsSource) return optionsUnavailable(context)
+      if (dynamic.source.value && (dynamic.loading.value || dynamic.error.value || dynamic.reason.value)) {
+        return optionsUnavailable(context, dynamic)
+      }
       if (context.value != null && !Array.isArray(context.value)) return unsupportedValue(context)
       const readonly = context.state !== 'editable'
-      const list = optionList(context)
+      const list = dynamic.source.value ? dynamic.list.value : optionList(context)
       const values = Array.isArray(context.value) ? context.value : []
       const limit = maxSelect(context.props)
       const unknown = values.filter(value => !list.some(option => Object.is(option.value, value)))
@@ -338,9 +349,10 @@ const CheckboxField = defineComponent({
             value: option.value,
             disabled: readonly || (values.length >= limit && !values.some(value => Object.is(value, option.value))),
           }, () => optionLabel(option))),
-          // 原值保留在陣列裡（SDK 語意）；以 disabled 勾選框呈現，
-          // 讓它看得見但不會被這裡的編輯覆蓋。
-          ...unknown.map((value, index) => h(ElCheckbox, { key: 'unknown-' + index, value, disabled: true }, () => text(value) + '（原值）')),
+          // 相依條件改變後不清掉原選取；使用者可取消不再合法的值，SDK 仍拒絕未修正值。
+          ...unknown.map((value, index) => h(ElCheckbox, {
+            key: 'unknown-' + index, value, disabled: readonly || !dynamic.source.value,
+          }, () => text(value) + '（原值）')),
         ]),
       ])
     }

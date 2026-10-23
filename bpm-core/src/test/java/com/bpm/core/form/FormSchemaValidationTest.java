@@ -69,7 +69,7 @@ class FormSchemaValidationTest extends IntegrationTestBase {
     /** 啟動案件 → 主管退回 → 停在申請人的補件關卡（fill／readonly＋reason editable）。 */
     private String startReturnedCase() {
         String pid = runtimeService.startProcessInstanceByKey(LEAVE,
-                Map.of("initiator", APPLICANT, "leaveType", "annual",
+                Map.of("initiator", APPLICANT, "_formVersions", Map.of("leave-request", 1), "leaveType", "annual",
                         "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
                         "reason", "原始事由")).getId();
         completeDirectly(pid, Map.of("approved", false, "rejected", false));
@@ -206,7 +206,7 @@ class FormSchemaValidationTest extends IntegrationTestBase {
     @DisplayName("檢視模式的任務（主管審核）帶 formData → 400，且任務不被完成")
     void nonFillTaskRejectsFormData() throws Exception {
         String pid = runtimeService.startProcessInstanceByKey(LEAVE,
-                Map.of("initiator", APPLICANT, "leaveType", "annual", "reason", "x")).getId();
+                Map.of("initiator", APPLICANT, "_formVersions", Map.of("leave-request", 1), "leaveType", "annual", "reason", "x")).getId();
         Task managerTask = currentTask(pid);
         assertThat(managerTask.getAssignee()).isEqualTo(MANAGER);
 

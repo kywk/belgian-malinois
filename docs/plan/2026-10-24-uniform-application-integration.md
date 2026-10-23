@@ -123,3 +123,30 @@
 - 驗收：完整 `mvn verify` 1,677/1,677 通過；前端 `npm test` 25 檔、259/259 通過，正式建置通過（既有大 bundle 警告）。既有 acceptance 7/7 通過。沒有新增測試案例。
 - 手動 API 通過：部門範圍、非法值與偽造標籤400、過期版本409、未知欄位及無權案件404、無可用組織來源503、editable 重送、跨部門 readonly 原值保留及竄改拒絕。瀏覽器通過來源切換與新版發布、選項載入、實際送件、唯讀姓名快照顯示。
 - 獨立審查：Standards 0、Spec 0 個確認缺失。未更新 SDK pin、未 push；原有腳本與 submodule mode 變更保留。
+
+## 2026-10-24 第二批：相依參數與動態多選
+
+本批以 UniForm `67f6047` 的 `spec/types/choice-editing.md`、`spec/validate/service-execution.md` 與 VAL-06 為準。服務驗證規格自現有 pin `89708ef` 未變，保留 SDK pin；動態多選採 `checkbox` 陣列，不使用 `select multiple=true`，不改寫歷史靜態欄位。
+
+- 本人部門成員來源新增選填 `query`（搜尋 ID／姓名，最多 100 字）與 `excludeUser`（排除一人，最多 255 字）參數。可設定字串常值，或以 `{data.key}`／`{{data.key}}` 綁定頂層純量欄位；`dependsOn` 同步記錄被引用欄位。空值視為未過濾；不支援混合模板、ctx／row、物件／陣列參數、自我及循環相依。部門範圍仍由登入者決定，參數不能擴張來源授權。
+- 選項讀取 POST 增加 `data`，傳原始表單答案而非 client 解析好的 params。宿主依可信定義、節點權限與既有資料建立候選內容，拒絕未知／隱藏欄位或唯讀竄改，並重算包含 provider 的 hidden closure；缺少或隱藏的選填參數依 SDK 規格移除整個參數鍵。提交使用相同候選內容作為 `contextData`，由 SDK 真正 resolve。
+- 變更相依欄位須重新確認可編輯的動態答案；不能用省略 owner 的 partial submit 保留未重驗的選取。畫面取消舊請求並防止過期回應覆蓋，保留不再合法的已選值供使用者取消，載入失敗或未修正答案不能送件。
+- 多選標籤保存於 `bpm_form_data.option_labels_json`，採宿主私有 `{format:"greyhound-option-labels-v1",fields:{key:[{value,label}]}}`；依開發期重建政策，直接在 V1 初始化結構加入 nullable `NVARCHAR(MAX)`，不提供舊資料 migration。每次成功資料修訂與其快照寫在同一列，原列保留。原始 entity API 不序列化此欄位，流程變數與 SDK `data` 都不含此 carrier。
+- 公開快照使用宿主擴充 `Envelope.ext.greyhoundOptionLabels`，只含授權可見的動態 checkbox 欄位及與已保存值吻合的 entries。此來源的 ID／姓名允許目前案件讀取者在欄位可見時查看；hidden 欄位不揭露。唯讀與檢視沿用快照，不以不同審核者部門重新查詢。`$labels` 繼續只存 scalar 字串。
+- 限制維持：不支援動態 repeater、allowOther、附件混用與任意 URL provider；其他 provider／相依參數型別按後續具體需求擴充。正式組織來源仍需獨立驗收，本機使用既有組織 mock。
+
+### 開發期資料政策（本批取代前述舊案件相容安排）
+
+- 使用者明訂目前不保留 DSL／資料 migration。表單欄位直接寫入初始化結構，示範資料 V5 直接建立 UniForm DSL，移除 V7 的先刪舊資料再轉格式流程；資料結構更動後清除本機測試資料重建。
+- 案件有 processInstanceId 就必須有有效 `_formVersions`；移除缺鎖改讀 latest 的舊資料回退及 `_formVersionPolicy` 標記。start-form 沒有案件時仍讀取最新已發布表單。既有測試 fixture 改為明確帶鎖版，沒有新增案例。
+- 動態 select／radio 以宿主 `null` 表達明確清除；前端呈現與後端 SDK 驗證均視為未填寫，必填仍拒絕，成功才刪除 canonical、標籤與流程變數。與省略欄位維持原值的 partial submit 語意不同。
+
+### 驗收
+
+- 完整 Maven 重跑 1,677/1,677 通過。首輪唯一失敗為補償測試的全表稽核計數，日誌同時出現其他案件的非同步 DLQ 寫入；完整重跑及後續定向回歸皆通過，未將首輪記為成功。
+- 最終 seed 整併後 `mvn clean -Dtest=FormSchemaValidationTest,StartProcessFormDataCompensationTest verify` 9/9 通過，JAR 不含已移除的 V7／V8；新資料庫直接初始化成功。
+- 本機三個專用 DB 與六個舊部署輸出已清除，重新 seed；既有 acceptance 7/7 通過。其他專案資料庫與共享 infra 保留，Greyhound 事件佇列確認無殘留。
+- 手動 API：相依篩選、循環／非法模板定義拒絕、逐值多選 resolve、原始 sidecar 不公開、跨部門唯讀及 hidden 快照投影、partial submit 防繞過、scalar 明確清除與流程變數移除、必填清除拒絕均通過。第一批 scalar API 回歸亦通過。
+- 前端最終 `npm test` 25 檔、259/259 通過；正式建置通過，仍有既有大 bundle 警告。查無選項時，呈現 schema 使用僅供 SDK 編譯的 placeholder，widget 不顯示此值；宿主另依實際空清單拒絕所有非空答案，required 保持 SDK 驗證，canonical 與 API 不含 placeholder。
+- 瀏覽器通過：相依文字篩選、動態多選、原值失效時阻擋送件、取消多選／清除 radio 與 select 後送件成功；設計器參數草稿阻擋儲存／發布、套用後發布第 4 版成功。
+- 獨立 Standards／Spec 審查已完成；發現的 scalar 清除缺口已修正覆查，畫面驗收發現的空 enum 編譯問題亦修正並實測通過。未新增測試案例，未 push；原有腳本及 submodule mode 變更未納入本批。

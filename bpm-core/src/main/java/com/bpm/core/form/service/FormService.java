@@ -473,6 +473,7 @@ public class FormService {
         revision.setTaskId(existing.getTaskId());
         revision.setSubmittedBy(existing.getSubmittedBy());
         revision.setDataJson(updated.getDataJson());
+        revision.setOptionLabelsJson(updated.getOptionLabelsJson());
         // submittedAt 刻意留 null → @PrePersist 寫入當下時間。
         // 不可沿用 existing.getSubmittedAt()：那會讓新版本在
         // getDataByProcess 的遞減排序中與舊版本同時間（甚至排在後面），

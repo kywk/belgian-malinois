@@ -286,6 +286,7 @@ public class ProcessController {
         // 所有形狀／綁定／版本／內容檢查先於 Flowable 或表單資料寫入。
         Map<String, Object> derivedFormData = null;
         String canonicalFormJson = null;
+        String optionLabelsJson = null;
         if (req.formData() != null) {
             var payload = req.formData();
             if (payload.formDefinitionId() == null || payload.formDefinitionId().isBlank()
@@ -358,13 +359,15 @@ public class ProcessController {
             formDefinitionId = formDefinition.getId();
             Map<String, Object> startProfile =
                     formAccessResolver.profileForStartEvent(processDefinition.getId());
-            List<String> errors = formSubmissionService.validate(
-                    formDefinition, startProfile, derivedFormData, new LinkedHashMap<>());
+            FormSubmissionService.SubmissionResult validation = formSubmissionService.validateWithSnapshots(
+                    formDefinition, startProfile, derivedFormData, new LinkedHashMap<>(), null);
+            List<String> errors = validation.errors();
             if (!errors.isEmpty()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "表單資料不符表單定義的 schema：" + String.join("；", errors));
             }
             canonicalFormJson = formSubmissionService.dataJson(derivedFormData);
+            optionLabelsJson = validation.optionLabelsJson();
             for (Map.Entry<String, Object> entry : derivedFormData.entrySet()) {
                 if (!entry.getKey().startsWith("$")) vars.put(entry.getKey(), entry.getValue());
             }
@@ -372,7 +375,6 @@ public class ProcessController {
             Map<String, Integer> versions = formVersionLocker.prepareVersions(
                     processDefinition.getId(), formDefinition);
             vars.put(FormVersionLocker.VERSIONS_VARIABLE, new HashMap<>(versions));
-            vars.put(FormVersionLocker.POLICY_VARIABLE, FormVersionLocker.APPLICATION_POLICY);
         } else if (req.formData() != null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "此流程沒有一般申請主表，不接受自行附加 formData");
@@ -431,6 +433,7 @@ public class ProcessController {
             formData.setProcessInstanceId(pi.getProcessInstanceId());
             formData.setFormDefinitionId(formDefinitionId);
             formData.setDataJson(canonicalFormJson);
+            formData.setOptionLabelsJson(optionLabelsJson);
             formData.setSubmittedBy(callerId);
             FormData saved = formService.submitData(formData);
 

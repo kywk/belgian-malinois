@@ -124,7 +124,7 @@ const formError = ref('')
 const rendererRef = ref()
 const submitting = ref(false)
 
-provideOptionsHost(envelope, computed(() => envelope.value ? { taskId } : null))
+provideOptionsHost(envelope, computed(() => envelope.value ? { taskId } : null), undefined, { formData })
 
 const isExternal = computed(() => task.value?.formKey?.startsWith('external:'))
 const isRevision = computed(() => envelope.value?.mode === 'fill')

@@ -536,6 +536,10 @@ public class TaskController {
                     // 空字串＝這一輪不是退回申請人。
                     vars.put("returnTo", "");
                 }
+                if (submission != null && !submission.clearedScalarFields().isEmpty()) {
+                    // 僅刪除已通過表單驗證的動態單選清除命令，與任務完成共用主交易。
+                    runtimeService.removeVariables(task.getProcessInstanceId(), submission.clearedScalarFields());
+                }
                 taskService.complete(id, vars);
 
                 // ── uni-form：表單落地放在 complete 之後（計畫 §五 A5）────
@@ -754,7 +758,8 @@ public class TaskController {
      * @param dataJson   合併既有資料並帶有伺服器標籤的 canonical JSON 字串
      * @param previousRow 前一列（版本化用；沒有＝這是這張單的第一筆）
      */
-    private record TaskFormSubmission(FormDefinition definition, String dataJson, FormData previousRow) {}
+    private record TaskFormSubmission(FormDefinition definition, String dataJson,
+                                      String optionLabelsJson, Set<String> clearedScalarFields, FormData previousRow) {}
 
     /**
      * 解析、驗證 formData 並把提交值推導成流程變數。
@@ -788,6 +793,8 @@ public class TaskController {
         String dataJson = req.formData().dataJson();
         Map<String, Object> submitted = formSubmissionService.parseDataJson(dataJson, "formData.dataJson");
         Set<String> submittedKeys = new LinkedHashSet<>(submitted.keySet());
+        Set<String> submittedNullKeys = new LinkedHashSet<>();
+        submitted.forEach((key, value) -> { if (value == null) submittedNullKeys.add(key); });
         FormData previousRow = formContextResolver.latestRow(task.getProcessInstanceId());
         Map<String, Object> stored = formContextResolver.storedDataOf(previousRow);
 
@@ -821,7 +828,9 @@ public class TaskController {
             }
         }
 
-        List<String> errors = formSubmissionService.validate(def, profile, submitted, stored);
+        FormSubmissionService.SubmissionResult validation = formSubmissionService.validateWithSnapshots(
+                def, profile, submitted, stored, previousRow == null ? null : previousRow.getOptionLabelsJson());
+        List<String> errors = validation.errors();
         if (!errors.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "表單資料不符表單定義的 schema：" + String.join("；", errors));
@@ -832,7 +841,13 @@ public class TaskController {
                 vars.put(entry.getKey(), entry.getValue());
             }
         }
-        return new TaskFormSubmission(def, formSubmissionService.dataJson(submitted), previousRow);
+        // 清除集合由 service 對可信 DSL 的 select／radio optionsSource 分類產生；
+        // 再核對原始請求明確為 null，且成功的 canonical 確實已刪除，才移除流程變數。
+        Set<String> cleared = new LinkedHashSet<>(validation.clearedScalarFields());
+        cleared.retainAll(submittedNullKeys);
+        cleared.removeIf(submitted::containsKey);
+        return new TaskFormSubmission(def, formSubmissionService.dataJson(submitted),
+                validation.optionLabelsJson(), Set.copyOf(cleared), previousRow);
     }
 
     /**
@@ -860,6 +875,7 @@ public class TaskController {
         if (submission.previousRow() != null) {
             FormData revision = new FormData();
             revision.setDataJson(submission.dataJson());
+            revision.setOptionLabelsJson(submission.optionLabelsJson());
             saved = formService.updateData(submission.previousRow().getId(), revision);
             // formDataId 是新列（實際生效的版本），supersededFormDataId 是被取代的
             // 舊列 —— 只記其中一個會讓版本鏈斷掉（與 FormDataController.update 同一理由）。
@@ -874,6 +890,7 @@ public class TaskController {
             data.setSubmittedBy(callerId);
             data.setTaskId(task.getId());
             data.setDataJson(submission.dataJson());
+            data.setOptionLabelsJson(submission.optionLabelsJson());
             saved = formService.submitData(data);
             auditPublisher.publish(new AuditEvent(OperationType.FORM_SUBMIT.name(), callerId,
                     task.getProcessInstanceId(), task.getId(),

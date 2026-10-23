@@ -1,6 +1,7 @@
 package com.bpm.core.form.model;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import java.time.Instant;
 
@@ -31,6 +32,11 @@ public class FormData {
     @Column(columnDefinition = "NVARCHAR(MAX)", nullable = false)
     private String dataJson;
 
+    // 宿主私有多選標籤快照；不得混入 SDK data 或直接透過 entity API 揭露。
+    @JsonIgnore
+    @Column(columnDefinition = "NVARCHAR(MAX)")
+    private String optionLabelsJson;
+
     private String submittedBy;
 
     @Column(updatable = false)
@@ -51,6 +57,9 @@ public class FormData {
     public void setTaskId(String taskId) { this.taskId = taskId; }
     public String getDataJson() { return dataJson; }
     public void setDataJson(String dataJson) { this.dataJson = dataJson; }
+    @JsonIgnore
+    public String getOptionLabelsJson() { return optionLabelsJson; }
+    public void setOptionLabelsJson(String optionLabelsJson) { this.optionLabelsJson = optionLabelsJson; }
     public String getSubmittedBy() { return submittedBy; }
     public void setSubmittedBy(String submittedBy) { this.submittedBy = submittedBy; }
     public Instant getSubmittedAt() { return submittedAt; }

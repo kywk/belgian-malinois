@@ -31,8 +31,8 @@ import java.util.Map;
  * <h2>版本解析：版本鎖定優先</h2>
  *
  * <p>{@code _formVersions}（由 {@code FormVersionLocker} 在啟動時寫入）是
- * 「這個案件用哪一版」的唯一權威。新申請以 _formVersionPolicy 標記，缺鎖一律拒絕；
- * 無標記的歷史／技術案件保留既有 latest fallback，須另行修復。鎖定版本仍可封存：
+ * 「這個案件用哪一版」的唯一權威。有案件就必須具備有效鎖定，不依政策標記降級；
+ * 沒有案件的 start-form 才讀取最新已發布版本。鎖定版本仍可封存：
  * <b>已完成或已封存的版本仍必須被進行中的案件用到</b>（封存只影響新案件）。
  */
 @Service
@@ -77,7 +77,7 @@ public class FormContextResolver {
     }
 
     /**
-     * {@code _formVersions} 的 formKey → version；沒有鎖定資訊回 {@code null}。
+     * {@code _formVersions} 的 formKey → version；僅沒有案件時回 {@code null}，案件缺鎖回 409。
      *
      * <p>刻意<b>不</b>吞例外：呼叫端（任務／案件）在此之前都已確認實例存在；
      * 讀變數失敗是引擎故障，靜默降級成「用最新版」會讓改版在案件進行中生效，
@@ -92,12 +92,8 @@ public class FormContextResolver {
                 && number.intValue() > 0 && number.doubleValue() == number.intValue()) {
             return number.intValue();
         }
-        if (FormVersionLocker.APPLICATION_POLICY.equals(runtimeService.getVariable(
-                processInstanceId, FormVersionLocker.POLICY_VARIABLE))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "申請案件缺少有效的表單版本鎖定，已停止處理；請由維運修復，不能自動改用最新版");
-        }
-        return null;
+        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "案件缺少有效的表單版本鎖定，已停止處理；不能自動改用最新版");
     }
 
     /** 案件最新一列 FormData（{@code submittedAt} 遞減的第一筆）；沒有資料回 {@code null}。 */

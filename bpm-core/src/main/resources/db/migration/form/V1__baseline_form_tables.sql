@@ -40,6 +40,7 @@ EXEC sp_executesql N'
 CREATE TABLE bpm_form_data (
     id                      VARCHAR(255)    NOT NULL,
     data_json               NVARCHAR(MAX)       NULL,
+    option_labels_json      NVARCHAR(MAX)       NULL,
     form_definition_id      VARCHAR(255)    NOT NULL,
     process_instance_id     VARCHAR(255)    NOT NULL,
     submitted_at            DATETIMEOFFSET      NULL,

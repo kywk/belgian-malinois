@@ -209,7 +209,7 @@ class AuditFailClosedTest extends IntegrationTestBase {
         // 而且因為表單交易先 commit、主交易才走 beforeCommit，
         // 這裡同時驗到 afterCompletion 的補償刪除（沒有 XA 的窗口）。
         String pid = runtimeService.startProcessInstanceByKey(FORM_KEY,
-                Map.of("initiator", "user001")).getId();
+                Map.of("initiator", "user001", "_formVersions", Map.of("leave-request", 1))).getId();
         Task task = taskService.createTaskQuery().processInstanceId(pid).singleResult();
         assertThat(task).as("前置條件：表單案件必須停在唯一關卡").isNotNull();
         failAuditInsertsWhere("FORM_SUBMIT");

@@ -23,10 +23,10 @@
     <el-alert v-if="loadError" :title="loadError" type="error" show-icon :closable="false">
       <el-button @click="loadDefinition">重新載入</el-button>
     </el-alert>
-    <OptionsSourcePanel v-if="dsl" :model-value="dsl" :readonly="!canEdit" :blocked="hasUnappliedChanges"
-      @update:model-value="applyOptionsSource" />
+    <OptionsSourcePanel v-if="dsl" :model-value="dsl" :readonly="!canEdit" :blocked="hasDesignerChanges"
+      @pending="sourcePending = $event" @invalid="sourceInvalid = $event" @update:model-value="applyOptionsSource" />
     <div class="editor-body" v-loading="loading">
-      <UfDesigner v-if="dsl" v-model="dsl" :palette="palette" :readonly="!canEdit"
+      <UfDesigner v-if="dsl" v-model="dsl" :palette="palette" :readonly="!canEdit || sourcePending"
         @update:model-value="dirty = true" @pending="onPending" @invalid="onInvalid" />
     </div>
     <el-dialog v-model="previewVisible" title="表單填寫預覽" width="min(720px, 95vw)" destroy-on-close append-to-body>
@@ -46,6 +46,7 @@ import '@nanshan/uniform-vue/designer.css'
 import { getFormSchema, createForm, updateForm, publishForm, createFormRevision, listForms } from '../services/formApi.js'
 import OptionsSourcePanel from '../components/OptionsSourcePanel.vue'
 import { previewForm } from '../uniform/api.js'
+import { supportsDynamicSource, topLevelFields } from '../uniform/options.js'
 
 const props = defineProps({ embedded: Boolean, initialFormKey: String, initialVersion: [Number, String] })
 const emit = defineEmits(['saved', 'published', 'request-close'])
@@ -63,6 +64,8 @@ const busy = ref(false)
 const loadError = ref('')
 const pending = ref(new Set())
 const invalid = ref(new Set())
+const sourcePending = ref(false)
+const sourceInvalid = ref(false)
 const previewVisible = ref(false)
 const previewEnvelope = ref(null)
 const previewError = ref('')
@@ -71,7 +74,10 @@ let previewGeneration = 0
 
 const published = computed(() => status.value === 'published')
 const canEdit = computed(() => !published.value && !loading.value && !busy.value && !!dsl.value)
-const hasUnappliedChanges = computed(() => pending.value.size > 0 || invalid.value.size > 0)
+const hasDesignerChanges = computed(() => pending.value.size > 0 || invalid.value.size > 0)
+const invalidSources = computed(() => topLevelFields(dsl.value?.root).some(node => node.optionsSource
+  && !supportsDynamicSource(node, topLevelFields(dsl.value?.root))))
+const hasUnappliedChanges = computed(() => hasDesignerChanges.value || sourcePending.value || sourceInvalid.value || invalidSources.value)
 const canPersist = computed(() => canEdit.value && !!formName.value.trim() && !!formKey.value.trim() && !hasUnappliedChanges.value)
 const hasFields = computed(() => Array.isArray(dsl.value?.root) && dsl.value.root.length > 0)
 const target = computed(() => props.embedded
@@ -79,7 +85,7 @@ const target = computed(() => props.embedded
   : [route.params.id, route.query.version])
 
 function applyOptionsSource(candidate) {
-  if (!canEdit.value || hasUnappliedChanges.value) return
+  if (!canEdit.value || hasDesignerChanges.value) return
   dsl.value = candidate
   dirty.value = true
 }

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /** 選項讀取與表單共用可信綁定、版本及案件讀取授權。 */
@@ -24,10 +25,11 @@ public class UniformOptionsController {
     private final FormContextResolver context;
     private final FormEnvelopeService envelopes;
     private final OptionsProviderRegistry providers;
+    private final FormSubmissionService submissions;
 
     public UniformOptionsController(TaskService tasks, RepositoryService repository,
             ProcessAccessGuard access, FormAccessResolver profiles, FormContextResolver context,
-            FormEnvelopeService envelopes, OptionsProviderRegistry providers) {
+            FormEnvelopeService envelopes, OptionsProviderRegistry providers, FormSubmissionService submissions) {
         this.tasks = tasks;
         this.repository = repository;
         this.access = access;
@@ -35,12 +37,17 @@ public class UniformOptionsController {
         this.context = context;
         this.envelopes = envelopes;
         this.providers = providers;
+        this.submissions = submissions;
     }
 
     public record ApplicationContext(String processDefinitionId, String formDefinitionId,
                                      String formKey, Integer formVersion) {}
-    public record StartOptionsRequest(String fieldId, ApplicationContext applicationContext) {}
-    public record TaskOptionsRequest(String fieldId) {}
+    public record StartOptionsRequest(String fieldId, ApplicationContext applicationContext, Map<String, Object> data) {
+        public StartOptionsRequest(String fieldId, ApplicationContext applicationContext) { this(fieldId, applicationContext, null); }
+    }
+    public record TaskOptionsRequest(String fieldId, Map<String, Object> data) {
+        public TaskOptionsRequest(String fieldId) { this(fieldId, null); }
+    }
 
     @GetMapping("/api/forms/option-providers")
     public List<Map<String, Object>> catalog() { return providers.catalog(); }
@@ -67,10 +74,9 @@ public class UniformOptionsController {
         if (!expected.equals(request.applicationContext())
                 || !"published".equals(definition.getStatus())) throw changed();
         ApplicationFormBinding.requireCompatible(repository.getBpmnModel(process.getId()), definition);
-        Map<String, Object> envelope = envelopes.envelope(definition,
-                profiles.profileForStartEvent(process.getId()), Map.of());
-        requireField(envelope, request.fieldId());
-        return Map.of("options", providers.list(caller));
+        Map<String, Object> profile = profiles.profileForStartEvent(process.getId());
+        Map<String, Object> candidate = submissions.optionsCandidate(definition, profile, request.data(), Map.of());
+        return list(definition, profile, candidate, request.fieldId(), caller);
     }
 
     @PostMapping("/api/tasks/{taskId}/form/options")
@@ -82,30 +88,44 @@ public class UniformOptionsController {
         String key = task.getFormKey();
         if (key == null || key.isBlank() || key.startsWith("external:")) throw fieldMissing();
         FormDefinition definition = context.definitionFor(key, task.getProcessInstanceId());
-        Map<String, Object> envelope = envelopes.envelope(definition,
-                profiles.profileForTask(task.getProcessDefinitionId(), task.getTaskDefinitionKey()),
+        if (request == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "fieldId 為必填");
+        Map<String, Object> profile = profiles.profileForTask(task.getProcessDefinitionId(), task.getTaskDefinitionKey());
+        Map<String, Object> candidate = submissions.optionsCandidate(definition, profile, request.data(),
                 context.storedDataOf(context.latestRow(task.getProcessInstanceId())));
-        requireField(envelope, request == null ? null : request.fieldId());
-        return Map.of("options", providers.list(caller));
+        return list(definition, profile, candidate, request.fieldId(), caller);
     }
 
-    private static void requireField(Map<String, Object> envelope, String id) {
+    private Map<String, Object> list(FormDefinition definition, Map<String, Object> profile,
+            Map<String, Object> candidate, String id, String caller) {
         if (id == null || id.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "fieldId 為必填");
-        // 只檢查 SDK 已裁切的公開 schema，不能用原始 DSL 查出 hidden 欄位。
+        // 投影使用同一可信 candidate 與 behaviorRegistry，保留 SDK 的完整 hidden closure。
+        Map<String, Object> envelope = envelopes.envelope(definition, profile, candidate);
         if (!"fill".equals(envelope.get("mode")) || !(envelope.get("schema") instanceof Map<?, ?> schema)
                 || !(envelope.get("meta") instanceof Map<?, ?> meta)
-                || !(meta.get("states") instanceof Map<?, ?> states)
-                || !eligible(schema.get("root"), id, states)) throw fieldMissing();
+                || !(meta.get("states") instanceof Map<?, ?> rawStates)) throw fieldMissing();
+        Map<String, String> states = new LinkedHashMap<>();
+        rawStates.forEach((key, value) -> states.put((String) key, (String) value));
+        Map<String, Object> field = eligible(schema.get("root"), id, states);
+        if (field == null) throw fieldMissing();
+        return Map.of("options", providers.list(caller, OptionsProviderRegistry.params(field, candidate, states)));
     }
 
-    private static boolean eligible(Object raw, String id, Map<?, ?> states) {
-        if (raw instanceof List<?> nodes) return nodes.stream().anyMatch(node -> eligible(node, id, states));
-        if (!(raw instanceof Map<?, ?> node)) return false;
-        if (id.equals(node.get("id"))) {
-            return "editable".equals(states.get(node.get("key")))
-                    && ("select".equals(node.get("type")) || "radio".equals(node.get("type")))
-                    && node.get("optionsSource") instanceof Map<?, ?> source
-                    && OptionsProviderRegistry.PROVIDER.equals(source.get("provider"));
+    private static Map<String, Object> eligible(Object raw, String id, Map<String, String> states) {
+        if (raw instanceof List<?> nodes) {
+            for (Object node : nodes) {
+                Map<String, Object> found = eligible(node, id, states);
+                if (found != null) return found;
+            }
+            return null;
+        }
+        if (!(raw instanceof Map<?, ?> node)) return null;
+        if (id.equals(node.get("id")) && "editable".equals(states.get(node.get("key")))
+                && List.of("select", "radio", "checkbox").contains(node.get("type"))
+                && node.get("optionsSource") instanceof Map<?, ?> source
+                && OptionsProviderRegistry.PROVIDER.equals(source.get("provider"))) {
+            Map<String, Object> field = new LinkedHashMap<>();
+            node.forEach((key, value) -> field.put((String) key, value));
+            return field;
         }
         return eligible(node.get("children"), id, states);
     }

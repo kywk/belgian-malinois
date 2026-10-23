@@ -61,11 +61,12 @@ public class FormEnvelopeController {
     private final FormContextResolver contextResolver;
     private final FormEnvelopeService envelopeService;
     private final FormDefinitionValidator definitionValidator;
+    private final OptionLabelSnapshots labelSnapshots;
 
     public FormEnvelopeController(TaskService taskService, RepositoryService repositoryService,
                                   ProcessAccessGuard accessGuard, FormAccessResolver accessResolver,
                                   FormContextResolver contextResolver, FormEnvelopeService envelopeService,
-                                  FormDefinitionValidator definitionValidator) {
+                                  FormDefinitionValidator definitionValidator, OptionLabelSnapshots labelSnapshots) {
         this.taskService = taskService;
         this.repositoryService = repositoryService;
         this.accessGuard = accessGuard;
@@ -73,6 +74,7 @@ public class FormEnvelopeController {
         this.contextResolver = contextResolver;
         this.envelopeService = envelopeService;
         this.definitionValidator = definitionValidator;
+        this.labelSnapshots = labelSnapshots;
     }
 
     /**
@@ -109,7 +111,8 @@ public class FormEnvelopeController {
         Map<String, Object> profile = accessResolver.profileForTask(
                 task.getProcessDefinitionId(), task.getTaskDefinitionKey());
         FormData latest = contextResolver.latestRow(task.getProcessInstanceId());
-        return envelopeService.envelope(def, profile, contextResolver.storedDataOf(latest));
+        Map<String, Object> envelope = envelopeService.envelope(def, profile, contextResolver.storedDataOf(latest));
+        return labelSnapshots.attach(envelope, latest == null ? null : latest.getOptionLabelsJson());
     }
 
     /**

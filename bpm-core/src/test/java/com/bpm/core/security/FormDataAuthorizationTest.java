@@ -113,7 +113,7 @@ class FormDataAuthorizationTest extends IntegrationTestBase {
 
     private String startCase(String initiator) {
         return runtimeService.startProcessInstanceByKey("leave-approval",
-                Map.of("initiator", initiator, "leaveType", "annual", "days", 1)).getId();
+                Map.of("initiator", initiator, "_formVersions", Map.of("leave-request", 1), "leaveType", "annual", "days", 1)).getId();
     }
 
     /** 直接種一筆表單資料（讀端測試用；寫端一律走任務完成）。 */

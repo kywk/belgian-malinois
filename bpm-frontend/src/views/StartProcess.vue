@@ -95,7 +95,7 @@ provideOptionsHost(envelope, computed(() => applicationContext.value && !version
   }
   versionConflict.value = true
   reviewed.value = false
-})
+}, { formData })
 
 const canSubmit = computed(() => !!envelope.value && !!applicationContext.value && !formLoading.value
   && !submitting.value && !versionConflict.value && (!retainedData.value || reviewed.value)

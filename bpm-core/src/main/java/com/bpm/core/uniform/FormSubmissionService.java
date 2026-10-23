@@ -4,12 +4,6 @@ import com.bpm.core.form.model.FormDefinition;
 import com.bpm.core.security.CallerIdArgumentResolver;
 import com.nanshan.uniform.boot4.UniformBffService;
 import com.nanshan.uniform.boot4.UniformSpecResources;
-import com.nanshan.uniform.core.access.AccessCalculator;
-import com.nanshan.uniform.core.access.AccessProfile;
-import com.nanshan.uniform.core.access.AccessState;
-import com.nanshan.uniform.core.model.ManifestReader;
-import com.nanshan.uniform.core.model.UniformDocumentReader;
-import com.nanshan.uniform.core.registry.TypeRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -43,6 +37,13 @@ public class FormSubmissionService {
     private final UniformSpecResources specResources;
     private final ObjectMapper objectMapper;
     private final OptionsProviderRegistry optionsProviders;
+    private final OptionsContext optionsContext;
+    private final OptionLabelSnapshots labelSnapshots;
+
+    /** 明確攜帶成功後才可保存的私有結果，沒有 ThreadLocal／全域暫存。 */
+    public record SubmissionResult(List<String> errors, String optionLabelsJson, Set<String> clearedScalarFields) {
+        public SubmissionResult(List<String> errors, String optionLabelsJson) { this(errors, optionLabelsJson, Set.of()); }
+    }
 
     @Autowired
     public FormSubmissionService(UniformBffService bff, UniformSpecResources specResources,
@@ -51,6 +52,8 @@ public class FormSubmissionService {
         this.specResources = specResources;
         this.objectMapper = objectMapper;
         this.optionsProviders = optionsProviders;
+        this.optionsContext = new OptionsContext(bff, specResources);
+        this.labelSnapshots = new OptionLabelSnapshots(objectMapper);
     }
 
     /** 保留既有純驗證呼叫端；沒有 registry 的實例絕不接受動態來源。 */
@@ -71,6 +74,11 @@ public class FormSubmissionService {
      */
     public List<String> validate(FormDefinition def, Map<String, Object> profile,
                                  Map<String, Object> submitted, Map<String, Object> stored) {
+        return validateWithSnapshots(def, profile, submitted, stored, null).errors();
+    }
+
+    public SubmissionResult validateWithSnapshots(FormDefinition def, Map<String, Object> profile,
+            Map<String, Object> submitted, Map<String, Object> stored, String previousOptionLabelsJson) {
         if (!"fill".equals(profile.get("mode"))) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
                     "提交驗證只接受 mode=fill 的 Access Profile，收到 mode="
@@ -83,42 +91,15 @@ public class FormSubmissionService {
         OptionsProviderRegistry.requireSupported(dsl);
         Map<String, Object> original = new LinkedHashMap<>(submitted);
         Map<String, Object> previous = stored == null ? Map.of() : stored;
-        Map<String, AccessState> initialStates = states(dsl, profile, previous);
-        Set<String> editable = new LinkedHashSet<>();
-        initialStates.forEach((key, state) -> { if (state == AccessState.EDITABLE) editable.add(key); });
-        Map<String, Object> candidate;
-        Map<String, AccessState> finalStates;
-        // 只縮小可寫集合，避免唯讀／隱藏輸入影響條件或服務 context。
-        // 每輪至少移除一個 key，最多欄位數輪結束，不打開初始不可編輯欄位。
-        while (true) {
-            candidate = merge(previous, original, editable);
-            finalStates = states(dsl, profile, candidate);
-            Set<String> noLongerEditable = new LinkedHashSet<>();
-            finalStates.forEach((key, state) -> {
-                if (state != AccessState.EDITABLE) noLongerEditable.add(key);
-            });
-            if (!editable.removeAll(noLongerEditable)) break;
-        }
-        Set<String> sourceFields = new LinkedHashSet<>();
-        sourceKeys(dsl.get("root"), sourceFields);
-        Map<String, Object> validationSubmission = new LinkedHashMap<>(original);
-        for (String key : original.keySet()) {
-            AccessState initial = initialStates.get(key), effective = finalStates.get(key);
-            if (initial == AccessState.HIDDEN || effective == AccessState.HIDDEN) {
-                return List.of(UNKNOWN_FIELD_MESSAGE);
-            }
-            if (sourceFields.contains(key)
-                    && (initial == AccessState.READONLY || effective == AccessState.READONLY)) {
-                // 唯讀只允許原值回傳，不以目前審核人的部門重新裁決歷史選擇。
-                // 此 occurrence 不屬本次寫入：保留 canonical 與原標籤，SDK 不執行 resolve。
-                if (!previous.containsKey(key) || !java.util.Objects.equals(previous.get(key), original.get(key))) {
-                    return List.of("'" + key + "' 此欄位目前不可編輯");
-                }
-                validationSubmission.remove(key);
-            } else if (initial == AccessState.EDITABLE && !editable.contains(key)) {
-                return List.of("'" + key + "' 此欄位目前不可編輯");
-            }
-        }
+        OptionsContext.Prepared prepared = optionsContext.prepare(dsl, profile, original, previous, false);
+        if (!prepared.errors().isEmpty()) return new SubmissionResult(prepared.errors(), null);
+        Map<String, Object> candidate = prepared.candidate();
+        Set<String> editable = prepared.editable();
+        Map<String, Object> validationSubmission = prepared.submission();
+        Map<String, Object> validationStored = new LinkedHashMap<>(previous);
+        for (String key : prepared.clearedScalarFields()) OptionsContext.clearValue(validationStored, key);
+        // DSL／profile 保持原樣：SDK 對已清除且 required 的欄位仍回必填錯誤；
+        // optional 則沒有 occurrence，不呼叫 provider.resolve(null)。
 
         Map<String, Object> input = new LinkedHashMap<>();
         input.put("dsl", dsl);
@@ -130,7 +111,7 @@ public class FormSubmissionService {
         input.put("locale", FormEnvelopeService.LOCALE);
         input.put("contextData", candidate);
         input.put("submittedData", validationSubmission);
-        input.put("storedData", previous);
+        input.put("storedData", validationStored);
         input.put("rowOrigins", new LinkedHashMap<>());
         input.put("fileBindings", new ArrayList<>());
 
@@ -158,32 +139,24 @@ public class FormSubmissionService {
         if (!Boolean.TRUE.equals(result.get("ok"))) throw refused(def);
         if (!(result.get("errors") instanceof List<?> items)) throw refused(def);
         List<String> errors = messages(items, dsl, original);
-        if (!errors.isEmpty()) return errors;
+        if (!errors.isEmpty()) return new SubmissionResult(errors, null);
+        String snapshot = labelSnapshots.merge(previousOptionLabelsJson, dsl, candidate, original, editable, privateLabels);
         attachLabels(candidate, previous, original, editable, dsl, privateLabels);
         submitted.clear();
         submitted.putAll(candidate);
-        return List.of();
+        return new SubmissionResult(List.of(), snapshot, prepared.clearedScalarFields());
     }
 
-    private Map<String, AccessState> states(Map<String, Object> dsl, Map<String, Object> profile,
-                                           Map<String, Object> data) {
-        TypeRegistry registry = new TypeRegistry();
-        for (Map<String, Object> manifest : specResources.manifests()) {
-            if (!registry.register(ManifestReader.read(manifest)).ok()) {
-                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "表單欄位型別註冊失敗");
-            }
-        }
-        // 來源無 params/dependsOn，沒有額外 provider hidden closure；
-        // 條件採 SDK 相同入口，不從提交值推論 fieldTypes。
-        return AccessCalculator.calculate(UniformDocumentReader.read(dsl), registry,
-                AccessProfile.fromJson(profile), data, Map.of()).states();
-    }
-
-    private static Map<String, Object> merge(Map<String, Object> stored, Map<String, Object> submitted,
-                                              Set<String> editable) {
-        Map<String, Object> candidate = new LinkedHashMap<>(stored);
-        for (String key : editable) if (submitted.containsKey(key)) candidate.put(key, submitted.get(key));
-        return candidate;
+    /** 選項讀取也必須先驗證原始輸入權限；不能以裁剪後的公開資料冒充驗證。 */
+    public Map<String, Object> optionsCandidate(FormDefinition def, Map<String, Object> profile,
+            Map<String, Object> submitted, Map<String, Object> stored) {
+        Map<String, Object> dsl = parseSchema(def);
+        OptionsProviderRegistry.requireSupported(dsl);
+        OptionsContext.Prepared prepared = optionsContext.prepare(dsl, profile,
+                submitted == null ? Map.of() : submitted, stored == null ? Map.of() : stored, true);
+        if (!prepared.errors().isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                String.join("；", prepared.errors()));
+        return prepared.candidate();
     }
 
     /** 只揭露固定本人部門來源的頂層 scalar label，不能直接公開私有服務結果。 */
@@ -198,7 +171,12 @@ public class FormSubmissionService {
             });
         }
         Set<String> sources = new LinkedHashSet<>();
-        sourceKeys(dsl.get("root"), sources);
+        OptionsProviderRegistry.fields(dsl).forEach((key, field) -> {
+            if (field.containsKey("optionsSource")) {
+                if ("checkbox".equals(field.get("type"))) labels.remove(key);
+                else sources.add(key);
+            }
+        });
         for (String key : sources) if (editable.contains(key) && submitted.containsKey(key)) labels.remove(key);
         if (rawLabels instanceof List<?> occurrences) for (Object raw : occurrences) {
             if (!(raw instanceof Map<?, ?> occurrence) || !(occurrence.get("path") instanceof String path)
@@ -212,13 +190,6 @@ public class FormSubmissionService {
         }
         if (!labels.isEmpty()) candidate.put("$labels", labels);
         else candidate.remove("$labels");
-    }
-
-    private static void sourceKeys(Object raw, Set<String> keys) {
-        if (raw instanceof List<?> nodes) { for (Object node : nodes) sourceKeys(node, keys); return; }
-        if (!(raw instanceof Map<?, ?> node)) return;
-        if (node.containsKey("optionsSource") && node.get("key") instanceof String key) keys.add(key);
-        sourceKeys(node.get("children"), keys);
     }
 
     private static Map<String, Object> copyMap(Map<?, ?> raw) {

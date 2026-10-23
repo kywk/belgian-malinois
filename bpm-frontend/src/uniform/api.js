@@ -29,9 +29,9 @@ export const fetchProcessDefinitions = (params) =>
 export const fetchOptionProviders = (signal) =>
   http.get('/api/forms/option-providers', { signal }).then(r => r.data)
 
-export const fetchStartOptions = (key, fieldId, applicationContext, signal) =>
+export const fetchStartOptions = (key, fieldId, applicationContext, data, signal) =>
   http.post(`/api/process-definitions/${encodeURIComponent(key)}/start-form/options`,
-    { fieldId, applicationContext }, { signal }).then(r => r.data)
+    { fieldId, applicationContext, data }, { signal }).then(r => r.data)
 
-export const fetchTaskOptions = (taskId, fieldId, signal) =>
-  http.post(`/api/tasks/${encodeURIComponent(taskId)}/form/options`, { fieldId }, { signal }).then(r => r.data)
+export const fetchTaskOptions = (taskId, fieldId, data, signal) =>
+  http.post(`/api/tasks/${encodeURIComponent(taskId)}/form/options`, { fieldId, data }, { signal }).then(r => r.data)

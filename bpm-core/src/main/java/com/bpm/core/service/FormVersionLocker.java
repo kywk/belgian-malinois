@@ -29,8 +29,6 @@ import java.util.Set;
 public class FormVersionLocker {
 
     public static final String VERSIONS_VARIABLE = "_formVersions";
-    public static final String POLICY_VARIABLE = "_formVersionPolicy";
-    public static final String APPLICATION_POLICY = "application-v1";
 
     private static final Logger log = LoggerFactory.getLogger(FormVersionLocker.class);
 
@@ -88,7 +86,7 @@ public class FormVersionLocker {
     }
 
     /**
-     * 技術／外部入口的既有相容路徑；申請入口必須改用啟動前的 prepareVersions。
+     * 技術／外部入口的鎖版接點；申請入口使用啟動前的 prepareVersions。
      * After process start, resolve all formKey versions and store as process variable.
      */
     public void lockVersions(String processInstanceId, String processDefinitionId) {
@@ -127,7 +125,7 @@ public class FormVersionLocker {
         // 該案件此後永遠走「最新版表單」，版本鎖定靜默失效且無任何錯誤訊息。
         if (formKeys.size() > versions.size()) {
             log.warn("流程實例 {} 的表單版本鎖定不完整：BPMN 中有 {} 個 formKey，"
-                            + "但只解析到 {} 個版本。未鎖定的表單將在案件進行中隨改版而變動。"
+                            + "但只解析到 {} 個版本。未鎖定的表單將拒絕讀取或送件。"
                             + "請確認這些 formKey 都有已發布版本。",
                     processInstanceId, formKeys.size(), versions.size());
         }
