@@ -102,6 +102,12 @@ services:
       # docker 提供容器內的 host 覆蓋；prod 疊上 mock-enabled=false
       # 與「org/perm URL 必須由環境提供」。
       SPRING_PROFILES_ACTIVE: docker,prod
+      # Options 專用 ODS：正式環境預設停用，不繼承開發 mock 或應用 DB 帳密。
+      BPM_UNIFORM_OPTIONS_SOURCE: "${BPM_UNIFORM_OPTIONS_SOURCE:-disabled}"
+      BPM_UNIFORM_OPTIONS_ODS_PRINCIPAL_ID_TYPE: "${BPM_UNIFORM_OPTIONS_ODS_PRINCIPAL_ID_TYPE:-}"
+      BPM_UNIFORM_OPTIONS_ODS_URL: "${BPM_UNIFORM_OPTIONS_ODS_URL:-}"
+      BPM_UNIFORM_OPTIONS_ODS_USERNAME: "${BPM_UNIFORM_OPTIONS_ODS_USERNAME:-}"
+      BPM_UNIFORM_OPTIONS_ODS_PASSWORD: "${BPM_UNIFORM_OPTIONS_ODS_PASSWORD:-}"
       # 真實組織／權限系統的位置。未設定會讓啟動失敗
       # （ExternalSystemUrlValidator）—— 這是刻意的：設錯的授權來源
       # 不該啟動成功，它能提供服務就代表它正在做錯誤的授權決定。

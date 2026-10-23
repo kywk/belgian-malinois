@@ -150,3 +150,37 @@
 - 前端最終 `npm test` 25 檔、259/259 通過；正式建置通過，仍有既有大 bundle 警告。查無選項時，呈現 schema 使用僅供 SDK 編譯的 placeholder，widget 不顯示此值；宿主另依實際空清單拒絕所有非空答案，required 保持 SDK 驗證，canonical 與 API 不含 placeholder。
 - 瀏覽器通過：相依文字篩選、動態多選、原值失效時阻擋送件、取消多選／清除 radio 與 select 後送件成功；設計器參數草稿阻擋儲存／發布、套用後發布第 4 版成功。
 - 獨立 Standards／Spec 審查已完成；發現的 scalar 清除缺口已修正覆查，畫面驗收發現的空 enum 編譯問題亦修正並實測通過。未新增測試案例，未 push；原有腳本及 submodule mode 變更未納入本批。
+
+
+## 2026-10-24 第三批：Options 正式 ODS 來源接線
+
+`org.myDepartmentMembers` 改經 Options 專用 `DepartmentMembersSource`。開發／測試保留既有 Org REST fixture；正式來源直接讀 MASA 2.x ODS 共享 MSSQL，對 `dbo.StaffEmployee.UserId` 或 `dbo.AgentEmployee.AgCode` 查 caller，並以同一 SQL statement 以 `BIN2` 定序及轉為 NVARCHAR 後的 `DATALENGTH` 精確比對 ParentOrgCode 取得同部門成員，不包含子組織。沒有改動主管／代理的 `OrgService`，也沒有新增組織 REST 端點。
+
+### 啟用設定
+
+| 環境變數 | 用途 |
+|---|---|
+| `BPM_UNIFORM_OPTIONS_SOURCE` | `mock`／`ods`／`disabled`；一般開發預設 mock，`prod` profile 預設 disabled，prod 禁用 mock |
+| `BPM_UNIFORM_OPTIONS_ODS_PRINCIPAL_ID_TYPE` | 必填 `staff-user-id`（內勤 UserId）或 `agent-code`（外勤 AgCode） |
+| `BPM_UNIFORM_OPTIONS_ODS_URL` | 專用 MSSQL JDBC URL；須由部署指定 ODS 資料庫及正式 TLS 設定 |
+| `BPM_UNIFORM_OPTIONS_ODS_USERNAME` | 僅具 ODS 查詢權限的帳號 |
+| `BPM_UNIFORM_OPTIONS_ODS_PASSWORD` | 原始 secret；此接線不做 Base64 猜測解碼，也不使用應用資料庫帳密作預設 |
+
+`docker-compose.prod.yml` 已顯式透傳上述五個變數；容器環境預設來源 disabled，其餘安全空字串，部署可透過 shell／Compose .env 注入。ODS 模式缺少必要設定或 principal 命名空間不合法時拒絕啟動；disabled、來源失聯、查無 caller、caller 無部門、員編無法精確對上或資料不完整一律由既有 Registry 回 503。來源不會自動退回 mock。dev/test 的 mock 要求既有 `bpm.external.mock-enabled=true`。
+
+JDBC 使用 Options 私有 Hikari pool（最多 3 條、等待連線 3 秒、SQL query timeout 3 秒、socket timeout 5 秒），僅讀查詢。pool 由來源持有，隨 Spring bean 關閉，不宣告新的 DataSource bean、不取用主／稽核／表單 DataSource。SQL 只投影必要 caller 身分／部門及成員 ID／姓名；對外仍只回 value／label。SQL 在套用 TOP 501 前精確比對 caller ID 與部門（區分大小寫、尾端空白），Java 再逐筆要求來源 caller ID／部門與成員部門完全相等，不接受 SQL 定序造成的近似部門。最多讀 501 筆，超過原有 500 上限回 503；query／excludeUser 與 resolve 要求值的篩選仍在宿主執行，上限在篩選之前套用。list 與 resolve 每次重新查詢，不快取。歷史唯讀標籤快照邏輯維持原樣。
+
+### 正式啟用前提與限制
+
+- Greyhound 的已認證 caller 是 SecurityContext principal（JWT 預設 `sub`）；Staff 的 JWT 文件採 `nameid`。部署必須先保證該 principal **就是**所選命名空間的權威員編。此接線不讀 client 自報員編、不猜別名、大小寫轉換、BPID 或 `sub → nameid` mapping。單一部署選一種命名空間，尚不支援混合內外勤登入或跨表合併成員。
+- 外勤採精確 `AgentEmployee.AgCode`，不 fallback 內勤表。既有本機 ODS 快照只保證內勤；未建立外勤表／查無 caller／來源不可用會回 503，不代表外勤正式資料已驗收。
+- MASA 2.x 兩表未提供可用的在職／停用狀態；本功能反映當次查詢的 ODS **同步快照**。正式部署須另行保證 ODS 同步與資料新鮮度，無法宣稱即時排除離職或停用人員。沒有權威狀態前不猜 `ContractType` 或更新時間為在職條件。
+- 已核對 Forms pinned `modules/masa` commit `5c2e23f`：`com.nanshan.masa:common:2.0.0-SNAPSHOT`、Java 21、Boot 4.1.1，且有 target jar，但本機 Maven cache 尚未安裝該 artifact。common 會自動載入 logging／SAP／Quartz／Redis／ODS／AuthZ；本批沿用已存在的 JDBC 與 MSSQL driver，直接使用相同表契約，避免引入整包 SDK、同步、SAP 或改變 HTTP 記錄行為，無需安裝 MASA artifact。
+- 本批沒有新增自動化測試、DSL／資料 migration，也未更動 submodule pin。編譯／既有測試及真實來源驗證結果以本批交付紀錄為準；編譯通過不等於正式 IdP 或真 ODS 業務驗收。
+
+### 本批驗收
+
+- `mvn -f bpm-core/pom.xml -DskipTests compile` 通過；既有 `OrgRestClientContractTest,FormOptionsServiceTest` 36／36 通過；正式 Compose 預設 disabled 與五個環境變數透傳檢查通過；`git diff --check` 通過。
+- 隔離 MSSQL 假資料庫實測：內勤／外勤各自只讀同一 `ParentOrgCode`；大小寫及尾端空白相似部門未混入；`query`／`excludeUser` 只縮限；未知員編、來源不可用及 501 人回 503；resolve 在成員調部門後重讀並移除舊選項。未改寫共用 ODS。
+- 以隔離 ODS 接線啟動 Greyhound，重跑既有 Options 與相依多選端到端腳本：清冊、載入、非法值／偽造標籤拒絕、送件與重讀、標籤快照、跨部門唯讀、相依參數及清除值流程皆通過。獨立 reviewer 覆查最終七檔，無未解 P0～P3 問題。
+- 本機共用 ODS 的 `StaffEmployee` 目前查得 0 筆；正式 IdP principal 對應、實際人事資料、外勤資料及同步新鮮度仍是部署前驗收，不能以隔離假資料的結果代替。

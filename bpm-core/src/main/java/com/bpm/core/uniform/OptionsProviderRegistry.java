@@ -1,6 +1,5 @@
 package com.bpm.core.uniform;
 
-import com.bpm.core.client.OrgRestClient;
 import com.bpm.core.form.model.FormDefinition;
 import com.nanshan.uniform.core.envelope.ServiceValidation;
 import org.springframework.http.HttpStatus;
@@ -22,13 +21,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class OptionsProviderRegistry {
     public static final String PROVIDER = "org.myDepartmentMembers";
     public static final String SNAPSHOT = "greyhound-options-v2";
-    private static final int MAX_MEMBERS = 500;
     private static final Map<String, Integer> PARAM_LIMITS = Map.of("query", 100, "excludeUser", 255);
     private static final Pattern DATA_TOKEN = Pattern.compile(
             "\\{\\{data\\.([A-Za-z][A-Za-z0-9_]*)}}|\\{data\\.([A-Za-z][A-Za-z0-9_]*)}");
-    private final OrgRestClient org;
+    private final DepartmentMembersSource membersSource;
 
-    public OptionsProviderRegistry(OrgRestClient org) { this.org = org; }
+    public OptionsProviderRegistry(DepartmentMembersSource membersSource) { this.membersSource = membersSource; }
 
     public List<Map<String, Object>> catalog() {
         return List.of(Map.of("provider", PROVIDER, "label", "本人部門成員",
@@ -195,21 +193,17 @@ public class OptionsProviderRegistry {
         String query = params.get("query") instanceof String text ? text.toLowerCase(Locale.ROOT) : "";
         String excluded = params.get("excludeUser") instanceof String text ? text : "";
         try {
-            String department = org.getDepartment(caller);
-            if (department == null || department.isBlank()) throw new IllegalStateException();
-            List<String> members = org.getDeptMembers(department);
-            if (members == null || members.size() > MAX_MEMBERS) throw new IllegalStateException();
+            List<DepartmentMembersSource.Member> members = membersSource.findMembers(caller);
+            if (members == null || members.size() > DepartmentMembersSource.MAX_MEMBERS) throw new IllegalStateException();
             List<Map<String, Object>> options = new ArrayList<>();
             Set<String> seen = new LinkedHashSet<>();
-            for (String id : members) {
-                if (id == null || id.isBlank()) throw new IllegalStateException();
+            for (var member : members) {
+                if (member == null || member.id() == null || member.id().isBlank()
+                        || member.name() == null || member.name().isBlank()) throw new IllegalStateException();
+                String id = member.id();
+                String name = member.name();
                 if (!seen.add(id) || id.equals(excluded)) continue;
                 if (requested != null && !requested.contains(id)) continue;
-                Map<String, Object> user = org.getUser(id);
-                if (user == null || !id.equals(user.get("userId"))
-                        || !(user.get("name") instanceof String name) || name.isBlank()) {
-                    throw new IllegalStateException();
-                }
                 if (!query.isEmpty() && !id.toLowerCase(Locale.ROOT).contains(query)
                         && !name.toLowerCase(Locale.ROOT).contains(query)) continue;
                 options.add(Map.of("value", id, "label", name));

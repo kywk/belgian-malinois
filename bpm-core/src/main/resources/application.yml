@@ -178,6 +178,15 @@ bpmn:
     # 而不是靜默拿到一個不屬於這個環境的值。
 
 bpm:
+  uniform:
+    options:
+      source: ${BPM_UNIFORM_OPTIONS_SOURCE:mock}
+      ods:
+        # 認證 principal 必須就是指定命名空間的權威員編；不提供別名轉換。
+        principal-id-type: ${BPM_UNIFORM_OPTIONS_ODS_PRINCIPAL_ID_TYPE:}
+        url: ${BPM_UNIFORM_OPTIONS_ODS_URL:}
+        username: ${BPM_UNIFORM_OPTIONS_ODS_USERNAME:}
+        password: ${BPM_UNIFORM_OPTIONS_ODS_PASSWORD:}
   # 三個 DataSource 共用的連線來源（security-audit P2-3）。
   # 三個 DB 在同一個 MSSQL 實例上、用同一個帳號，所以收斂成一組屬性；
   # prod 只要注入 BPM_DATASOURCE_PASSWORD 一個環境變數就全部覆蓋到，
@@ -375,6 +384,10 @@ spring:
       on-profile: prod
 
 bpm:
+  uniform:
+    options:
+      # 正式環境未明確啟用 ODS 時，動態來源回 503；禁止使用 mock。
+      source: ${BPM_UNIFORM_OPTIONS_SOURCE:disabled}
   security:
     jwt:
       # prod 不可有 dev 密鑰（JwtSecurityValidator 會拒絕啟動）。
