@@ -1,6 +1,6 @@
 # Greyhound／UniForm 申請流程整合檢視
 
-狀態：申請主表與鎖版已交付；OptionsProvider 第一批已實作，驗收證據與範圍見文末。
+狀態：申請主表與鎖版、OptionsProvider 第一至三批已交付；正式 IdP／ODS 真資料仍待驗收。驗收證據與範圍見文末，接手請讀[最新交接](../handoff/2026-10-24-uniform-p5-ods-handoff.md)。
 
 ## 需求與已確認決策
 

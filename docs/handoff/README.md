@@ -1,10 +1,9 @@
 # docs/handoff — 交接文件索引
 
-**最後更新**：2026-10-24（#47 動態指派設計器、R-16 README 與本機環境驗證）
-**最新交接**：[`2026-10-24-dynamic-assignee-handoff.md`](2026-10-24-dynamic-assignee-handoff.md)
-**下一批工作 prompt**：`2026-10-13-next-agent-prompt.md`
+**最後更新**：2026-10-24（UniForm P5 OptionsProvider 正式 ODS 來源接線）
+**最新交接／下一個對話 prompt**：[`2026-10-24-uniform-p5-ods-handoff.md`](2026-10-24-uniform-p5-ods-handoff.md)
 
-**P5 整合修訂（2026-10-24）**：[申請流程與最新 UniForm 整合檢視](../plan/2026-10-24-uniform-application-integration.md)。使用者已確認「流程不必重發，新申請使用最新已發布表單，既有案件維持原版」。舊 P5 prompt 與本檢視衝突時以本檢視為準；目前僅完成規格與程式查核，尚未實作 OptionsProvider。
+**P5 整合修訂（2026-10-24）**：[申請流程與最新 UniForm 整合檢視](../plan/2026-10-24-uniform-application-integration.md)。使用者已確認「流程不必重發，新申請使用最新已發布表單，既有案件維持原版」。主表綁定與 OptionsProvider 三批均已實作；正式 IdP／ODS 真資料仍待驗收。舊 P5 prompt 與本檢視衝突時以本檢視為準。
 
 ---
 
@@ -14,15 +13,15 @@
 |---|---|
 | 後端 | Spring Boot **4.1.1** + Flowable **8.0.0** + Jackson **3** + JGit **7.8** + **uni-form SDK**（`vendor/uni-form` pin `89708ef`；uniform-core／jackson3／boot4-starter） |
 | 前端 | Vue 3.4 + Vite 5 + Element Plus + **UfRenderer／UfDesigner**（表單已全面 uni-form） |
-| 測試 | **2026-10-24 重驗**：後端 **1677**（`mvn verify`）、前端 **259**（Vitest）＋build、`acceptance-test.sh` **PASS 7 / FAIL 0**；uni-form E2E **13/13** 是 2026-10-13 歷史結果，本輪未重跑 |
-| `main` | uni-form 重構 merge `beaffb4` 已於 2026-10-13 推送；2026-10-24 新增動態指派設計器與 README 僅本機提交，未 push |
+| 測試 | P5 第二批：後端 **1677**、前端 **259**＋build、既有 acceptance **7/7**；第三批 ODS 接線：後端定向 **36/36** 與隔離資料 API 驗收，**未用正式資料驗收**。uni-form E2E **13/13** 是 2026-10-13 歷史結果 |
+| `main` | `fa9a0f5` 為 P5 ODS 接線；相較 `github/main` 有 7 個本機 commit，尚未 push。本交接文件 commit 後請以實際 HEAD 為準 |
 | dev DB | core schema **v9**、Flowable schema **8.0.0.0**（不可逆）；audit 鏈 broken=19／unverifiable=123 為歷史債 |
 | dev 環境 | **localenv-first**：`bash ~/nanshan/scripts/localenv.sh greyhound ready`（:18110）；`scripts/localdev.sh`（偵測不到 localenv 才走 compose fallback） |
 | 功能 backlog | **97 項：✅ 97、🟡 0、⬜ 0**；uni-form P5 後續見 §3.F |
 | remediation backlog | 開放 **~5.5 人日**（見 §3.B；R-16、R-21～R-25 已完成；R-08 T1 ✅、T2–T5 剩 ~2） |
 
-**閱讀順序**：① 最新交接（2026-10-24）→ ② 本 README 的「未完成總表」→ ③ `2026-10-13-next-agent-prompt.md`（#47／R-16 已完成）→
-④ 需要時回讀對應輪次 → ⑤ 環境陷阱總表（`round4`＋`round6/13/14` 增補，動手前必讀）。
+**閱讀順序**：① 最新 P5 交接與 prompt → ② [整合紀錄](../plan/2026-10-24-uniform-application-integration.md) → ③ 本 README 的「未完成總表」→
+④ 需要時回讀對應輪次 → ⑤ 環境陷阱總表（`round4`＋`round6/13/14` 增補，動手前必讀）。`2026-10-13-next-agent-prompt.md` 為歷史計畫，不代表本輪現況。
 
 ---
 
@@ -30,6 +29,7 @@
 
 | 檔案 | 內容 |
 |---|---|
+| `2026-10-24-uniform-p5-ods-handoff.md` | **最新**：P5 OptionsProvider ODS 接線狀態、驗收邊界與下個對話 prompt |
 | `2026-10-24-dynamic-assignee-handoff.md` | #47 動態指派設計器、R-16 README、本機環境與驗證紀錄 |
 | `2026-09-29-agent-handoff.md` | 重構後 agent 交接（早期） |
 | `2026-09-29-authorization-hardening-handoff.md` | 認證授權強化（R-01／R-18 等） |
@@ -139,7 +139,7 @@
 
 | 項目 | 估時 | 說明 |
 |---|---|---|
-| B1 動態選項 OptionsProvider | 1.5d | `optionsSource`＋`host:` provider；`GET /api/forms/options` 代理退場；設計器開放設定 |
+| B1 動態選項 OptionsProvider | 已交付三批 | 來源設定、載入、後端 resolve、相依參數、動態多選及 ODS 接線已完成；正式 IdP／ODS 真資料待驗收。舊 URL 代理端點尚未移除 |
 | B2 file 欄位（FileVault） | 2d | upload adapter＋`FileStore` verify／bind；附件生命週期（purge） |
 | B3 richtext 欄位 | 1.5d | `uniform-tiptap`＋後端 `RichTextService` 重驗；palette 開放 |
 | B4 `bpm:` pack（orgSelector 等） | 2d | manifest＋Vue widget＋Java hook（資料走 MockOrg） |
