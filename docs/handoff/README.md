@@ -1,7 +1,7 @@
 # docs/handoff — 交接文件索引
 
-**最後更新**：2026-10-13（uni-form 表單重構：DSL v1／Envelope／validateV1；E2E 13/13）
-**最新交接**：`2026-10-13-uniform-form-refactor-handoff.md`
+**最後更新**：2026-10-24（#47 動態指派設計器、R-16 README 與本機環境驗證）
+**最新交接**：[`2026-10-24-dynamic-assignee-handoff.md`](2026-10-24-dynamic-assignee-handoff.md)
 **下一批工作 prompt**：`2026-10-13-next-agent-prompt.md`
 
 ---
@@ -12,14 +12,14 @@
 |---|---|
 | 後端 | Spring Boot **4.1.1** + Flowable **8.0.0** + Jackson **3** + JGit **7.8** + **uni-form SDK**（`vendor/uni-form` pin `89708ef`；uniform-core／jackson3／boot4-starter） |
 | 前端 | Vue 3.4 + Vite 5 + Element Plus + **UfRenderer／UfDesigner**（表單已全面 uni-form） |
-| 測試 | 後端 **1677**（`mvn verify`）、前端 **259**（Vitest）、`acceptance-test.sh` **PASS 7 / FAIL 0**、E2E（localenv）**13/13** |
-| `main` | merge `beaffb4`（2026-10-13 合併 `uni-form`：uni-form 表單重構）；`nsl/main` 已同步（含後續 docs 提交） |
+| 測試 | **2026-10-24 重驗**：後端 **1677**（`mvn verify`）、前端 **259**（Vitest）＋build、`acceptance-test.sh` **PASS 7 / FAIL 0**；uni-form E2E **13/13** 是 2026-10-13 歷史結果，本輪未重跑 |
+| `main` | uni-form 重構 merge `beaffb4` 已於 2026-10-13 推送；2026-10-24 新增動態指派設計器與 README 僅本機提交，未 push |
 | dev DB | core schema **v9**、Flowable schema **8.0.0.0**（不可逆）；audit 鏈 broken=19／unverifiable=123 為歷史債 |
 | dev 環境 | **localenv-first**：`bash ~/nanshan/scripts/localenv.sh greyhound ready`（:18110）；`scripts/localdev.sh`（偵測不到 localenv 才走 compose fallback） |
 | 功能 backlog | **97 項：✅ 97、🟡 0、⬜ 0**；uni-form P5 後續見 §3.F |
-| remediation backlog | 開放 **~6 人日**（見 §3.B；R-21～R-25 已完成；R-08 T1 ✅、T2–T5 剩 ~2） |
+| remediation backlog | 開放 **~5.5 人日**（見 §3.B；R-16、R-21～R-25 已完成；R-08 T1 ✅、T2–T5 剩 ~2） |
 
-**閱讀順序**：① 最新 round（22）→ ② 本 README 的「未完成總表」→ ③ `2026-10-04-next-agent-prompt.md` →
+**閱讀順序**：① 最新交接（2026-10-24）→ ② 本 README 的「未完成總表」→ ③ `2026-10-13-next-agent-prompt.md`（#47／R-16 已完成）→
 ④ 需要時回讀對應輪次 → ⑤ 環境陷阱總表（`round4`＋`round6/13/14` 增補，動手前必讀）。
 
 ---
@@ -28,6 +28,7 @@
 
 | 檔案 | 內容 |
 |---|---|
+| `2026-10-24-dynamic-assignee-handoff.md` | #47 動態指派設計器、R-16 README、本機環境與驗證紀錄 |
 | `2026-09-29-agent-handoff.md` | 重構後 agent 交接（早期） |
 | `2026-09-29-authorization-hardening-handoff.md` | 認證授權強化（R-01／R-18 等） |
 | `2026-09-29-pm-agent-kickoff.md` | PM agent 啟動 |
@@ -88,7 +89,7 @@
 | **部署前檢查清單** | 見 `round21 §4`：prod secrets（含 `ORG_AUTH_TOKEN`／`PERM_AUTH_TOKEN`）、Teams webhook、`BPM_BPMN_GIT_ENABLED`、backfill、表單 schema 修復、權限碼指派等 |
 | **部署前 DB／secrets 盤點** | `bpm_external_system` 無 seed SQL：撈 `allowedProcessKeys`（fail-closed 恐中斷）與 `ipWhitelist`（nginx IP 語意翻轉）；prod 必須注入 `API_KEY_HMAC_SECRET`（未設即啟動失敗）。見 round22 §5 |
 
-### B. Remediation backlog 開放項（~5 人日；見 `docs/plan/2026-09-28-remediation-backlog.md`）
+### B. Remediation backlog 開放項（~5.5 人日；見 `docs/plan/2026-09-28-remediation-backlog.md`）
 
 | 編號 | 項目 | 人日 | 備註 |
 |---|---|---|---|
@@ -96,7 +97,8 @@
 | R-07 | CI/CD 收斂成單軌 | 2 | 平台已定：**保留 GitLab CI、刪 GitHub Actions**；deploy job 仍是 `echo` |
 | R-08 | BPMN-as-code（選項 A） | 2（T2–T5） | **T1 ✅（`d921742`）**；設計＝ADR-002（單一 writer／classpath 退場）；CI 認證拍板：閘道過渡＋CI 專用權限碼（O2 併入 T2）；T2 待 R-07 runner 前提 |
 | R-15 | Spotless＋ESLint/Prettier＋`.editorconfig` | 1 | 目前皆無；格式化會產生巨大 diff，建議獨立 commit 離峰做 |
-| R-16 | 根目錄 `README.md` | 0.5 | 目前不存在 |
+
+> ✅ **2026-10-24 完成**：R-16 根目錄 README；環境與驗證入口已補齊。
 
 > ✅ **2026-10-05 完成**：R-21／R-22（B1）、R-24／R-25（B2）——詳見 `2026-10-05-round22-handoff.md`。
 
@@ -104,7 +106,7 @@
 
 | 項目 | 說明 | 出處 |
 |---|---|---|
-| #47 | 前端設計器不產生 `dynamicAssignee` 運算式（需手改 BPMN） | round14 |
+| #47 | **2026-10-24 已完成**：設計器支援三種 `dynamicAssignee` 設定，保留原主管與未知運算式 | 10-24 handoff |
 | #45 | ESign `resultVariable` 是原字串（供應商 requestId 解析未做） | round14 |
 | #28 | spec §11.4 的 `headers` 自訂未做 | round17 |
 | #22 | 外部 worker：UI 無 `external_worker` 勾選；complete／fail／unacquire 不查 topic | round13 |
