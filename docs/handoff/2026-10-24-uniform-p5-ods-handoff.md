@@ -2,6 +2,7 @@
 
 ## 現況與決策
 
+- 後續 SDK 升版已依使用者要求更新至本機上游 `67f6047`；版本、相容性與驗證結果見[SDK pin 更新](../plan/2026-10-24-uniform-application-integration.md#2026-10-24-sdk-pin-更新)。下列未升版敘述保留為本交接建立時的快照；正式 ODS 驗收仍待完成。
 - Greyhound `main` 目前位於 `fa9a0f5`（`feat(forms): source dynamic options from scoped ODS data`），比 `github/main` 超前 7 個 commit，**尚未 push**。本交接另以文件 commit 收尾；接手時以實際 `HEAD` 為準。
 - 申請流程必須綁定主申請表；新申請使用該表單最新已發布版，流程不必重發；案件鎖定送件時驗證的版本，後續審核與補件沿用。申請主表、送件驗證與鎖版已交付（`a47bc8b`）。
 - OptionsProvider 已分三批交付：基本動態選項（`de641a6`）、相依參數與動態多選（`126c4f3`）、正式 ODS 來源接線（`fa9a0f5`）。開發期不保留 DSL／資料 migration；測試資料可刪除重建。沒有新增自動化測試，也沒有更新 Greyhound 的 UniForm SDK pin（`89708ef`）。

@@ -184,3 +184,14 @@ JDBC 使用 Options 私有 Hikari pool（最多 3 條、等待連線 3 秒、SQL
 - 隔離 MSSQL 假資料庫實測：內勤／外勤各自只讀同一 `ParentOrgCode`；大小寫及尾端空白相似部門未混入；`query`／`excludeUser` 只縮限；未知員編、來源不可用及 501 人回 503；resolve 在成員調部門後重讀並移除舊選項。未改寫共用 ODS。
 - 以隔離 ODS 接線啟動 Greyhound，重跑既有 Options 與相依多選端到端腳本：清冊、載入、非法值／偽造標籤拒絕、送件與重讀、標籤快照、跨部門唯讀、相依參數及清除值流程皆通過。獨立 reviewer 覆查最終七檔，無未解 P0～P3 問題。
 - 本機共用 ODS 的 `StaffEmployee` 目前查得 0 筆；正式 IdP principal 對應、實際人事資料、外勤資料及同步新鮮度仍是部署前驗收，不能以隔離假資料的結果代替。
+
+## 2026-10-24 SDK pin 更新
+
+- 依使用者要求，`vendor/uni-form` 由 `89708ef` 更新至本機上游 `main` 的 `67f6047586e4b556634aa59b0d5eaa774fa34723`。已向既有本機 origin fetch 並核對 SHA；公司 Git 的 SSH 網路不可達，尚無法確認公司遠端是否另有較新提交。
+- 新版 Vue 相依的 `@nanshan/uniform-theme` 改以同版本機 tarball 與 override 引入；五個 SDK tarball 的 lockfile SHA-512 均已核對，其他 npm 相依版本未變。
+- SDK npm 打包與 Java 指定 reactor `clean install -DskipTests` 通過。舊 target 曾殘留已刪除 spec 資源；乾淨建置後 jar 內容檢查通過。Greyhound 亦以 `clean package -DskipTests` 重建，四個內嵌 SDK jar 的 SHA-256 與本輪 SDK 產物相同。
+- 既有前端測試 25 檔、259 案例與 `npm run build` 通過；初跑的 6 個失敗皆為 JSDOM 缺少原生 dialog API，僅在既有 FormEditor 測試檔補齊 API，未新增案例。既有大型 bundle 警告仍在。
+- 既有 `FormDefinitionValidatorTest,FormEnvelopeServiceTest,FormEnvelopeControllerTest,FormSchemaValidationTest` 共 33／33 通過；未執行全量 `mvn verify` 或 SDK 全量 conformance。
+- 唯讀盤點本機 12 份表單定義，沒有 `select.multiple=true` 節點；未做 DSL／資料 migration。主工作區四支 scripts 權限差異保留；子模組原有六支腳本的差異已封存，仍存在的兩支保留原權限，其餘四支依上游刪除。
+- 重啟 localenv 前後端後，動態 checkbox 預覽與來源清冊回 200、缺 DSL key 與多選下拉回 400；後端 health=UP、前端 HTTP=200。預覽檢查沒有儲存表單，也未用開發身分宣稱正式 IdP／ODS 驗收。
+- 本節僅記錄 SDK 升版相容性；ODS 真實資料、principal 權威對應與正式撤權驗收仍未完成。

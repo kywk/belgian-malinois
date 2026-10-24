@@ -4,6 +4,14 @@ import ElementPlus from 'element-plus'
 import { UfDesigner, UfRenderer } from '@nanshan/uniform-vue'
 import { installUniformPlugin } from '../uniform/setup.js'
 
+// JSDOM 尚未提供新版 UfDesigner 使用的原生 dialog 方法。
+HTMLDialogElement.prototype.showModal ??= function () { this.open = true }
+HTMLDialogElement.prototype.close ??= function () {
+  if (!this.open) return
+  this.open = false
+  this.dispatchEvent(new Event('close'))
+}
+
 /**
  * FormEditor 的 DSL 存檔／預覽契約。
  *

@@ -15,6 +15,7 @@
     "@nanshan/uniform-core": "file:../vendor/uni-form/dist/npm/nanshan-uniform-core-0.1.0.tgz",
     "@nanshan/uniform-element-plus": "file:../vendor/uni-form/dist/npm/nanshan-uniform-element-plus-0.1.0.tgz",
     "@nanshan/uniform-spec": "file:../vendor/uni-form/dist/npm/nanshan-uniform-spec-0.1.0.tgz",
+    "@nanshan/uniform-theme": "file:../vendor/uni-form/dist/npm/nanshan-uniform-theme-0.1.0.tgz",
     "@nanshan/uniform-vue": "file:../vendor/uni-form/dist/npm/nanshan-uniform-vue-0.1.0.tgz",
     "axios": "1.7.2",
     "bpmn-js": "^17.11.1",
@@ -35,6 +36,7 @@
   },
   "overrides": {
     "@nanshan/uniform-core": "$@nanshan/uniform-core",
+    "@nanshan/uniform-theme": "$@nanshan/uniform-theme",
     "@nanshan/uniform-vue": "$@nanshan/uniform-vue"
   },
   "volta": {

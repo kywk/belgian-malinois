@@ -116,5 +116,5 @@ Nginx 路由（`infra/nginx/nginx.conf`）：`/api/` → bpm-core，`/` → SPA�
     - `schema_json` 存 uni-form DSL v1（`$uniform:"1.0"`）；舊扁平 `fields[]` 不再被接受，seed 只有 `leave-request`／`purchase-request` 兩張（review 表已廢除）。
     - 審核／補件權限在 BPMN `uniform:access`（`bpmn-definitions/` 與 `src/main/resources/processes/` 兩份 byte-identical）；**缺省 fail-closed 為 view／readonly**，補件要明列 editable 欄位。
     - 回應是 Envelope（`GET /api/tasks/{id}/form`、`GET /api/process-definitions/{key}/start-form`、`POST /api/forms/preview`）；提交走 `validateV1`（`POST /api/process-instances`、`PUT /api/tasks/{id}` 的 `formData.dataJson`；`POST/PUT /api/form-data` 已移除）。
-    - SDK 以 submodule `vendor/uni-form`（pin `89708ef`）引入；npm tarball 在 `vendor/uni-form/dist/npm/`、Java jar 由該 SHA `mvn -f java install`（`~/.m2`）。
+    - SDK 以 submodule `vendor/uni-form` 引入，版本以 gitlink 為準（`git submodule status vendor/uni-form`）；npm tarball 在 `vendor/uni-form/dist/npm/`、Java jar 由同一 SHA `mvn -f java install`（`~/.m2`）。
     - 前端 `UfRenderer`／`UfDesigner`＋`src/uniform/`（plugin／Element Plus widgets／api）；`VITE_API_PROXY` 可覆寫 dev proxy。

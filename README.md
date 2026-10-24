@@ -1,6 +1,6 @@
 # Greyhound BPM 平台
 
-Greyhound 是以 BPMN 流程、任務與表單為核心的內部流程平台，包含 Spring Boot 後端與 Vue 管理介面。後端使用 Java 21、Spring Boot 4.1.1、Flowable 8.0.0；前端使用 Vue 3、Vite 5 與 Element Plus。表單採用 uni-form，版本固定在 `vendor/uni-form` submodule 的 commit `89708ef`。
+Greyhound 是以 BPMN 流程、任務與表單為核心的內部流程平台，包含 Spring Boot 後端與 Vue 管理介面。後端使用 Java 21、Spring Boot 4.1.1、Flowable 8.0.0；前端使用 Vue 3、Vite 5 與 Element Plus。表單採用 uni-form，版本固定在 `vendor/uni-form` submodule 的 commit `67f6047`。
 
 ## 開發環境
 
@@ -24,10 +24,11 @@ cd vendor/uni-form
 mise exec node@24.21.0 -- corepack pnpm install --frozen-lockfile
 mise exec node@24.21.0 -- corepack pnpm exec bash scripts/pack-npm.sh
 cd ../..
-mvn -f vendor/uni-form/java -pl uniform-spec,uniform-core,uniform-jackson3,uniform-spring-boot4-starter -am install -DskipTests
+mvn -f vendor/uni-form/java -pl uniform-spec,uniform-core,uniform-jackson3,uniform-spring-boot4-starter -am clean install -DskipTests
+mvn -f bpm-core clean package -DskipTests
 ```
 
-只有完成 `pack-npm.sh` 產生 `vendor/uni-form/dist/npm/` tarball 後，才在 `bpm-frontend` 執行 `npm ci`。若本機 Maven 尚無 pinned SDK 的 SNAPSHOT，先執行上述 Java reactor install 再建置／執行後端。`mvn verify` 使用 Testcontainers 啟動 MSSQL、RabbitMQ、Redis；需有可用的 Docker daemon，且目前執行環境可存取 Docker socket。
+只有完成 `pack-npm.sh` 產生 `vendor/uni-form/dist/npm/` tarball 後，才在 `bpm-frontend` 執行 `npm ci`。SDK pin 更新時須同步更新本機 tarball 的 lockfile integrity；Java reactor 與 bpm-core 使用 `clean` 重建，避免殘留已刪除資源或沿用舊 SNAPSHOT 內嵌依賴。`mvn verify` 使用 Testcontainers 啟動 MSSQL、RabbitMQ、Redis；需有可用的 Docker daemon，且目前執行環境可存取 Docker socket。
 
 localenv 的 seed／acceptance runner 需要 Bash 4 以上；macOS 內建 Bash 3.2 不支援。若 Homebrew Bash 已安裝，可將它放在 PATH 前端再操作：
 
