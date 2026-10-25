@@ -52,7 +52,7 @@
       </el-col>
     </el-row>
 
-    <el-row :gutter="20" style="margin-top: 16px">
+    <el-row v-if="task?.processInstanceId && !isCountersign" :gutter="20" style="margin-top: 16px">
       <el-col :span="12">
         <ApprovalTimeline :process-instance-id="task?.processInstanceId" />
       </el-col>
@@ -67,13 +67,23 @@
            「不顯示任何任務動作」——以任務名稱猜測會讓補件任務在後端失聯時
            露出一整排審核按鈕（同意／拒絕），而補件任務的受指派人是申請人本人。
            載入狀態與失敗原因由上方表單區呈現。 -->
-      <el-space v-if="isRevision">
+      <template v-if="isCountersign">
+        <p v-if="task.description">加簽說明：{{ task.description }}</p>
+        <el-input v-model="countersignOpinion" type="textarea" aria-label="加簽意見"
+          placeholder="請輸入加簽意見" :rows="3" style="margin-bottom:12px" />
+        <el-button type="primary" :loading="submitting" :disabled="!countersignOpinion.trim() || !envelope || formLoading || Boolean(formError)" @click="handleCountersignComplete">完成加簽</el-button>
+      </template>
+      <el-space v-else-if="isDelegated && envelope && !formError">
+        <span>轉發人：{{ task.owner }}</span>
+        <el-button type="primary" @click="openAction('resolve')">完成轉發並交回</el-button>
+      </el-space>
+      <el-space v-else-if="isRevision">
         <el-button type="primary" :loading="submitting" @click="handleRevisionSubmit()">補件重送</el-button>
       </el-space>
       <el-space v-else-if="envelope?.mode === 'view'">
-        <el-button type="success" @click="openAction('approve')">同意</el-button>
-        <el-button type="warning" @click="openAction('return')">退件</el-button>
-        <el-button type="danger" @click="openAction('reject')">拒絕</el-button>
+        <el-button type="success" :disabled="subtasks.length > 0" @click="openAction('approve')">同意</el-button>
+        <el-button type="warning" :disabled="subtasks.length > 0" @click="openAction('return')">退件</el-button>
+        <el-button type="danger" :disabled="subtasks.length > 0" @click="openAction('reject')">拒絕</el-button>
         <el-button @click="openAction('delegate')">轉發</el-button>
         <el-button @click="csVisible = true">加簽</el-button>
       </el-space>
@@ -92,7 +102,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { ElMessage } from 'element-plus'
 import UfRenderer from '../uniform/UniformForm.vue'
-import { getTasks, getSubtasks, updateTask } from '../services/flowableApi.js'
+import { getTasks, getSubtasks, updateTask, completeSubtask } from '../services/flowableApi.js'
 import { provideOptionsHost } from '../uniform/options.js'
 import { fetchTaskForm } from '../uniform/api.js'
 import ExternalFormLink from '../components/ExternalFormLink.vue'
@@ -127,6 +137,9 @@ const submitting = ref(false)
 provideOptionsHost(envelope, computed(() => envelope.value ? { taskId } : null), undefined, { formData })
 
 const isExternal = computed(() => task.value?.formKey?.startsWith('external:'))
+const countersignOpinion = ref('')
+const isCountersign = computed(() => Boolean(task.value?.parentTaskId))
+const isDelegated = computed(() => task.value?.delegationState === 'PENDING')
 const isRevision = computed(() => envelope.value?.mode === 'fill')
 const actionHint = computed(() =>
   !task.value?.formKey || isExternal.value
@@ -145,7 +158,7 @@ function onActionDone() {
 }
 
 async function loadForm() {
-  if (!task.value?.formKey || isExternal.value) return
+  if ((!task.value?.formKey && !isCountersign.value) || isExternal.value) return
   formLoading.value = true
   formError.value = ''
   try {
@@ -192,7 +205,22 @@ async function handleRevisionSubmit() {
   }
 }
 
+async function handleCountersignComplete() {
+  if (submitting.value || !countersignOpinion.value.trim() || !envelope.value || formLoading.value || formError.value) return
+  submitting.value = true
+  try {
+    await completeSubtask(task.value.parentTaskId, taskId, { opinion: countersignOpinion.value.trim() })
+    ElMessage.success('加簽完成，已交回原審核人')
+    router.push('/tasks')
+  } catch (e) {
+    ElMessage.error('加簽失敗：' + (e.response?.data?.message || e.message))
+  } finally {
+    submitting.value = false
+  }
+}
+
 async function loadSubtasks() {
+  if (isCountersign.value) return
   try { subtasks.value = await getSubtasks(taskId) } catch { subtasks.value = [] }
 }
 

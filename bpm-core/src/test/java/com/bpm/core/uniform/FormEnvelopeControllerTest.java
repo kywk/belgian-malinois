@@ -146,6 +146,81 @@ class FormEnvelopeControllerTest extends IntegrationTestBase {
         assertThat(res.body()).doesNotContain("x");
     }
 
+    private Task countersign(Task parent, String assignee) {
+        Task child = taskService.newTask();
+        child.setParentTaskId(parent.getId());
+        child.setAssignee(assignee);
+        child.setName("加簽驗證");
+        taskService.saveTask(child);
+        return child;
+    }
+
+    @Test
+    void countersignerReadsParentFormWithoutGainingParentAccess() throws Exception {
+        String marker = "加簽唯讀-" + System.nanoTime();
+        Task parent = currentTask(startWithFormData(marker));
+        Task child = countersign(parent, "user003");
+        var response = send("GET", "/api/tasks/" + child.getId() + "/form", "user003", null);
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(json(response).path("data").path("reason").asText()).isEqualTo(marker);
+        assertThat(json(response).path("mode").asText()).isEqualTo("view");
+        assertThat(json(response).path("meta").path("states").path("reason").asText()).isEqualTo("readonly");
+        assertThat(json(response).path("schemaRef").path("version").asInt()).isEqualTo(1);
+        assertThat(send("GET", "/api/tasks/" + parent.getId() + "/form", "user003", null).statusCode()).isEqualTo(404);
+        for (String denied : new String[] {OUTSIDER, APPLICANT, MANAGER}) {
+            var rejected = send("GET", "/api/tasks/" + child.getId() + "/form", denied, null);
+            assertThat(rejected.statusCode()).isEqualTo(404);
+            assertThat(rejected.body()).doesNotContain(marker);
+        }
+    }
+
+    @Test
+    void countersignerCannotEditRevisionFields() throws Exception {
+        String pid = startWithFormData("補件加簽");
+        taskService.complete(currentTask(pid).getId(), Map.of("approved", false, "rejected", false));
+        Task child = countersign(currentTask(pid), "user003");
+        var response = send("GET", "/api/tasks/" + child.getId() + "/form", "user003", null);
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(json(response).path("mode").asText()).isEqualTo("view");
+        assertThat(json(response).path("meta").path("states").path("reason").asText()).isEqualTo("readonly");
+    }
+
+    @Test
+    void countersignerPreservesHiddenFields() throws Exception {
+        String key = "countersign-hidden-" + System.nanoTime();
+        deploy(key, """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                             xmlns:flowable="http://flowable.org/bpmn" xmlns:uniform="http://bpm.com/uniform"
+                             targetNamespace="test">
+                  <process id="%s" isExecutable="true">
+                    <startEvent id="start" flowable:formKey="leave-request"/>
+                    <sequenceFlow id="f0" sourceRef="start" targetRef="t"/>
+                    <userTask id="t" name="隱藏欄位審核" flowable:assignee="mgr001" flowable:formKey="leave-request">
+                      <extensionElements><uniform:access mode="fill" default="editable">
+                        <uniform:field key="reason" state="hidden"/>
+                      </uniform:access></extensionElements>
+                    </userTask>
+                    <sequenceFlow id="f1" sourceRef="t" targetRef="end"/>
+                    <endEvent id="end"/>
+                  </process>
+                </definitions>
+                """);
+        String secret = "hidden-marker-" + System.nanoTime();
+        var payload = applicationStartPayload(key, APPLICANT, objectMapper.writeValueAsString(Map.of(
+                "leaveType", "annual", "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"), "reason", secret)));
+        var started = send("POST", "/api/process-instances", APPLICANT, objectMapper.writeValueAsString(payload));
+        assertThat(started.statusCode()).as(started.body()).isEqualTo(200);
+        Task child = countersign(currentTask(json(started).path("processInstanceId").asText()), "user003");
+        var response = send("GET", "/api/tasks/" + child.getId() + "/form", "user003", null);
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        assertThat(response.body()).doesNotContain(secret);
+        assertThat(json(response).path("data").has("reason")).isFalse();
+        assertThat(json(response).path("meta").path("states").has("reason")).isFalse();
+        assertThat(json(response).path("schema").toString()).doesNotContain("reason");
+        assertThat(json(response).path("meta").path("states").path("leaveType").asText()).isEqualTo("readonly");
+    }
+
     @Test
     @DisplayName("不存在的 taskId → 404")
     void unknownTaskIsNotFound() throws Exception {

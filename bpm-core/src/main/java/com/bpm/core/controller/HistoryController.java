@@ -290,9 +290,11 @@ public class HistoryController {
                 .stream().map(HistoricProcessInstance::getId).collect(java.util.stream.Collectors.toSet());
         if (finished) query.finished();
         final java.util.Set<String> delegated = onBehalf;
-        return query.orderByProcessInstanceStartTime().desc().list().stream()
+        List<HistoricProcessInstance> processes = query.orderByProcessInstanceStartTime().desc().list();
+        java.util.Set<String> rejected = rejectedProcessIds(processes);
+        return processes.stream()
                 .map(p -> {
-                    Map<String, Object> m = processToMap(p);
+                    Map<String, Object> m = processToMap(p, rejected);
                     m.put("onBehalf", delegated.contains(p.getId()));
                     return m;
                 }).toList();
@@ -302,7 +304,7 @@ public class HistoryController {
      * 我參與的案件（歷史，含仍在執行中的）。
      *
      * <p>回應形狀沿用 {@link #processToMap}（它已涵蓋 running／completed／
-     * cancelled 三種狀態），再補上 {@code currentTask} 與
+     * cancelled／rejected 四種狀態），再補上 {@code currentTask} 與
      * {@code currentTaskCount} —— 前者讓使用者知道這張單現在卡在誰手上，
      * 後者是因為併發任務時只顯示一個會讓人以為只等一個人。
      *
@@ -326,9 +328,11 @@ public class HistoryController {
         for (Task t : involvementService.findOpenTasks(ids)) {
             tasksByInstance.computeIfAbsent(t.getProcessInstanceId(), k -> new java.util.ArrayList<>()).add(t);
         }
-        return involvementService.findHistoric(ids).stream()
+        List<HistoricProcessInstance> processes = involvementService.findHistoric(ids);
+        java.util.Set<String> rejected = rejectedProcessIds(processes);
+        return processes.stream()
                 .map(p -> {
-                    Map<String, Object> m = processToMap(p);
+                    Map<String, Object> m = processToMap(p, rejected);
                     // 標示「這不是我的申請，是我參與的」，否則使用者會以為
                     // 這張自己沒送過的單出現在自己的清單裡。
                     m.put("involved", true);
@@ -366,14 +370,34 @@ public class HistoryController {
         return m;
     }
 
+    /** 只查已結束案件的流程層 rejected 變數；分批避免 N+1 與 MSSQL 參數上限。 */
+    private java.util.Set<String> rejectedProcessIds(List<HistoricProcessInstance> processes) {
+        java.util.Set<String> rejected = new java.util.HashSet<>();
+        List<String> ids = processes.stream()
+                .filter(p -> p.getEndTime() != null && p.getDeleteReason() == null)
+                .map(HistoricProcessInstance::getId).toList();
+        for (List<String> batch : ProcessInvolvementService.partition(ids)) {
+            for (var variable : historyService.createHistoricVariableInstanceQuery()
+                    .processInstanceIds(batch).variableName("rejected").list()) {
+                // 任務／子 execution 的同名 local 變數不是流程結果，不得覆蓋結案狀態。
+                if (variable.getTaskId() == null
+                        && variable.getProcessInstanceId().equals(variable.getExecutionId())
+                        && Boolean.TRUE.equals(variable.getValue())) {
+                    rejected.add(variable.getProcessInstanceId());
+                }
+            }
+        }
+        return rejected;
+    }
+
     /**
      * 歷史實例的對外表示法。
      *
-     * <p>{@code status} 由 {@code endTime}／{@code deleteReason} 推導，
+     * <p>{@code status} 由 {@code endTime}／{@code deleteReason} 與流程層 rejected 結果推導，
      * 因此同一份形狀涵蓋執行中與已結束 —— 這是「我參與的」新端點
      * 能只維護一份對映的原因。
      */
-    Map<String, Object> processToMap(HistoricProcessInstance p) {
+    Map<String, Object> processToMap(HistoricProcessInstance p, java.util.Set<String> rejected) {
         Map<String, Object> m = new HashMap<>();
         m.put("processInstanceId", p.getId());
         m.put("processDefinitionKey", p.getProcessDefinitionKey());
@@ -385,6 +409,8 @@ public class HistoryController {
             m.put("status", "running");
         } else if (p.getDeleteReason() != null) {
             m.put("status", "cancelled");
+        } else if (rejected.contains(p.getId())) {
+            m.put("status", "rejected");
         } else {
             m.put("status", "completed");
         }

@@ -206,3 +206,62 @@ describe('DocumentDetail：表單載入失敗', () => {
     expect(wrapper.text()).toContain('表單回應格式不正確')
   })
 })
+
+describe('DocumentDetail：轉發與加簽', () => {
+  it('受轉發人只能完成交回，不能直接核准或補件', async () => {
+    mockLoad({ task: { ...TASK, delegationState: 'PENDING', owner: 'mgr002' }, form: envelope('fill', { reason: '驗證' }) })
+    const wrapper = mountPage()
+    await flush()
+    await flush()
+    expect(buttonWithText(wrapper, '完成轉發並交回')).toBeTruthy()
+    expect(buttonWithText(wrapper, '同意')).toBeFalsy()
+    expect(buttonWithText(wrapper, '補件重送')).toBeFalsy()
+  })
+
+  it('加簽子任務使用專用完成 API，不載入流程評論與歷程', async () => {
+    mockLoad({ task: { ...TASK, parentTaskId: 'parent-1', processInstanceId: null, formKey: null, description: '請協助確認' }, form: envelope('view', { reason: '驗證' }) })
+    const wrapper = mountPage()
+    await flush()
+    await flush()
+    expect(wrapper.text()).toContain('請協助確認')
+    expect(http.get).toHaveBeenCalledWith('/api/tasks/t-1/form')
+    expect(wrapper.findComponent(UfRenderer).exists()).toBe(true)
+    expect(wrapper.find('comment-panel-stub').exists()).toBe(false)
+    expect(wrapper.find('approval-timeline-stub').exists()).toBe(false)
+    expect(buttonWithText(wrapper, '同意')).toBeFalsy()
+    const complete = buttonWithText(wrapper, '完成加簽')
+    expect(complete.attributes('disabled')).toBeDefined()
+    await wrapper.find('textarea[aria-label="加簽意見"]').setValue('已確認')
+    await complete.trigger('click')
+    await flush()
+    expect(http.put).toHaveBeenCalledWith('/api/countersign/parent-1/t-1/complete', { opinion: '已確認' })
+    expect(http.get.mock.calls.some(([url]) => url === '/api/countersign/t-1')).toBe(false)
+    expect(pushMock).toHaveBeenCalledWith('/tasks')
+  })
+})
+
+
+describe('DocumentDetail：加簽等待與載入失敗', () => {
+  it('父任務等待加簽期間禁止審核結案動作', async () => {
+    mockLoad({ task: TASK, form: envelope('view', { reason: '驗證' }) })
+    const get = http.get.getMockImplementation()
+    http.get.mockImplementation((url, ...args) => url === '/api/countersign/t-1'
+      ? Promise.resolve({ data: [{ taskId: 'sub-1', assignee: 'user002', name: '加簽' }] })
+      : get(url, ...args))
+    const wrapper = mountPage()
+    await flush()
+    await flush()
+    for (const label of ['同意', '退件', '拒絕']) expect(buttonWithText(wrapper, label).attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('等待加簽 1 人完成')
+  })
+
+  it('加簽表單載入失敗即使填寫意見仍不可完成', async () => {
+    mockLoad({ task: { ...TASK, parentTaskId: 'parent-1', formKey: null }, form: new Error('載入失敗') })
+    const wrapper = mountPage()
+    await flush()
+    await flush()
+    await wrapper.find('textarea[aria-label="加簽意見"]').setValue('已確認')
+    expect(buttonWithText(wrapper, '完成加簽').attributes('disabled')).toBeDefined()
+    expect(http.put).not.toHaveBeenCalled()
+  })
+})

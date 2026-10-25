@@ -5,6 +5,7 @@ import com.bpm.core.form.model.FormDefinition;
 import com.bpm.core.dto.FormPreviewRequest;
 import com.bpm.core.security.CallerId;
 import com.bpm.core.security.ProcessAccessGuard;
+import com.bpm.core.security.TaskHolderGuard;
 import org.flowable.bpmn.model.StartEvent;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.TaskService;
@@ -15,6 +16,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.LinkedHashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.Map;
 
 /**
@@ -57,6 +60,7 @@ public class FormEnvelopeController {
     private final TaskService taskService;
     private final RepositoryService repositoryService;
     private final ProcessAccessGuard accessGuard;
+    private final TaskHolderGuard holderGuard;
     private final FormAccessResolver accessResolver;
     private final FormContextResolver contextResolver;
     private final FormEnvelopeService envelopeService;
@@ -64,12 +68,13 @@ public class FormEnvelopeController {
     private final OptionLabelSnapshots labelSnapshots;
 
     public FormEnvelopeController(TaskService taskService, RepositoryService repositoryService,
-                                  ProcessAccessGuard accessGuard, FormAccessResolver accessResolver,
+                                  ProcessAccessGuard accessGuard, TaskHolderGuard holderGuard, FormAccessResolver accessResolver,
                                   FormContextResolver contextResolver, FormEnvelopeService envelopeService,
                                   FormDefinitionValidator definitionValidator, OptionLabelSnapshots labelSnapshots) {
         this.taskService = taskService;
         this.repositoryService = repositoryService;
         this.accessGuard = accessGuard;
+        this.holderGuard = holderGuard;
         this.accessResolver = accessResolver;
         this.contextResolver = contextResolver;
         this.envelopeService = envelopeService;
@@ -99,7 +104,24 @@ public class FormEnvelopeController {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "任務不存在: " + taskId);
         }
         // 授權先於「這個任務是什麼」的判斷：非關係人拿不到任何關於任務的資訊。
-        accessGuard.requireReadAccess(task.getProcessInstanceId(), callerId);
+        boolean countersign = task.getParentTaskId() != null;
+        if (countersign) {
+            // 加簽是 standalone task。先驗持有者，再沿伺服器保存的父鏈找表單；
+            // 不授予父任務的一般讀寫權限，亦不接受呼叫者指定父任務。
+            holderGuard.requireHolder(task, callerId);
+            Set<String> visited = new HashSet<>();
+            while (task.getParentTaskId() != null) {
+                if (!visited.add(task.getId())) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "加簽父任務關係不正確");
+                }
+                task = taskService.createTaskQuery().taskId(task.getParentTaskId()).singleResult();
+                if (task == null) {
+                    throw new ResponseStatusException(HttpStatus.NOT_FOUND, "加簽父任務不存在");
+                }
+            }
+        } else {
+            accessGuard.requireReadAccess(task.getProcessInstanceId(), callerId);
+        }
 
         String formKey = task.getFormKey();
         if (formKey == null || formKey.isBlank() || formKey.startsWith("external:")) {
@@ -110,9 +132,32 @@ public class FormEnvelopeController {
         FormDefinition def = contextResolver.definitionFor(formKey, task.getProcessInstanceId());
         Map<String, Object> profile = accessResolver.profileForTask(
                 task.getProcessDefinitionId(), task.getTaskDefinitionKey());
+        if (countersign) profile = readonlyProfile(profile);
         FormData latest = contextResolver.latestRow(task.getProcessInstanceId());
         Map<String, Object> envelope = envelopeService.envelope(def, profile, contextResolver.storedDataOf(latest));
         return labelSnapshots.attach(envelope, latest == null ? null : latest.getOptionLabelsJson());
+    }
+
+    private static Map<String, Object> readonlyProfile(Map<String, Object> source) {
+        Map<String, Object> profile = new LinkedHashMap<>(source);
+        profile.put("mode", "view");
+        profile.put("default", "hidden".equals(source.get("default")) ? "hidden" : "readonly");
+        Map<String, Object> fields = new LinkedHashMap<>();
+        if (source.get("fields") instanceof Map<?, ?> entries) {
+            entries.forEach((key, value) -> {
+                if (value instanceof Map<?, ?> entry) {
+                    Map<String, Object> field = new LinkedHashMap<>();
+                    entry.forEach((name, setting) -> field.put(name.toString(), setting));
+                    // required-only 覆寫繼承 default；hidden 不可因加簽而變為可見。
+                    if (field.containsKey("state") && !"hidden".equals(field.get("state"))) {
+                        field.put("state", "readonly");
+                    }
+                    fields.put(key.toString(), field);
+                }
+            });
+        }
+        profile.put("fields", fields);
+        return profile;
     }
 
     /**

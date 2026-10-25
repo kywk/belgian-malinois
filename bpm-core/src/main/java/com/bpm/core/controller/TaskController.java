@@ -30,6 +30,7 @@ import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.Task;
+import org.flowable.task.api.DelegationState;
 import org.flowable.task.api.TaskQuery;
 import org.springframework.web.bind.annotation.*;
 
@@ -465,13 +466,11 @@ public class TaskController {
                 // 所以申請人能簽自己的補件任務；外部系統發起、沒有自然人申請人時
                 // 會派給權限碼 bpm:external:revision 指定的受理人。
                 //
-                // ⚠️ 引擎層的既有行為（非本次引入）：被 delegate 出去、尚處於
-                // PENDING 的任務不能被 complete —— TaskHelper.completeTask 會
-                // 拋 FlowableException（"should be resolved instead"）→ 裸 500。
-                // 守衛不得（也沒有）把它變成 404：那會對 delegatee 謊稱任務不存在，
-                // 把一個可診斷的規則藏起來。委派要能走完，正確的動作是 resolve
-                // （見下面的 resolve 分支與 TaskHolderGuard 的生命週期分析）。
-                // 把這個 500 變成明確的 409 屬於另一件事，本次不做。
+                // 委派中的任務必須先交回，不能以 complete 越過 owner 的審核。
+                if (task.getDelegationState() == DelegationState.PENDING) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                            "轉發中的任務必須先完成轉發並交回原審核人");
+                }
                 if (!taskService.getSubTasks(id).isEmpty()) {
                     throw new ResponseStatusException(HttpStatus.CONFLICT,
                             "有未完成的加簽子任務");
@@ -1425,6 +1424,10 @@ public class TaskController {
         m.put("taskId", t.getId());
         m.put("taskName", t.getName());
         m.put("assignee", t.getAssignee());
+        m.put("owner", t.getOwner());
+        m.put("delegationState", t.getDelegationState() == null ? null : t.getDelegationState().name());
+        m.put("parentTaskId", t.getParentTaskId());
+        m.put("description", t.getDescription());
         m.put("processInstanceId", t.getProcessInstanceId());
         m.put("createTime", t.getCreateTime());
         m.put("dueDate", t.getDueDate());

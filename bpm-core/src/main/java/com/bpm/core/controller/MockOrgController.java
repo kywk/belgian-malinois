@@ -106,6 +106,16 @@ public class MockOrgController {
     @GetMapping("/users")
     public Collection<Map<String, Object>> listUsers() { return USERS.values(); }
 
+    @GetMapping("/users/search")
+    public List<Map<String, Object>> searchUsers(@RequestParam String keyword) {
+        String query = keyword.trim().toLowerCase(Locale.ROOT);
+        if (query.isEmpty()) return List.of();
+        return USERS.values().stream()
+                .filter(user -> user.get("userId").toString().toLowerCase(Locale.ROOT).contains(query)
+                        || user.get("name").toString().contains(query))
+                .limit(50).toList();
+    }
+
     @GetMapping("/users/{userId}")
     public Map<String, Object> getUser(@PathVariable String userId) {
         var user = USERS.get(userId);

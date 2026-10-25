@@ -2,7 +2,8 @@
   <div>
     <el-input v-model="keyword" placeholder="搜尋人員（姓名/工號）" clearable
       style="margin-bottom: 8px" />
-    <el-table :data="results" highlight-current-row @current-change="onSelect" max-height="300" size="small">
+    <el-alert v-if="searchError" :title="searchError" type="error" show-icon :closable="false" />
+    <el-table v-loading="loading" :data="results" highlight-current-row @current-change="onSelect" max-height="300" size="small">
       <el-table-column v-if="multiple" width="50">
         <template #default="{ row }">
           <el-checkbox :model-value="isSelected(row.userId)"
@@ -31,6 +32,8 @@ const emit = defineEmits(['update:modelValue'])
 
 const keyword = ref('')
 const results = ref([])
+const loading = ref(false)
+const searchError = ref('')
 
 const displayValue = computed(() =>
   Array.isArray(props.modelValue) ? props.modelValue.join(', ') : props.modelValue
@@ -52,15 +55,20 @@ function toggleSelect(userId) {
 // watcher cleanup 同時涵蓋切換關鍵字與元件卸載。
 watch(keyword, (value, _previous, onCleanup) => {
   results.value = []
+  searchError.value = ''
+  loading.value = false
   const query = value.trim()
   if (!query) return
+  loading.value = true
   const controller = new AbortController()
   const timer = setTimeout(async () => {
     try {
       const users = await searchUsers(query, controller.signal)
       if (!controller.signal.aborted) results.value = users
-    } catch {
-      if (!controller.signal.aborted) results.value = []
+    } catch (e) {
+      if (!controller.signal.aborted) searchError.value = '人員搜尋失敗：' + (e.response?.data?.message || e.message)
+    } finally {
+      if (!controller.signal.aborted) loading.value = false
     }
   }, 250)
   onCleanup(() => { clearTimeout(timer); controller.abort() })

@@ -6,7 +6,7 @@
       style="margin-top: 12px" />
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" @click="submit" :disabled="!selectedUsers.length">確認加簽</el-button>
+      <el-button type="primary" @click="submit" :loading="submitting" :disabled="submitting || !selectedUsers.length">確認加簽</el-button>
     </template>
   </el-dialog>
 </template>
@@ -22,11 +22,17 @@ const emit = defineEmits(['update:modelValue', 'done'])
 const visible = ref(props.modelValue)
 const selectedUsers = ref([])
 const description = ref('')
+const submitting = ref(false)
 
-watch(() => props.modelValue, v => { visible.value = v })
+watch(() => props.modelValue, v => {
+  visible.value = v
+  if (v) { selectedUsers.value = []; description.value = '' }
+})
 watch(visible, v => emit('update:modelValue', v))
 
 async function submit() {
+  if (submitting.value || !selectedUsers.value.length) return
+  submitting.value = true
   const users = Array.isArray(selectedUsers.value) ? selectedUsers.value : [selectedUsers.value]
   try {
     for (const userId of users) {
@@ -38,6 +44,8 @@ async function submit() {
         countersignUserId: userId,
         message: description.value,
       })
+      // 部分成功時移除已送出的對象，重試只送剩餘人員。
+      selectedUsers.value = selectedUsers.value.filter(id => id !== userId)
     }
     ElMessage.success(`已發送加簽請求給 ${users.length} 人`)
     selectedUsers.value = []
@@ -45,7 +53,10 @@ async function submit() {
     emit('done')
     visible.value = false
   } catch (e) {
+    emit('done')
     ElMessage.error('加簽失敗：' + (e.response?.data?.message || e.message))
+  } finally {
+    submitting.value = false
   }
 }
 </script>

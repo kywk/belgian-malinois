@@ -76,6 +76,14 @@ class OrgRestClientContractTest {
     class Endpoints {
 
         @Test
+        void searchUsersPassesKeywordAsOneQueryValue() {
+            server.respond("GET", "/api/users/search", 200, "[{\"userId\":\"user003\",\"name\":\"測試\",\"deptId\":\"dept001\"}]");
+            assertThat(client().searchUsers("王&admin=true")).hasSize(1);
+            assertThat(server.lastReceived().path()).isEqualTo("/api/users/search");
+            assertThat(server.lastReceived().queryParam("keyword")).isEqualTo("王&admin=true");
+        }
+
+        @Test
         @DisplayName("GET /api/users/{id} → 人員資料")
         void getUser() {
             server.respond("GET", "/api/users/user001", 200,

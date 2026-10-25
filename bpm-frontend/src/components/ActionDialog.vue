@@ -3,8 +3,8 @@
     :title="titles[action]" width="500px">
 
     <!-- 同意 -->
-    <template v-if="action === 'approve'">
-      <p>確認同意此任務？</p>
+    <template v-if="action === 'approve' || action === 'resolve'">
+      <p>{{ action === 'resolve' ? '完成轉發處理，將任務交回原審核人？' : '確認同意此任務？' }}</p>
       <el-input v-model="comment" type="textarea" placeholder="審核意見（選填）" :rows="3" />
     </template>
 
@@ -31,13 +31,13 @@
     <template #footer>
       <el-button @click="$emit('update:visible', false)">取消</el-button>
       <el-button :type="action === 'reject' ? 'danger' : 'primary'" @click="submit"
-        :disabled="needsComment && !comment">確認</el-button>
+        :loading="submitting" :disabled="!canSubmit">確認</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { updateTask, addTaskComment } from '../services/flowableApi.js'
 import OrgSelector from './OrgSelector.vue'
@@ -49,12 +49,21 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:visible', 'done'])
 
-const titles = { approve: '同意', return: '退件', reject: '拒絕', delegate: '轉發' }
+const titles = { approve: '同意', return: '退件', reject: '拒絕', delegate: '轉發', resolve: '完成轉發並交回' }
 const comment = ref('')
 const delegateUser = ref('')
 const needsComment = computed(() => ['return', 'reject'].includes(props.action))
 
+const submitting = ref(false)
+const canSubmit = computed(() => !submitting.value && (!needsComment.value || Boolean(comment.value.trim()))
+  && (props.action !== 'delegate' || Boolean(delegateUser.value)))
+watch(() => props.visible, (visible) => {
+  if (visible) { comment.value = ''; delegateUser.value = '' }
+})
+
 async function submit() {
+  if (!canSubmit.value) return
+  submitting.value = true
   try {
     // Add comment before completing task (task may not exist after complete)
     if (comment.value && props.action !== 'delegate') {
@@ -79,6 +88,8 @@ async function submit() {
           { name: 'rejected', value: true }
         ]
       })
+    } else if (props.action === 'resolve') {
+      await updateTask(props.taskId, { action: 'resolve' })
     } else if (props.action === 'delegate') {
       await updateTask(props.taskId, { action: 'delegate', delegateUser: delegateUser.value })
     }
@@ -89,6 +100,8 @@ async function submit() {
     emit('done')
   } catch (e) {
     ElMessage.error('操作失敗：' + (e.response?.data?.message || e.message))
+  } finally {
+    submitting.value = false
   }
 }
 </script>

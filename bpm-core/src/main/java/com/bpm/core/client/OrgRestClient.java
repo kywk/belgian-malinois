@@ -83,6 +83,12 @@ public class OrgRestClient {
                 .retrieve().body(new ParameterizedTypeReference<>() {});
     }
 
+    public List<Map<String, Object>> searchUsers(String keyword) {
+        return restClient.get().uri(builder -> builder.path("/api/users/search")
+                        .queryParam("keyword", keyword).build())
+                .retrieve().body(new ParameterizedTypeReference<>() {});
+    }
+
     /**
      * 直屬主管的 id；{@code null} 代表「此人存在但沒有主管」（鏈頂）。
      *
