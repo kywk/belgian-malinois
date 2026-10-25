@@ -414,6 +414,12 @@ public class FormService {
         return dataRepo.findByProcessInstanceIdOrderBySubmittedAtDesc(processInstanceId);
     }
 
+    /** 任務讀取與提交只需要目前快照，不載入每次補件累積的完整 JSON 歷史。 */
+    @Transactional(value = "formTransactionManager", readOnly = true)
+    public FormData getLatestDataByProcess(String processInstanceId) {
+        return dataRepo.findFirstByProcessInstanceIdOrderBySubmittedAtDesc(processInstanceId).orElse(null);
+    }
+
     /**
      * 依 id 取得一筆表單資料。
      *

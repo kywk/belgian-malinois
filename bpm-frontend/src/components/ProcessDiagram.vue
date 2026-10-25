@@ -1,31 +1,30 @@
-<template>
-  <el-card>
-    <template #header>流程圖</template>
-    <div ref="container" style="height:300px;border:1px solid #eee;border-radius:4px" />
-    <el-empty v-if="error" :description="error" :image-size="60" />
-  </el-card>
-</template>
-
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, watch } from 'vue'
 import http from '../services/http'
 
 const props = defineProps({ processInstanceId: { type: String, required: true } })
 const container = ref(null)
 const error = ref(null)
-let viewer = null
 
-async function load() {
-  if (!container.value) return
+// 每輪擁有自己的 viewer；切換案件或卸載時取消請求並銷毀，
+// import/XML 解析即使較晚完成，也不得重建或覆蓋目前案件的流程圖。
+watch([container, () => props.processInstanceId], async ([element, processId], _previous, onCleanup) => {
   error.value = null
+  if (!element || !processId) return
+  const controller = new AbortController()
+  let viewer
+  onCleanup(() => { controller.abort(); viewer?.destroy() })
   try {
-    const { data } = await http.get(`/api/process-instances/${props.processInstanceId}/bpmn-xml`)
+    const [{ data }, { default: BpmnViewer }] = await Promise.all([
+      http.get(`/api/process-instances/${encodeURIComponent(processId)}/bpmn-xml`, { signal: controller.signal }),
+      import('bpmn-js/lib/NavigatedViewer'),
+    ])
+    if (controller.signal.aborted) return
     if (!data.xml) { error.value = '無流程圖資料'; return }
 
-    const { default: BpmnViewer } = await import('bpmn-js/lib/NavigatedViewer')
-    viewer?.destroy()
-    viewer = new BpmnViewer({ container: container.value })
+    viewer = new BpmnViewer({ container: element })
     await viewer.importXML(data.xml)
+    if (controller.signal.aborted) return
     viewer.get('canvas').zoom('fit-viewport')
 
     const overlays = viewer.get('overlays')
@@ -39,12 +38,18 @@ async function load() {
       }
     })
   } catch (e) {
-    console.error('ProcessDiagram error:', e)
+    if (controller.signal.aborted) return
+    viewer?.destroy()
+    viewer = null
     error.value = e.message || '載入失敗'
   }
-}
-
-onMounted(load)
-watch(() => props.processInstanceId, () => { viewer?.destroy(); viewer = null; load() })
-onUnmounted(() => viewer?.destroy())
+}, { flush: 'post' })
 </script>
+
+<template>
+  <el-card>
+    <template #header>流程圖</template>
+    <div ref="container" style="height:300px;border:1px solid #eee;border-radius:4px" />
+    <el-empty v-if="error" :description="error" :image-size="60" />
+  </el-card>
+</template>

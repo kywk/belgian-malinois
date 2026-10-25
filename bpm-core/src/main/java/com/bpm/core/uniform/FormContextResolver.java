@@ -13,7 +13,6 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -98,8 +97,7 @@ public class FormContextResolver {
 
     /** 案件最新一列 FormData（{@code submittedAt} 遞減的第一筆）；沒有資料回 {@code null}。 */
     public FormData latestRow(String processInstanceId) {
-        List<FormData> rows = formService.getDataByProcess(processInstanceId);
-        return rows.isEmpty() ? null : rows.get(0);
+        return formService.getLatestDataByProcess(processInstanceId);
     }
 
     /**

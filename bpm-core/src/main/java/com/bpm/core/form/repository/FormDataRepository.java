@@ -5,9 +5,12 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface FormDataRepository extends JpaRepository<FormData, String> {
     List<FormData> findByProcessInstanceIdOrderBySubmittedAtDesc(String processInstanceId);
+
+    Optional<FormData> findFirstByProcessInstanceIdOrderBySubmittedAtDesc(String processInstanceId);
 
     /**
      * 該表單定義被哪些案件使用過（去重，只回 processInstanceId）。

@@ -1,18 +1,19 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import Dashboard from '../views/Dashboard.vue'
-import TaskInbox from '../views/TaskInbox.vue'
-import DocumentDetail from '../views/DocumentDetail.vue'
-import MyApplications from '../views/MyApplications.vue'
-import AuditLog from '../views/AuditLog.vue'
-import FormEditor from '../views/FormEditor.vue'
-import BpmnEditor from '../views/BpmnEditor.vue'
-import ExternalSystemAdmin from '../views/ExternalSystemAdmin.vue'
-import ProcessVariableSpecAdmin from '../views/ProcessVariableSpecAdmin.vue'
-import ProcessList from '../views/ProcessList.vue'
-import FormList from '../views/FormList.vue'
+// 設計器與流程圖依路由載入，避免一般使用者首頁下載管理介面。
+const Dashboard = () => import('../views/Dashboard.vue')
+const TaskInbox = () => import('../views/TaskInbox.vue')
+const DocumentDetail = () => import('../views/DocumentDetail.vue')
+const MyApplications = () => import('../views/MyApplications.vue')
+const AuditLog = () => import('../views/AuditLog.vue')
+const FormEditor = () => import('../views/FormEditor.vue')
+const BpmnEditor = () => import('../views/BpmnEditor.vue')
+const ExternalSystemAdmin = () => import('../views/ExternalSystemAdmin.vue')
+const ProcessVariableSpecAdmin = () => import('../views/ProcessVariableSpecAdmin.vue')
+const ProcessList = () => import('../views/ProcessList.vue')
+const FormList = () => import('../views/FormList.vue')
 
-import StartProcess from '../views/StartProcess.vue'
+const StartProcess = () => import('../views/StartProcess.vue')
 
 /**
  * 路由的權限需求。

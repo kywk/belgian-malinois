@@ -41,7 +41,8 @@
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { useRoute, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { UfDesigner, UfRenderer } from '@nanshan/uniform-vue'
+import { UfDesigner } from '@nanshan/uniform-vue/designer'
+import { UfRenderer } from '@nanshan/uniform-vue/renderer'
 import '@nanshan/uniform-vue/designer.css'
 import { getFormSchema, createForm, updateForm, publishForm, createFormRevision, listForms } from '../services/formApi.js'
 import OptionsSourcePanel from '../components/OptionsSourcePanel.vue'
@@ -75,8 +76,9 @@ let previewGeneration = 0
 const published = computed(() => status.value === 'published')
 const canEdit = computed(() => !published.value && !loading.value && !busy.value && !!dsl.value)
 const hasDesignerChanges = computed(() => pending.value.size > 0 || invalid.value.size > 0)
-const invalidSources = computed(() => topLevelFields(dsl.value?.root).some(node => node.optionsSource
-  && !supportsDynamicSource(node, topLevelFields(dsl.value?.root))))
+const fields = computed(() => topLevelFields(dsl.value?.root))
+const invalidSources = computed(() => fields.value.some(node => node.optionsSource
+  && !supportsDynamicSource(node, fields.value)))
 const hasUnappliedChanges = computed(() => hasDesignerChanges.value || sourcePending.value || sourceInvalid.value || invalidSources.value)
 const canPersist = computed(() => canEdit.value && !!formName.value.trim() && !!formKey.value.trim() && !hasUnappliedChanges.value)
 const hasFields = computed(() => Array.isArray(dsl.value?.root) && dsl.value.root.length > 0)

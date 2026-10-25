@@ -54,8 +54,7 @@ bpm-core:docker:
     # context = repo root：容器內要先從 vendor/uni-form（submodule）建置 uni-form
     # SDK（SNAPSHOT 不在 registry），再建 bpm-core —— 見 bpm-core/Dockerfile。
     # ⚠️ 需要 checkout 時取得 submodule（GIT_SUBMODULE_STRATEGY: recursive）；
-    # 目前 .gitmodules 仍是本機 file URL、未 push，CI 取得 submodule 前此 job
-    # 會在 COPY 步驟明確失敗（不是靜默產出壞映像）。
+    # .gitmodules 指向內網 SSH Git；runner 必須具備網路與 SSH 讀取權限。
     - docker build -t $REGISTRY/bpm-core:$CI_COMMIT_SHA -t $REGISTRY/bpm-core:latest -f bpm-core/Dockerfile .
     - docker push $REGISTRY/bpm-core:$CI_COMMIT_SHA
     - docker push $REGISTRY/bpm-core:latest
@@ -111,28 +110,38 @@ bpm-core:deploy-prod:
 # ──────────────────────────────────────────────
 
 bpm-frontend:build:
-  image: node:20-alpine
+  image: node:24-alpine
   stage: build
+  # The runner must reach the internal UniForm Git host and have SSH authorization.
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
   cache:
-    key: npm
-    paths: [bpm-frontend/node_modules]
+    key:
+      files: [bpm-frontend/package-lock.json, vendor/uni-form/pnpm-lock.yaml]
+    paths: [.npm/]
+  before_script:
+    - apk add --no-cache bash
+    - npm install --global "$(node -p "require('./vendor/uni-form/package.json').packageManager")"
   script:
-    - cd bpm-frontend && npm ci && npm run build
+    - bash scripts/build-uniform-frontend.sh
+    - cd bpm-frontend && npm ci --cache ../.npm --prefer-offline && npm run build
   artifacts:
     paths: [bpm-frontend/dist]
   rules:
-    - changes: [bpm-frontend/**]
+    - changes: [bpm-frontend/**, vendor/uni-form, .gitmodules, scripts/build-uniform-frontend.sh, .gitlab-ci.yml]
 
 bpm-frontend:docker:
   <<: *docker-build
   stage: docker
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
   script:
-    - docker build -t $REGISTRY/bpm-frontend:$CI_COMMIT_SHA -t $REGISTRY/bpm-frontend:latest bpm-frontend/
+    - docker build -t $REGISTRY/bpm-frontend:$CI_COMMIT_SHA -t $REGISTRY/bpm-frontend:latest -f bpm-frontend/Dockerfile .
     - docker push $REGISTRY/bpm-frontend:$CI_COMMIT_SHA
     - docker push $REGISTRY/bpm-frontend:latest
   needs: [bpm-frontend:build]
   rules:
-    - changes: [bpm-frontend/**]
+    - changes: [bpm-frontend/**, vendor/uni-form, .gitmodules, scripts/build-uniform-frontend.sh, .gitlab-ci.yml]
 
 bpm-frontend:deploy-dev:
   <<: *deploy-template
@@ -142,7 +151,7 @@ bpm-frontend:deploy-dev:
   needs: [bpm-frontend:docker]
   rules:
     - if: $CI_COMMIT_BRANCH == "dev"
-      changes: [bpm-frontend/**]
+      changes: [bpm-frontend/**, vendor/uni-form, .gitmodules, scripts/build-uniform-frontend.sh, .gitlab-ci.yml]
 
 bpm-frontend:deploy-sit:
   <<: *deploy-template
@@ -152,7 +161,7 @@ bpm-frontend:deploy-sit:
   needs: [bpm-frontend:docker]
   rules:
     - if: $CI_COMMIT_BRANCH == "sit"
-      changes: [bpm-frontend/**]
+      changes: [bpm-frontend/**, vendor/uni-form, .gitmodules, scripts/build-uniform-frontend.sh, .gitlab-ci.yml]
 
 bpm-frontend:deploy-uat:
   <<: *deploy-template

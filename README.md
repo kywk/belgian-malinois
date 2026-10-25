@@ -1,10 +1,10 @@
 # Greyhound BPM 平台
 
-Greyhound 是以 BPMN 流程、任務與表單為核心的內部流程平台，包含 Spring Boot 後端與 Vue 管理介面。後端使用 Java 21、Spring Boot 4.1.1、Flowable 8.0.0；前端使用 Vue 3、Vite 5 與 Element Plus。表單採用 uni-form，版本固定在 `vendor/uni-form` submodule 的 commit `67f6047`。
+Greyhound 是以 BPMN 流程、任務與表單為核心的內部流程平台，包含 Spring Boot 後端與 Vue 管理介面。後端使用 Java 21、Spring Boot 4.1.1、Flowable 8.0.0；前端使用 Vue 3、Vite 5 與 Element Plus。表單採用 uni-form，版本固定在 `vendor/uni-form` submodule 的 commit `3661329`。
 
 ## 開發環境
 
-本機開發環境由共用 `scripts/localenv` 管理。需要 Java 21、Maven、Docker、Node.js 與已初始化的 uni-form submodule。前端 SDK 建置使用 Node 24.21.0；`bpm-frontend/package.json` 的 Volta 宣告為 Node 20.20.2，localenv 驗證環境記錄為 Node 22.23.1。環境手冊位於 `$LOCALENV_SH` 同目錄的 `localenv/docs/greyhound.md`。
+本機開發環境由共用 `scripts/localenv` 管理。需要 Java 21、Maven、Docker、Node 24 與已初始化的 uni-form submodule。前端與 SDK 的 Volta 宣告統一為 Node 24.21.0，pnpm 版本依 SDK 的 `packageManager`。環境手冊位於 `$LOCALENV_SH` 同目錄的 `localenv/docs/greyhound.md`。
 
 ```bash
 git submodule update --init vendor/uni-form
@@ -29,6 +29,8 @@ mvn -f bpm-core clean package -DskipTests
 ```
 
 只有完成 `pack-npm.sh` 產生 `vendor/uni-form/dist/npm/` tarball 後，才在 `bpm-frontend` 執行 `npm ci`。SDK pin 更新時須同步更新本機 tarball 的 lockfile integrity；Java reactor 與 bpm-core 使用 `clean` 重建，避免殘留已刪除資源或沿用舊 SNAPSHOT 內嵌依賴。`mvn verify` 使用 Testcontainers 啟動 MSSQL、RabbitMQ、Redis；需有可用的 Docker daemon，且目前執行環境可存取 Docker socket。
+
+Node 24 與 SDK 指定的 pnpm 已在 PATH 時，也可從根目錄執行 `bash scripts/build-uniform-frontend.sh`。前端 Docker 與 CI 共用此入口，再執行 `npm ci`；Docker 使用 repository root 作為 context：`docker build -f bpm-frontend/Dockerfile .`。UniForm 的 Git URL 為內網 SSH，CI runner 必須具備網路與讀取權限。
 
 localenv 的 seed／acceptance runner 需要 Bash 4 以上；macOS 內建 Bash 3.2 不支援。若 Homebrew Bash 已安裝，可將它放在 PATH 前端再操作：
 
@@ -60,6 +62,7 @@ cd ../bpm-frontend && npm test && npm run build
 
 ## 專案入口
 
+- [`docs/handoff/2026-10-25-uniform-performance.md`](docs/handoff/2026-10-25-uniform-performance.md)：本次 UniForm 升版、架構／效能調整與驗證範圍
 - [`docs/README-testing.md`](docs/README-testing.md)：測試環境與測試方式
 - [`docs/handoff/README.md`](docs/handoff/README.md)：現況快照、未完成項目及交接文件索引
 - [`docs/handoff/2026-10-13-uniform-form-refactor-handoff.md`](docs/handoff/2026-10-13-uniform-form-refactor-handoff.md)：uni-form 導入、介面與後續工作

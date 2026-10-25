@@ -24,14 +24,19 @@ services:
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: "false"
 
   bpm-frontend:
-    image: node:20-alpine
-    working_dir: /app
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    build:
+      context: .
+      dockerfile: bpm-frontend/Dockerfile
+      target: dev
+    working_dir: /app/bpm-frontend
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+    environment:
+      VITE_API_PROXY: http://bpm-core:8080
     ports:
       - "3000:3000"
     volumes:
-      - ./bpm-frontend:/app
-      - frontend-node-modules:/app/node_modules
+      - ./bpm-frontend:/app/bpm-frontend
+      - frontend-node-modules:/app/bpm-frontend/node_modules
     depends_on:
       - nginx
 

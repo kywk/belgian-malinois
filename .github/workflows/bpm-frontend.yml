@@ -3,7 +3,7 @@ name: CI/CD - BPM Frontend
 on:
   push:
     branches: [dev, sit]
-    paths: ['bpm-frontend/**']
+    paths: ['bpm-frontend/**', 'vendor/uni-form', '.gitmodules', 'scripts/build-uniform-frontend.sh', '.github/workflows/bpm-frontend.yml']
   workflow_dispatch:
     inputs:
       environment:
@@ -19,12 +19,19 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
+      # UniForm requires a runner with internal Git access and SSH authorization.
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: bpm-frontend/package-lock.json
+      - name: Build pinned UniForm SDK
+        run: |
+          npm install --global "$(node -p "require('./vendor/uni-form/package.json').packageManager")"
+          bash scripts/build-uniform-frontend.sh
       - run: cd bpm-frontend && npm ci && npm run build
 
   docker:
@@ -33,7 +40,10 @@ jobs:
     permissions:
       packages: write
     steps:
+      # UniForm requires a runner with internal Git access and SSH authorization.
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -41,7 +51,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v5
         with:
-          context: bpm-frontend
+          context: .
+          file: bpm-frontend/Dockerfile
           push: true
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}

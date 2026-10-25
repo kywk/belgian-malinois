@@ -5,13 +5,15 @@
 
 <script setup>
 import { computed, ref, shallowReactive, unref } from 'vue'
-import { UfRenderer } from '@nanshan/uniform-vue'
+import { UfRenderer } from '@nanshan/uniform-vue/renderer'
 import { provideOptionsHost, scalarChoiceFields, supportsDynamicSource, snapshotOptions, useOptionsHost } from './options.js'
 const props = defineProps({ envelope: { type: Object, required: true }, modelValue: Object, errors: Array })
 const emit = defineEmits(['update:modelValue', 'update:errors'])
 const renderer = ref()
 const host = useOptionsHost()
 const statuses = shallowReactive(new Map())
+const choiceFields = computed(() => scalarChoiceFields(props.envelope.schema?.root))
+const fieldsById = computed(() => new Map(choiceFields.value.map(node => [node.id, node])))
 // SDK 靜態選項編譯不接受空 enum；此值僅供呈現 schema 通過編譯。
 // Widgets 仍從宿主 status.list 取真實選項；validate 另拒絕空清單的所有非空答案。
 const emptyOptionsPlaceholder = [{ value: '__greyhound_empty_options__', label: '' }]
@@ -23,7 +25,7 @@ if (host) provideOptionsHost(host.envelope, host.target, host.onConflict, {
 // null 是宿主明確清除動態單選的提交意圖。SDK scalar schema 用缺鍵表示未填寫，
 // 僅在呈現模型省略；之後編輯其他欄位時仍須把 null 留在宿主提交資料。
 const clearableScalarKeys = computed(() => !host || props.envelope.mode !== 'fill' ? []
-  : scalarChoiceFields(props.envelope.schema?.root)
+  : choiceFields.value
     .filter(node => node.type !== 'checkbox' && supportsDynamicSource(node)
       && props.envelope.meta?.states?.[node.key] === 'editable')
     .map(node => node.key))
@@ -49,7 +51,7 @@ function updateModel(data) {
 const presentation = computed(() => {
   const env = props.envelope
   if (!host || !env.schema) return env
-  const fields = new Map(scalarChoiceFields(env.schema.root).filter(node => supportsDynamicSource(node)).map(node => [node.id, node]))
+  const fields = new Map(choiceFields.value.filter(node => supportsDynamicSource(node)).map(node => [node.id, node]))
   function project(nodes) {
     return nodes.map(node => {
       if (fields.has(node.id)) {
@@ -70,13 +72,13 @@ function validate() {
   if (!renderer.value?.validate) return [{ path: '', code: 'formUnavailable', message: '表單尚未準備完成。' }]
   const pending = [...statuses.entries()].flatMap(([id, status]) => {
     if (!unref(status.source) || !unref(status.editable) || unref(status.ready)) return []
-    const node = scalarChoiceFields(props.envelope.schema?.root).find(field => field.id === id)
+    const node = fieldsById.value.get(id)
     return [{ path: '/' + (node?.key || ''), code: 'optionsUnavailable',
       message: unref(status.error) || unref(status.reason) || '選項仍在載入，請稍後再送出。' }]
   })
   const emptySelections = [...statuses.entries()].flatMap(([id, status]) => {
     if (!unref(status.source) || !unref(status.editable) || !unref(status.ready) || unref(status.list)?.length) return []
-    const node = scalarChoiceFields(props.envelope.schema?.root).find(field => field.id === id)
+    const node = fieldsById.value.get(id)
     if (!node) return []
     const value = props.modelValue?.[node.key]
     const empty = value === undefined || (node.type === 'checkbox' ? Array.isArray(value) && value.length === 0 : value === null)

@@ -23,6 +23,8 @@ import com.bpm.core.form.service.FormService;
 import com.bpm.core.uniform.FormAccessResolver;
 import com.bpm.core.uniform.FormContextResolver;
 import com.bpm.core.uniform.FormSubmissionService;
+import com.bpm.core.service.FormVersionLocker;
+import com.bpm.core.service.ProcessInvolvementService;
 import org.flowable.engine.RepositoryService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
@@ -261,15 +263,31 @@ public class TaskController {
         // 完整的政策說明見 OnBehalfOfLookup 的類別註解。
         //
         // ⚠️ 一次查詢：逐個任務查變數是 N+1（收件匣可有數十筆）。
-        final Map<String, String> onBehalfOf = onBehalfOfLookup.byProcessInstances(
-                taskMap.values().stream()
-                        .map(Task::getProcessInstanceId)
-                        .filter(Objects::nonNull)
-                        .collect(Collectors.toSet()));
+        Set<String> processIds = taskMap.values().stream()
+                .map(Task::getProcessInstanceId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        final Map<String, String> onBehalfOf = onBehalfOfLookup.byProcessInstances(processIds);
+        Map<String, ProcessInstance> processes = new HashMap<>();
+        Map<String, Map<?, ?>> formVersions = new HashMap<>();
+        // 同案件可能有多個任務；按案件去重、分批取必要資料，避免每個任務再查兩次。
+        // 只讀 _formVersions，不以 includeProcessVariables 載入整份填答資料。
+        for (List<String> batch : ProcessInvolvementService.partition(processIds)) {
+            Set<String> ids = new LinkedHashSet<>(batch);
+            runtimeService.createProcessInstanceQuery().processInstanceIds(ids).list()
+                    .forEach(process -> processes.put(process.getId(), process));
+            runtimeService.createVariableInstanceQuery().executionIds(ids)
+                    .excludeTaskVariables().variableName(FormVersionLocker.VERSIONS_VARIABLE).list()
+                    .forEach(variable -> {
+                        if (variable.getValue() instanceof Map<?, ?> versions) {
+                            formVersions.put(variable.getExecutionId(), versions);
+                        }
+                    });
+        }
 
         return taskMap.values().stream()
                 .sorted(Comparator.comparing(Task::getCreateTime).reversed())
-                .map(t -> toMap(t, onBehalfOf)).toList();
+                .map(t -> toMap(t, onBehalfOf, processes, formVersions)).toList();
     }
 
     /**
@@ -1400,8 +1418,9 @@ public class TaskController {
      *                   由呼叫端一次查好傳入，<b>不可</b>在這裡逐筆查 ——
      *                   那是 N+1，而且會讓「一次查詢」的保證只存在於註解裡。
      */
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> toMap(Task t, Map<String, String> onBehalfOf) {
+    private Map<String, Object> toMap(Task t, Map<String, String> onBehalfOf,
+                                    Map<String, ProcessInstance> processes,
+                                    Map<String, Map<?, ?>> formVersions) {
         Map<String, Object> m = new HashMap<>();
         m.put("taskId", t.getId());
         m.put("taskName", t.getName());
@@ -1415,23 +1434,16 @@ public class TaskController {
         // 判斷，不需要另外一個布林欄位。
         m.put("onBehalfOf", t.getProcessInstanceId() != null
                 ? onBehalfOf.get(t.getProcessInstanceId()) : null);
-        // Resolve locked formVersion from process variable
-        try {
-            Map<String, Integer> versions = (Map<String, Integer>)
-                    runtimeService.getVariable(t.getProcessInstanceId(), "_formVersions");
-            if (versions != null && t.getFormKey() != null) {
-                m.put("formVersion", versions.get(t.getFormKey()));
-            }
-        } catch (Exception ignored) {}
-        // Enrich with processDefinitionKey and businessKey
-        try {
-            ProcessInstance pi = runtimeService.createProcessInstanceQuery()
-                    .processInstanceId(t.getProcessInstanceId()).singleResult();
-            if (pi != null) {
-                m.put("processDefinitionKey", pi.getProcessDefinitionKey());
-                m.put("businessKey", pi.getBusinessKey());
-            }
-        } catch (Exception ignored) {}
+        Map<?, ?> versions = formVersions.get(t.getProcessInstanceId());
+        if (versions != null && t.getFormKey() != null) {
+            m.put("formVersion", versions.get(t.getFormKey()));
+        }
+        // 查詢期間已完成的案件允許缺席；真正的資料庫故障由批次查詢回報。
+        ProcessInstance pi = processes.get(t.getProcessInstanceId());
+        if (pi != null) {
+            m.put("processDefinitionKey", pi.getProcessDefinitionKey());
+            m.put("businessKey", pi.getBusinessKey());
+        }
         return m;
     }
 

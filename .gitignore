@@ -16,6 +16,8 @@ build/
 
 # Node
 node_modules/
+.pnpm-store/
+.npm/
 dist/
 
 # OS

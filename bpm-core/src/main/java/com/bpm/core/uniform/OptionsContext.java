@@ -25,10 +25,17 @@ final class OptionsContext {
 
     private final UniformBffService bff;
     private final UniformSpecResources resources;
+    private final TypeRegistry registry;
 
     OptionsContext(UniformBffService bff, UniformSpecResources resources) {
         this.bff = bff;
         this.resources = resources;
+        // 內建 manifest 在服務生命週期內固定；只註冊一次，之後僅供唯讀權限計算。
+        // 不把 DSL、profile 或使用者資料放進跨請求快取。
+        this.registry = new TypeRegistry();
+        for (Map<String, Object> manifest : resources.manifests()) {
+            if (!registry.register(ManifestReader.read(manifest)).ok()) throw refused();
+        }
     }
 
     Prepared prepare(Map<String, Object> dsl, Map<String, Object> profile,
@@ -114,10 +121,6 @@ final class OptionsContext {
                                        Map<String, Object> data, boolean trustedData) {
         if (!OptionsProviderRegistry.hasSources(dsl)) {
             // 保留既有靜態表單的 validation 路徑（含 malformed repeater 的 SDK 欄位錯誤）。
-            TypeRegistry registry = new TypeRegistry();
-            for (Map<String, Object> manifest : resources.manifests()) {
-                if (!registry.register(ManifestReader.read(manifest)).ok()) throw refused();
-            }
             Map<String, String> result = new LinkedHashMap<>();
             AccessCalculator.calculate(UniformDocumentReader.read(dsl), registry,
                     AccessProfile.fromJson(profile), data, Map.of()).states().forEach((key, state) -> {

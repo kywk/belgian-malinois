@@ -46,7 +46,10 @@ export function parameterCandidates(nodes, owner) {
     && !createsDependencyCycle(fields, owner?.key, node.key))
 }
 export function provideOptionsHost(envelope, target, onConflict, lifecycle = {}) {
-  provide(optionsHost, { envelope, target, onConflict, ...lifecycle })
+  // 每個 Envelope 建立一次索引，避免每個選項元件各自走訪整份 schema。
+  const fieldsById = computed(() => new Map(scalarChoiceFields(unref(envelope)?.schema?.root)
+    .map(node => [node.id, node])))
+  provide(optionsHost, { envelope, target, onConflict, fieldsById, ...lifecycle })
 }
 export function useOptionsHost() { return inject(optionsHost, null) }
 export function supportsDynamicSource(node, fields) {
@@ -97,8 +100,7 @@ export function useDynamicOptions(context) {
   const ready = ref(false)
   let controller
   let generation = 0
-  const canonical = computed(() => scalarChoiceFields(unref(host?.envelope)?.schema?.root)
-    .find(node => node.id === context().node.id))
+  const canonical = computed(() => host?.fieldsById.value.get(context().node.id))
   const source = computed(() => canonical.value?.optionsSource || context().node.optionsSource)
   // 投影可能已移除隱藏 optional inputs；實際參數解析仍由伺服器負責。
   const supported = computed(() => !!host && !!canonical.value && supportsDynamicSource(canonical.value))

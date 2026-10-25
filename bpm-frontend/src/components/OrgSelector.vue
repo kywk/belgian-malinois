@@ -1,6 +1,6 @@
 <template>
   <div>
-    <el-input v-model="keyword" placeholder="搜尋人員（姓名/工號）" clearable @input="doSearch"
+    <el-input v-model="keyword" placeholder="搜尋人員（姓名/工號）" clearable
       style="margin-bottom: 8px" />
     <el-table :data="results" highlight-current-row @current-change="onSelect" max-height="300" size="small">
       <el-table-column v-if="multiple" width="50">
@@ -20,7 +20,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { searchUsers } from '../services/orgApi.js'
 
 const props = defineProps({
@@ -48,10 +48,23 @@ function toggleSelect(userId) {
   emit('update:modelValue', list)
 }
 
-async function doSearch() {
-  if (keyword.value.length < 1) { results.value = []; return }
-  try { results.value = await searchUsers(keyword.value) } catch { results.value = [] }
-}
+// 輸入時立即取消上一輪；延遲送出避免每個按鍵都查詢後端。
+// watcher cleanup 同時涵蓋切換關鍵字與元件卸載。
+watch(keyword, (value, _previous, onCleanup) => {
+  results.value = []
+  const query = value.trim()
+  if (!query) return
+  const controller = new AbortController()
+  const timer = setTimeout(async () => {
+    try {
+      const users = await searchUsers(query, controller.signal)
+      if (!controller.signal.aborted) results.value = users
+    } catch {
+      if (!controller.signal.aborted) results.value = []
+    }
+  }, 250)
+  onCleanup(() => { clearTimeout(timer); controller.abort() })
+}, { flush: 'sync' })
 
 function onSelect(row) {
   if (row && !props.multiple) emit('update:modelValue', row.userId)

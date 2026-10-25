@@ -2,21 +2,20 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { testJwt } from '../services/testJwt.js'
 
-// router/index.js 會 import 全部的 view（每個 view 又拉 element-plus、
-// bpmn-js…），在單元測試裡載入它們既慢又脆弱。因此把 view 全部 stub 掉 ——
-// 這組測試要驗的是「守衛的判斷」，不是元件本身。
-vi.mock('../views/Dashboard.vue', () => ({ default: {} }))
-vi.mock('../views/TaskInbox.vue', () => ({ default: {} }))
-vi.mock('../views/DocumentDetail.vue', () => ({ default: {} }))
-vi.mock('../views/MyApplications.vue', () => ({ default: {} }))
-vi.mock('../views/AuditLog.vue', () => ({ default: {} }))
-vi.mock('../views/FormEditor.vue', () => ({ default: {} }))
-vi.mock('../views/BpmnEditor.vue', () => ({ default: {} }))
-vi.mock('../views/ExternalSystemAdmin.vue', () => ({ default: {} }))
-vi.mock('../views/ProcessVariableSpecAdmin.vue', () => ({ default: {} }))
-vi.mock('../views/ProcessList.vue', () => ({ default: {} }))
-vi.mock('../views/FormList.vue', () => ({ default: {} }))
-vi.mock('../views/StartProcess.vue', () => ({ default: {} }))
+// 只驗守衛政策，頁面以 module stub 隔離。lazy import 會把整個 module
+// 交給 Vue Router，因此明確標記 ES module，讓 Router 正確取 default 元件。
+vi.mock('../views/Dashboard.vue', () => ({ __esModule: true, default: {} }))
+vi.mock('../views/TaskInbox.vue', () => ({ __esModule: true, default: {} }))
+vi.mock('../views/DocumentDetail.vue', () => ({ __esModule: true, default: {} }))
+vi.mock('../views/MyApplications.vue', () => ({ __esModule: true, default: {} }))
+vi.mock('../views/AuditLog.vue', () => ({ __esModule: true, default: {} }))
+vi.mock('../views/FormEditor.vue', () => ({ __esModule: true, default: {} }))
+vi.mock('../views/BpmnEditor.vue', () => ({ __esModule: true, default: {} }))
+vi.mock('../views/ExternalSystemAdmin.vue', () => ({ __esModule: true, default: {} }))
+vi.mock('../views/ProcessVariableSpecAdmin.vue', () => ({ __esModule: true, default: {} }))
+vi.mock('../views/ProcessList.vue', () => ({ __esModule: true, default: {} }))
+vi.mock('../views/FormList.vue', () => ({ __esModule: true, default: {} }))
+vi.mock('../views/StartProcess.vue', () => ({ __esModule: true, default: {} }))
 
 /**
  * 權限中心的 fixture —— **必須與後端的 MockPermController 一致**。
@@ -134,11 +133,10 @@ describe('router 權限守衛', () => {
    */
   const guard = async (path) => {
     if (router.currentRoute.value.fullPath !== '/') {
-      try { await router.push('/') } catch { /* ignore */ }
+      await router.push('/')
     }
-    try {
-      await router.push(path)
-    } catch { /* 導航被中止也算結果 */ }
+    // 權限拒絕以 redirect 處理；真正的載入／導航例外必須使測試失敗。
+    await router.push(path)
     return router.currentRoute.value.fullPath
   }
 

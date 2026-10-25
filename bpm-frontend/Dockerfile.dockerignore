@@ -1,0 +1,15 @@
+# Only send the frontend and its pinned SDK sources to this build.
+**
+!bpm-frontend/
+!bpm-frontend/**
+!vendor/
+!vendor/uni-form/
+!vendor/uni-form/**
+!scripts/
+!scripts/build-uniform-frontend.sh
+**/node_modules
+**/dist
+**/target
+**/.git
+**/.env
+**/.env.*
