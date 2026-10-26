@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { createRouter, createMemoryHistory } from 'vue-router'
 import ElementPlus from 'element-plus'
 import { testJwt } from './services/testJwt.js'
 
@@ -79,8 +80,9 @@ const GlobalStubs = {
 async function mountAs(userId, claims = {}) {
   setActivePinia(createPinia())
   useAuthStore().setToken(testJwt(userId, claims))
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { template: '<div />' } }] })
   const wrapper = mount(App, {
-    global: { plugins: [ElementPlus], stubs: GlobalStubs },
+    global: { plugins: [ElementPlus, router], stubs: GlobalStubs },
   })
   // 等權限載入（setToken 是 fire-and-forget，見 stores/auth.js）
   await useAuthStore().loadPermissions()
@@ -164,8 +166,14 @@ describe('App 主選單的權限顯示', () => {
     const w = await mountAs('admin001')
     expect(menuText(w)).toContain('表單編輯器')
 
-    useAuthStore().logout()
+    const item = w.findAllComponents({ name: 'ElMenuItem' }).find(node => node.text().includes('登出'))
+    expect(item.props('index')).toBe('logout')
+    expect(item.props('route')).toBe('/')
+    const warn = vi.spyOn(console, 'warn')
+    await item.trigger('click')
     await w.vm.$nextTick()
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('Invalid event arguments')
+    expect(useAuthStore().isAuthenticated).toBe(false)
 
     expect(menuText(w), '登出後仍顯示管理選單').not.toContain('表單編輯器')
   })

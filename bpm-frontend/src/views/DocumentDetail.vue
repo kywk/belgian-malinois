@@ -57,7 +57,7 @@
         <ApprovalTimeline :process-instance-id="task?.processInstanceId" />
       </el-col>
       <el-col :span="12">
-        <CommentPanel :task-id="taskId" />
+        <CommentPanel :task-id="taskId" :readonly="isUnclaimed" />
       </el-col>
     </el-row>
 
@@ -67,7 +67,11 @@
            「不顯示任何任務動作」——以任務名稱猜測會讓補件任務在後端失聯時
            露出一整排審核按鈕（同意／拒絕），而補件任務的受指派人是申請人本人。
            載入狀態與失敗原因由上方表單區呈現。 -->
-      <template v-if="isCountersign">
+      <el-space v-if="isUnclaimed">
+        <span>此任務尚未認領，請先認領再處理。</span>
+        <el-button type="primary" :loading="submitting" @click="handleClaim">認領任務</el-button>
+      </el-space>
+      <template v-else-if="isCountersign">
         <p v-if="task.description">加簽說明：{{ task.description }}</p>
         <el-input v-model="countersignOpinion" type="textarea" aria-label="加簽意見"
           placeholder="請輸入加簽意見" :rows="3" style="margin-bottom:12px" />
@@ -139,6 +143,7 @@ provideOptionsHost(envelope, computed(() => envelope.value ? { taskId } : null),
 const isExternal = computed(() => task.value?.formKey?.startsWith('external:'))
 const countersignOpinion = ref('')
 const isCountersign = computed(() => Boolean(task.value?.parentTaskId))
+const isUnclaimed = computed(() => Boolean(task.value) && !task.value.assignee && !isCountersign.value)
 const isDelegated = computed(() => task.value?.delegationState === 'PENDING')
 const isRevision = computed(() => envelope.value?.mode === 'fill')
 const actionHint = computed(() =>
@@ -224,7 +229,25 @@ async function loadSubtasks() {
   try { subtasks.value = await getSubtasks(taskId) } catch { subtasks.value = [] }
 }
 
-onMounted(async () => {
+async function handleClaim() {
+  if (submitting.value || !isUnclaimed.value) return
+  submitting.value = true
+  try {
+    await updateTask(taskId, { action: 'claim' })
+    await loadTask()
+    ElMessage.success('已認領任務')
+  } catch (e) {
+    ElMessage.error('認領失敗：' + (e.response?.data?.message || e.message))
+    // 競爭認領後不可用舊候選資料繼續操作，也不可本機假設已指派。
+    task.value = null
+    envelope.value = null
+    try { await loadTask() } catch { router.push('/tasks') }
+  } finally {
+    submitting.value = false
+  }
+}
+
+async function loadTask() {
   const [assigned, candidate] = await Promise.all([
     getTasks({ assignee: auth.userId }),
     getTasks({ candidateUser: auth.userId })
@@ -232,8 +255,12 @@ onMounted(async () => {
   const map = new Map()
   ;[...assigned, ...candidate].forEach(t => map.set(t.taskId, t))
   task.value = map.get(taskId) || null
+  envelope.value = null
+  if (!task.value) { router.push('/tasks'); return }
 
   await loadForm()
   await loadSubtasks()
-})
+}
+
+onMounted(loadTask)
 </script>

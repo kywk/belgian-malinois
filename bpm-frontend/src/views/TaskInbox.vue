@@ -18,7 +18,9 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="assignee" label="審核人" width="120" />
+      <el-table-column label="審核人" width="120">
+        <template #default="{ row }">{{ row.assignee || '待認領' }}</template>
+      </el-table-column>
       <el-table-column label="建立時間" width="180">
         <template #default="{ row }">{{ fmt(row.createTime) }}</template>
       </el-table-column>

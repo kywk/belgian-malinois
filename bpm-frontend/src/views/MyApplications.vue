@@ -7,7 +7,10 @@
       <el-tab-pane label="已拒絕" name="rejected" />
     </el-tabs>
 
-    <el-table :data="list" stripe>
+    <el-alert v-if="loadError" :title="loadError" type="error" show-icon :closable="false">
+      <el-button :disabled="loading" @click="loadData">重新載入</el-button>
+    </el-alert>
+    <el-table v-else v-loading="loading" :data="list" stripe>
       <!--
         ⚠️ #90：沒有這個標籤，員工在「我的申請」看到一張自己沒送過的單，
         畫面完全不解釋那是怎麼回事。
@@ -94,6 +97,9 @@ const auth = useAuthStore()
 const userId = computed(() => auth.userId)
 const activeTab = ref('running')
 const list = ref([])
+const loading = ref(false)
+const loadError = ref('')
+let loadGeneration = 0
 const fmt = (t) => formatDateTime(t)
 // 催辦中的案件 id：按鈕轉圈用，同時防止連點造成第二次請求
 // （第二次會被後端的頻率限制擋成 429，但連點本身就不該發生）。
@@ -122,7 +128,7 @@ const statusType = (s) => ({ running: 'primary', completed: 'success', rejected:
 const statusLabel = (s) => ({ running: '進行中', completed: '已完成', rejected: '已拒絕', cancelled: '已取消' }[s] || s)
 
 async function loadData() {
-  // ⚠️ #90 刻意「不動」這個函式，理由寫在這裡以免日後有人以為漏了：
+  // #90 的案件歸屬與顯示標籤仍沿用既有契約：
   // 1. 後端比對的是 initiator **或** onBehalfOf（ProcessController.java:269-270、
   //    HistoryController 的同名端點），所以代發的單本來就在這個查詢的結果裡，
   //    改呼叫方式（例如加一個 initiator 以外的參數）只會把它弄壞。
@@ -132,13 +138,22 @@ async function loadData() {
   // 3. completed / rejected 只做陣列 filter（保留整個 row 物件），
   //    onBehalf 這個鍵會原封不動跟著 row 走過來，不需要重新對映。
   //    這也是為什麼已結案的代發單一樣會有標示 —— 它同樣是員工沒送過的單。
-  if (activeTab.value === 'running') {
-    list.value = await getProcessInstances({ initiator: userId.value })
-  } else {
-    const all = await getHistoricProcessInstances({ initiator: userId.value, finished: true })
-    list.value = activeTab.value === 'completed'
-      ? all.filter(p => p.status === 'completed')
-      : all.filter(p => p.status !== 'completed')
+  const generation = ++loadGeneration
+  const tab = activeTab.value
+  loading.value = true
+  loadError.value = ''
+  list.value = []
+  try {
+    const rows = tab === 'running'
+      ? await getProcessInstances({ initiator: userId.value })
+      : await getHistoricProcessInstances({ initiator: userId.value, finished: true })
+    if (generation !== loadGeneration) return
+    list.value = tab === 'running' ? rows : tab === 'completed'
+      ? rows.filter(p => p.status === 'completed') : rows.filter(p => p.status !== 'completed')
+  } catch (e) {
+    if (generation === loadGeneration) loadError.value = '申請清單載入失敗：' + (e.response?.data?.message || e.message)
+  } finally {
+    if (generation === loadGeneration) loading.value = false
   }
 }
 

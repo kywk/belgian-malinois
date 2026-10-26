@@ -51,7 +51,7 @@
           <el-menu-item index="/admin/forms">表單管理</el-menu-item>
           <el-menu-item index="/admin/external-systems">外部系統</el-menu-item>
         </el-sub-menu>
-        <el-menu-item style="margin-left:auto" @click="logout">
+        <el-menu-item index="logout" route="/" style="margin-left:auto" @click="logout">
           {{ auth.userId }} 登出
         </el-menu-item>
       </el-menu>

@@ -1,5 +1,5 @@
 <template>
-  <UfRenderer ref="renderer" :envelope="presentation" :model-value="rendererModel" :errors="errors"
+  <UfRenderer class="greyhound-form" ref="renderer" :envelope="presentation" :model-value="rendererModel" :errors="errors"
     @update:model-value="updateModel" @update:errors="$emit('update:errors', $event)" />
 </template>
 

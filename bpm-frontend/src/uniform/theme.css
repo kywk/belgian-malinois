@@ -76,3 +76,20 @@
   line-height: 1.7;
   color: var(--el-text-color-regular);
 }
+
+/* Blur validation must not move the next click target between pointerdown and
+ * pointerup. Reserve two error lines even while valid; longer messages scroll
+ * inside that slot instead of moving subsequent controls. Scope to host forms. */
+.greyhound-form[data-uf-mode="fill"] .uf-node--field {
+  position: relative;
+  padding-bottom: 44px;
+}
+.greyhound-form[data-uf-mode="fill"] .uf-node--field > .uf-errors {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  height: 40px;
+  overflow: auto;
+  margin: 0;
+}

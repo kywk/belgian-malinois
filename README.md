@@ -1,6 +1,6 @@
 # Greyhound BPM 平台
 
-Greyhound 是以 BPMN 流程、任務與表單為核心的內部流程平台，包含 Spring Boot 後端與 Vue 管理介面。後端使用 Java 21、Spring Boot 4.1.1、Flowable 8.0.0；前端使用 Vue 3、Vite 5 與 Element Plus。表單採用 uni-form，版本固定在 `vendor/uni-form` submodule 的 commit `3661329`。
+Greyhound 是以 BPMN 流程、任務與表單為核心的內部流程平台，包含 Spring Boot 後端與 Vue 管理介面。後端使用 Java 21、Spring Boot 4.1.1、Flowable 8.0.0；前端使用 Vue 3、Vite 5 與 Element Plus。表單採用 uni-form，版本以 `vendor/uni-form` submodule 的 gitlink 為準。
 
 ## 開發環境
 

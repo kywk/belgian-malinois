@@ -160,3 +160,17 @@ describe('#6 催辦：只對進行中的單出現', () => {
     expect(wrapper.findAll('button').filter((b) => b.text().includes('催辦'))).toHaveLength(0)
   })
 })
+
+it('載入失敗顯示錯誤與重試，不呈現空清單假象', async () => {
+  getProcessInstances.mockRejectedValueOnce(new Error('登入已過期'))
+  const wrapper = mountPage()
+  await flush()
+  await flush()
+  expect(wrapper.text()).toContain('申請清單載入失敗：登入已過期')
+  expect(wrapper.findComponent({ name: 'ElTable' }).exists()).toBe(false)
+  expect(successSpy).not.toHaveBeenCalled()
+  await wrapper.findAll('button').find(button => button.text() === '重新載入').trigger('click')
+  await flush()
+  expect(wrapper.text()).not.toContain('申請清單載入失敗')
+  expect(wrapper.findComponent({ name: 'ElTable' }).exists()).toBe(true)
+})
