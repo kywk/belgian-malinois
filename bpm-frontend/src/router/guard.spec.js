@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { flushPromises } from '@vue/test-utils'
 import { testJwt } from '../services/testJwt.js'
 
 // 只驗守衛政策，頁面以 module stub 隔離。lazy import 會把整個 module
@@ -53,9 +54,11 @@ let backendDown = false
  * 這裡用一個可控的 deferred promise 重現那個時間差。
  */
 let delayMs = 0
+let permissionsGate = null
 
 vi.mock('../services/permissionsApi.js', () => ({
   fetchMyPermissions: async () => {
+    if (permissionsGate) await permissionsGate
     if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs))
     if (backendDown) throw new Error('連線失敗')
     // pinia 的 store 會在 request 當下讀 localStorage，所以這裡取現況
@@ -117,6 +120,7 @@ describe('router 權限守衛', () => {
     localStorage.clear()
     backendDown = false
     delayMs = 0
+    permissionsGate = null
     // ⚠️ 每個測試都要全新的 pinia：auth store 的 state 是
     // `token: getToken()` 建立時讀一次，而 pinia store 是單例 ——
     // 沿用前一個測試的實例會讓「這個測試登入的是誰」取決於執行順序。
@@ -252,15 +256,21 @@ describe('router 權限守衛', () => {
     // 這是 guard 改成 async 的唯一理由。若拿掉 await 讓它先放行，
     // 使用者會看到頁面跳出來、又被彈回首頁 —— 那個閃爍會被讀成
     // 「功能壞了」，而且他無從知道自己在等什麼。
-    delayMs = 30
+    let releasePermissions
+    permissionsGate = new Promise(resolve => { releasePermissions = resolve })
     await login('dir001')
 
     let settled = false
     const nav = guard('/audit-log').then((r) => { settled = true; return r })
 
     // 權限還沒到 —— 導航必須尚未結束。
-    await new Promise(r => setTimeout(r, 5))
-    expect(settled, '權限尚未載入就結束導航 → 畫面會閃一下再被踢走').toBe(false)
+    // Control the response explicitly instead of racing 5ms/30ms timers under load.
+    await flushPromises()
+    try {
+      expect(settled, '權限尚未載入就結束導航 → 畫面會閃一下再被踢走').toBe(false)
+    } finally {
+      releasePermissions()
+    }
 
     expect(await nav).toBe('/audit-log')
   })
