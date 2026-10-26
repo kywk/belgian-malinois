@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "dev:e2e": "vite --config vite.e2e.config.js"
   },
   "dependencies": {
     "@bpmn-io/properties-panel": "^3.26.0",
@@ -28,6 +30,7 @@
     "vuedraggable": "^4.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "@vitejs/plugin-vue": "5.0.4",
     "@vue/test-utils": "^2.4.6",
     "jsdom": "^24.1.0",

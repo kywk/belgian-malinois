@@ -20,7 +20,7 @@ stages:
 
 .docker-build: &docker-build
   image: docker:24
-  services: [docker:24-dind]
+  services: ["docker:24-dind"]
   before_script:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
 
@@ -58,7 +58,7 @@ bpm-core:docker:
     - docker build -t $REGISTRY/bpm-core:$CI_COMMIT_SHA -t $REGISTRY/bpm-core:latest -f bpm-core/Dockerfile .
     - docker push $REGISTRY/bpm-core:$CI_COMMIT_SHA
     - docker push $REGISTRY/bpm-core:latest
-  needs: [bpm-core:test]
+  needs: ["bpm-core:test"]
   rules:
     - changes: [bpm-core/**, vendor/uni-form]
 
@@ -69,7 +69,7 @@ bpm-core:deploy-dev:
   script:
     - echo "Deploying bpm-core to DEV — $REGISTRY/bpm-core:$CI_COMMIT_SHA"
     # TODO: kubectl set image / docker compose pull
-  needs: [bpm-core:docker]
+  needs: ["bpm-core:docker"]
   rules:
     - if: $CI_COMMIT_BRANCH == "dev"
       changes: [bpm-core/**]
@@ -80,7 +80,7 @@ bpm-core:deploy-sit:
   environment: { name: sit }
   script:
     - echo "Deploying bpm-core to SIT"
-  needs: [bpm-core:docker]
+  needs: ["bpm-core:docker"]
   rules:
     - if: $CI_COMMIT_BRANCH == "sit"
       changes: [bpm-core/**]
@@ -91,7 +91,7 @@ bpm-core:deploy-uat:
   environment: { name: uat }
   script:
     - echo "Deploying bpm-core to UAT"
-  needs: [bpm-core:docker]
+  needs: ["bpm-core:docker"]
   rules:
     - if: $CI_COMMIT_BRANCH == "uat"
       when: manual
@@ -102,7 +102,7 @@ bpm-core:deploy-prod:
   environment: { name: prod }
   script:
     - echo "Deploying bpm-core to PROD"
-  needs: [bpm-core:docker]
+  needs: ["bpm-core:docker"]
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       when: manual
@@ -139,7 +139,7 @@ bpm-frontend:docker:
     - docker build -t $REGISTRY/bpm-frontend:$CI_COMMIT_SHA -t $REGISTRY/bpm-frontend:latest -f bpm-frontend/Dockerfile .
     - docker push $REGISTRY/bpm-frontend:$CI_COMMIT_SHA
     - docker push $REGISTRY/bpm-frontend:latest
-  needs: [bpm-frontend:build]
+  needs: ["bpm-frontend:build"]
   rules:
     - changes: [bpm-frontend/**, vendor/uni-form, .gitmodules, scripts/build-uniform-frontend.sh, .gitlab-ci.yml]
 
@@ -148,7 +148,7 @@ bpm-frontend:deploy-dev:
   stage: deploy
   environment: { name: dev }
   script: echo "Deploying bpm-frontend to DEV"
-  needs: [bpm-frontend:docker]
+  needs: ["bpm-frontend:docker"]
   rules:
     - if: $CI_COMMIT_BRANCH == "dev"
       changes: [bpm-frontend/**, vendor/uni-form, .gitmodules, scripts/build-uniform-frontend.sh, .gitlab-ci.yml]
@@ -158,7 +158,7 @@ bpm-frontend:deploy-sit:
   stage: deploy
   environment: { name: sit }
   script: echo "Deploying bpm-frontend to SIT"
-  needs: [bpm-frontend:docker]
+  needs: ["bpm-frontend:docker"]
   rules:
     - if: $CI_COMMIT_BRANCH == "sit"
       changes: [bpm-frontend/**, vendor/uni-form, .gitmodules, scripts/build-uniform-frontend.sh, .gitlab-ci.yml]
@@ -168,7 +168,7 @@ bpm-frontend:deploy-uat:
   stage: deploy
   environment: { name: uat }
   script: echo "Deploying bpm-frontend to UAT"
-  needs: [bpm-frontend:docker]
+  needs: ["bpm-frontend:docker"]
   rules:
     - if: $CI_COMMIT_BRANCH == "uat"
       when: manual
@@ -178,10 +178,73 @@ bpm-frontend:deploy-prod:
   stage: deploy
   environment: { name: prod }
   script: echo "Deploying bpm-frontend to PROD"
-  needs: [bpm-frontend:docker]
+  needs: ["bpm-frontend:docker"]
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       when: manual
+
+# ──────────────────────────────────────────────
+# Browser E2E
+# ──────────────────────────────────────────────
+
+# Isolated real-browser workflows. The runner must allow privileged DinD and
+# reach/authenticate to the pinned internal UniForm submodule before checkout.
+browser:e2e:
+  image: eclipse-temurin:21-jdk-noble
+  stage: test
+  services:
+    - name: docker:27-dind
+      alias: docker
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    E2E_INSTALL_WITH_DEPS: "1"
+    BROWSER_E2E_NODE_VERSION: "24.21.0"
+  cache:
+    key: browser-e2e
+    paths: [.m2/repository, .npm/]
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends maven git openssh-client curl xz-utils ca-certificates docker.io
+    - |
+      docker_ready=false
+      for attempt in $(seq 1 30); do
+        if docker info >/dev/null 2>&1; then docker_ready=true; break; fi
+        sleep 1
+      done
+      if [ "$docker_ready" != true ]; then
+        echo 'Docker-in-Docker unavailable: this runner must allow privileged docker:27-dind.' >&2
+        exit 1
+      fi
+    - |
+      set -eu
+      case "$(uname -m)" in
+        x86_64) node_arch=x64 ;;
+        aarch64) node_arch=arm64 ;;
+        *) echo 'Unsupported Node architecture' >&2; exit 1 ;;
+      esac
+      ci_node_dir=$(mktemp -d)
+      node_archive="node-v${BROWSER_E2E_NODE_VERSION}-linux-${node_arch}.tar.xz"
+      cd "$ci_node_dir"
+      curl -fsSLO "https://nodejs.org/dist/v${BROWSER_E2E_NODE_VERSION}/${node_archive}"
+      curl -fsSLO "https://nodejs.org/dist/v${BROWSER_E2E_NODE_VERSION}/SHASUMS256.txt"
+      grep " ${node_archive}$" SHASUMS256.txt > node-checksum.txt
+      sha256sum --check node-checksum.txt
+      tar -xJf "$node_archive"
+      export PATH="$ci_node_dir/node-v${BROWSER_E2E_NODE_VERSION}-linux-${node_arch}/bin:$PATH"
+      cd "$CI_PROJECT_DIR"
+      npm install --global "$(node -p "require('./vendor/uni-form/package.json').packageManager")"
+  script:
+    - npm_config_cache="$CI_PROJECT_DIR/.npm" bash scripts/browser-e2e.sh
+    - cd bpm-frontend && npm test && npm run build
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths: [bpm-frontend/playwright-report, bpm-frontend/test-results, bpm-core/target/failsafe-reports]
+    reports:
+      junit: bpm-frontend/test-results/browser-e2e.xml
+  rules:
+    - changes: [bpm-core/**, bpm-frontend/**, bpmn-definitions/**, vendor/uni-form, .gitmodules, scripts/browser-e2e.sh, scripts/build-uniform-frontend.sh, .gitlab-ci.yml]
 
 # ──────────────────────────────────────────────
 # BPMN Definitions Deploy

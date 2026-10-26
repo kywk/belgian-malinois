@@ -224,4 +224,32 @@
             </plugin>
         </plugins>
     </build>
+    <profiles>
+        <profile>
+            <id>browser-e2e</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration><skipTests>true</skipTests></configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <includes><include>**/BrowserE2eIT.java</include></includes>
+                            <systemPropertyVariables>
+                                <e2e.frontend.dir>${project.basedir}/../bpm-frontend</e2e.frontend.dir>
+                            </systemPropertyVariables>
+                            <forkedProcessTimeoutInSeconds>1200</forkedProcessTimeoutInSeconds>
+                        </configuration>
+                        <executions>
+                            <execution><goals><goal>integration-test</goal><goal>verify</goal></goals></execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

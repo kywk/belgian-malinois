@@ -1,0 +1,82 @@
+name: Browser E2E
+
+on:
+  push:
+    branches: [main, dev, sit]
+    paths: ['bpm-core/**', 'bpm-frontend/**', 'bpmn-definitions/**', 'vendor/uni-form', '.gitmodules', 'scripts/browser-e2e.sh', 'scripts/build-uniform-frontend.sh', '.github/workflows/browser-e2e.yml']
+  pull_request:
+    paths: ['bpm-core/**', 'bpm-frontend/**', 'bpmn-definitions/**', 'vendor/uni-form', '.gitmodules', 'scripts/browser-e2e.sh', 'scripts/build-uniform-frontend.sh', '.github/workflows/browser-e2e.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-e2e:
+    # Set this repository variable to a JSON runner label/array when the pinned
+    # UniForm Git server requires an internal self-hosted runner.
+    runs-on: ${{ fromJSON(vars.BROWSER_E2E_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 35
+    env:
+      E2E_INSTALL_WITH_DEPS: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require a runner with internal UniForm Git access
+        env:
+          BROWSER_E2E_RUNNER: ${{ vars.BROWSER_E2E_RUNNER }}
+        run: |
+          if [[ -z "$BROWSER_E2E_RUNNER" ]]; then
+            echo 'Configure BROWSER_E2E_RUNNER with labels for a runner that can reach 10.127.42.141 and read the pinned UniForm repository. Hosted runners do not have this internal access.' >&2
+            exit 1
+          fi
+      - name: Configure optional UniForm SSH identity
+        env:
+          UNIFORM_SSH_PRIVATE_KEY: ${{ secrets.UNIFORM_SSH_PRIVATE_KEY }}
+          UNIFORM_SSH_KNOWN_HOSTS: ${{ secrets.UNIFORM_SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          if [[ -n "$UNIFORM_SSH_PRIVATE_KEY" || -n "$UNIFORM_SSH_KNOWN_HOSTS" ]]; then
+            [[ -n "$UNIFORM_SSH_PRIVATE_KEY" && -n "$UNIFORM_SSH_KNOWN_HOSTS" ]] || { echo 'Both UniForm SSH secrets are required.' >&2; exit 1; }
+            umask 077
+            printf '%s\n' "$UNIFORM_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/uniform-e2e-key"
+            printf '%s\n' "$UNIFORM_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/uniform-e2e-known-hosts"
+            echo "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10 -i $RUNNER_TEMP/uniform-e2e-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/uniform-e2e-known-hosts" >> "$GITHUB_ENV"
+          else
+            echo 'GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes' >> "$GITHUB_ENV"
+          fi
+      - name: Check out pinned SDK (requires internal Git access)
+        run: git submodule update --init --recursive vendor/uni-form
+      - name: Remove temporary SSH files
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/uniform-e2e-key" "$RUNNER_TEMP/uniform-e2e-known-hosts"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: bpm-frontend/package-lock.json
+      - name: Install SDK package manager
+        run: npm install --global "$(node -p "require('./vendor/uni-form/package.json').packageManager")"
+      - name: Run isolated browser E2E
+        run: bash scripts/browser-e2e.sh
+      - name: Frontend regression and production build
+        working-directory: bpm-frontend
+        run: npm test && npm run build
+      - name: Upload reports (no traces or authentication state)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-e2e-reports
+          path: |
+            bpm-frontend/playwright-report/
+            bpm-frontend/test-results/
+            bpm-core/target/failsafe-reports/
+          if-no-files-found: ignore
+          retention-days: 7

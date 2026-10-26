@@ -19,3 +19,14 @@ if ! command -v pnpm >/dev/null 2>&1 || [[ "$(pnpm --version)" != "$expected_pnp
 fi
 pnpm install --frozen-lockfile
 bash scripts/pack-npm.sh
+# Native pnpm builds may use different gzip implementations across platforms.
+# Normalize compression with the project's Node runtime so npm's lockfile checks
+# the same tarball bytes locally and in CI; package contents are unchanged.
+node --input-type=module - <<'JS'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { gunzipSync, gzipSync } from 'node:zlib';
+for (const name of readdirSync('dist/npm').filter(name => name.endsWith('.tgz'))) {
+  const path = `dist/npm/${name}`;
+  writeFileSync(path, gzipSync(gunzipSync(readFileSync(path)), { level: 9 }));
+}
+JS

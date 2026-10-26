@@ -1,5 +1,7 @@
 # BPM Platform 驗收測試操作說明
 
+表單設計、發布、填答與完整待辦操作的隔離瀏覽器自動化入口為 `bash scripts/browser-e2e.sh`；環境需求、案例與 CI 設定見[瀏覽器 E2E](browser-e2e.md)。
+
 ## 快速開始
 
 ### 1. 啟動服務
