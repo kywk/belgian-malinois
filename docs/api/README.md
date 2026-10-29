@@ -46,8 +46,8 @@
 
 [平台規格](../bpm-platform-spec.md) 保存廣泛設計背景，但其中舊版範例允許只帶 assignee，與目前要求 action 的實作不同。呼叫端應使用本頁連結的現行 DTO／Controller，不能直接複製歷史設計範例。
 
-目前 Controller 缺少逐 operation 的 OpenAPI summary、參數與錯誤 response 說明；自動列出 route 不等同具備完整業務契約。後續應先涵蓋申請送件、任務動作、外部 API 與表單版本衝突，對照安全 guard／例外處理補 annotation，再以實際產生的 OpenAPI 核對。
+Controller 已補逐 operation 的 summary、參數與錯誤 response，並以實際 Springdoc 隔離生成核對 97 個 operations。框架錯誤格式也已與實際 MVC 回應比對；業務流程仍須結合本頁與 DTO 閱讀，不能把 route 數量當作所有業務情境的驗收。
 
-驗證入口見 [測試指南](../README-testing.md)。本文件只經靜態來源核對，未在本次執行 live API 或 Maven 測試。
+驗證入口見 [測試指南](../README-testing.md)。本輪已執行隔離 MVC 樣本與既有針對性測試；依賴使用替身，未驗證正式流程引擎、身分系統及外部 callback provider。
 
 返回 [文件入口](../README.md)。
