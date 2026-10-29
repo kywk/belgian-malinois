@@ -58,5 +58,7 @@ public final class BpmDocumentationModels {
     public record ExternalStatus(String processInstanceId, String businessKey, String status, Date startedAt,
             Date completedAt, String result, List<CurrentTask> currentTasks) {}
     public record CurrentTask(String taskId, String taskName, String assignee, Date createdAt) {}
+    public record FrameworkError(Instant timestamp, Integer status, String error, String path,
+            @Schema(description="DeliberateErrorMessageAttributes僅於刻意指定reason時提供") String message) {}
     public record FilterError(String error, int status) {}
 }

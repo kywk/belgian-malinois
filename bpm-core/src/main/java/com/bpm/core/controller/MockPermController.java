@@ -119,7 +119,7 @@ import java.util.*;
     @io.swagger.v3.oas.annotations.Operation(summary="查詢模擬權限人員", description="permCode與選填deptId；未知權限404。 僅bpm.external.mock-enabled=true時公開；production不得依賴此mock。", operationId="MockPermController_getUsersByPermission")
     @io.swagger.v3.oas.annotations.security.SecurityRequirements
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢模擬權限人員成功；直接回傳 List<String>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架錯誤body；message僅刻意提供理由時存在", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FrameworkError.class)))
     public List<String> getUsersByPermission(@PathVariable String permCode,
                                               @RequestParam(required = false) String deptId) {
         List<String> users = PERM_USERS.get(permCode);
