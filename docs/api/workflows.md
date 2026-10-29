@@ -157,3 +157,27 @@ duplicate 可能是正在處理或尚未 commit 的佔位，**不代表流程必
 依據：[DlqAdminController](../../bpm-core/src/main/java/com/bpm/core/dlq/DlqAdminController.java)、[DlqReplayService](../../bpm-core/src/main/java/com/bpm/core/dlq/DlqReplayService.java)。
 
 本文範例用於契約與操作順序說明，未宣稱正式 DB、RabbitMQ、Redis 或外部 provider 已通過驗收。環境驗證請使用 [測試指南](../README-testing.md)。
+
+## 委派、回交與加簽範例
+
+以下使用已存在、目前登入者有權持有的測試任務；路徑 ID 不能套用到正式案件。
+
+```json
+{"action":"delegate","delegateUser":"demo-reviewer"}
+```
+
+對 `PUT /api/tasks/{id}` 送出後，先查任務確認新的 assignee/owner；delegateUser 必填並須為組織認識的人。非持有者不會因提供合法人員就獲授權。原 owner 收回時送下例；resolve 將任務還給 owner，不等於完成。
+
+```json
+{"action":"resolve"}
+```
+
+目前在非委派中任務呼叫 resolve 可能由引擎拋 500，不能假稱一定409。需要完成工作仍以有效持有者依表單契約 complete。改派則明確使用 reassign 與 assignee；只送 assignee 無效。委派/回交逾時先查任務，不原樣循環重送。
+
+加簽先對 `POST /api/countersign/{taskId}` 送下例，再 `GET /api/countersign/{taskId}` 取得子任務。子任務被指派者以 `PUT /api/countersign/{taskId}/{subtaskId}/complete` 完成；全部子任務完成後父任務才可依一般 complete 流程完成。建立回應中的子任務識別碼須保留，不自行推算。
+
+```json
+{"countersignUserId":"demo-reviewer","message":"請覆核測試內容"}
+```
+
+父任務尚有未完成子任務時可能回 HTTP200 的業務拒絕，不能只看HTTPstatus。建立加簽逾時先查子任務清單，避免建立重複工作。來源：TaskController、CountersignController。上述順序已核對程式；資料庫與引擎生命週期端到端仍需可拋棄fixture驗收。
