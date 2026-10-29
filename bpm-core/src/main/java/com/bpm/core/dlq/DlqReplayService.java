@@ -28,8 +28,8 @@ import java.util.Map;
  *
  * <h2>為什麼需要人工重放</h2>
  *
- * <p>死信代表一筆業務事件在自動重試耗盡後<b>確定沒有被處理</b>
- * （通知沒寄、webhook 沒送、稽核沒寫）。自動重試只能處理暫時性故障；
+ * <p>死信代表一筆業務事件在自動重試耗盡後<b>尚未確認成功完成</b>
+ * （通知、webhook 或稽核可能未完成，也可能在副作用完成後才失去 ack）。自動重試只能處理暫時性故障；
  * 當故障是「下游系統掛了半天」或「設定寫錯」時，修好之後需要有人
  * 把那些訊息重新送一次 —— 否則只能靠人工比對與手動補償，那正是
  * DLQ 告警要讓人知道、而重放要讓人能收拾的閉環。
@@ -169,7 +169,9 @@ public class DlqReplayService {
      *
      * @param queueParam API 參數（僅 {@code bpm}／{@code audit}）
      * @param max        本輪最多處理幾筆（1..{@link #MAX_MESSAGES_PER_REQUEST}）
-     * @param operatorId 呼叫者（稽核用）
+     * @param operatorId 呼叫者（稽核用）；呼叫邊界須先完成管理授權
+     * @return 已重投並 ack 的筆數、失敗數與剩餘量快照；不是下游業務處理成功數。
+     *         部分失敗可回傳結果而不拋例外，remaining 在未取得快照時可為 null
      * @throws ResponseStatusException queue 不在白名單或 max 超出範圍（400）；
      *                                 完全無法連上 broker、一筆都沒處理時（503）
      */
