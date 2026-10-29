@@ -1,5 +1,6 @@
 # BPM API 使用指南
 
+主要流程、成功／失敗範例與重試條件見 [操作流程](workflows.md)。
 本頁補充 OpenAPI 以外的操作順序與安全邊界，依目前 Controller、DTO 與 SecurityConfig 整理。不是正式環境驗收報告，也不是所有端點的完整欄位規格。
 
 ## 入口與身分
