@@ -48,7 +48,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/audit-logs")
-public class AuditLogController {
+    public class AuditLogController {
 
     /**
      * 匯出的分頁大小。
@@ -70,6 +70,12 @@ public class AuditLogController {
     }
 
     @GetMapping({"", "/"})
+    @io.swagger.v3.oas.annotations.Operation(summary="搜尋稽核紀錄", description="page從0、size預設20；startDate/endDate為Instant，讀取本身會記錄稽核。 需要audit:log:read；ROLE_ADMIN本身不能替代此權限。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="AuditLogController_search")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="搜尋稽核紀錄成功；直接回傳 Page<AuditLog>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public Page<AuditLog> search(
             @RequestParam(required = false) String processInstanceId,
             @RequestParam(required = false) String operatorId,
@@ -78,7 +84,7 @@ public class AuditLogController {
             @RequestParam(required = false) String endDate,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
-            @CallerId String requesterId) {
+            @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String requesterId) {
 
         OperationType opType = operationType != null ? OperationType.valueOf(operationType) : null;
         Instant start = startDate != null ? Instant.parse(startDate) : null;
@@ -102,10 +108,16 @@ public class AuditLogController {
     }
 
     @GetMapping("/integrity-check")
+    @io.swagger.v3.oas.annotations.Operation(summary="檢查稽核鏈完整性", description="startDate/endDate必填Instant；回intact/checked/broken/firstBrokenId等檢查結果，檢查本身亦留痕。 需要audit:log:read；ROLE_ADMIN本身不能替代此權限。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="AuditLogController_integrityCheck")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="檢查稽核鏈完整性成功；直接回傳 Map<String, Object>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public Map<String, Object> integrityCheck(
             @RequestParam String startDate,
             @RequestParam String endDate,
-            @CallerId String requesterId) {
+            @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String requesterId) {
         Map<String, Object> result =
                 auditLogService.integrityCheck(Instant.parse(startDate), Instant.parse(endDate));
 
@@ -159,13 +171,19 @@ public class AuditLogController {
      * {@link AuditLogService#search}／repository 查詢 —— 沒有第二份規則。
      */
     @GetMapping("/export")
+    @io.swagger.v3.oas.annotations.Operation(summary="匯出稽核 CSV", description="UTF-8 CSV串流；使用與搜尋一致的選填條件並記錄存取，不能當JSON回應處理。 需要audit:log:read；ROLE_ADMIN本身不能替代此權限。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="AuditLogController_export")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="UTF-8 CSV串流", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="text/csv", schema=@io.swagger.v3.oas.annotations.media.Schema(type="string",format="binary")))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public void export(
             @RequestParam(required = false) String processInstanceId,
             @RequestParam(required = false) String operatorId,
             @RequestParam(required = false) String operationType,
             @RequestParam(required = false) String startDate,
             @RequestParam(required = false) String endDate,
-            @CallerId String requesterId,
+            @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String requesterId,
             HttpServletResponse response) throws IOException {
 
         OperationType opType = operationType != null ? OperationType.valueOf(operationType) : null;

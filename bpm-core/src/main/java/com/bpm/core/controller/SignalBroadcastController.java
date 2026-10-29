@@ -93,7 +93,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/admin/signals")
-public class SignalBroadcastController {
+    public class SignalBroadcastController {
 
     private static final Logger log = LoggerFactory.getLogger(SignalBroadcastController.class);
 
@@ -125,9 +125,19 @@ public class SignalBroadcastController {
      */
     @PostMapping("/{signalName}/broadcast")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="廣播 BPMN signal", description="選填body僅提供variables；signalName需有效且有等待訂閱。回signalName/waiting/variablesApplied，沒有等待訂閱404。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="SignalBroadcastController_broadcast")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="廣播 BPMN signal成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.SignalResult.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=false, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.VariablesRequest.class)))
     public Map<String, Object> broadcast(@PathVariable String signalName,
                                          @RequestBody(required = false) Map<String, Object> body,
-                                         @CallerId String operatorId) {
+                                         @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String operatorId) {
         // 與 SubstituteForwardController 一致：稽核不記一個 null 的 operator。
         // 正常情況下 /api/admin/** 的 ROLE_ADMIN 規則已擋掉未認證流量。
         if (operatorId == null || operatorId.isBlank()) {

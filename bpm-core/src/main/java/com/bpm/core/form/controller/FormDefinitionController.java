@@ -50,7 +50,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/forms")
-public class FormDefinitionController {
+    public class FormDefinitionController {
 
     private final FormService formService;
     private final AuditEventPublisher auditPublisher;
@@ -98,8 +98,16 @@ public class FormDefinitionController {
      */
     @PostMapping
     @Transactional("formTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="建立表單草稿", description="驗證UniForm DSL與formKey一致；createdBy只允許認證者本人。 需要bpm:form:design或ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="FormDefinitionController_create")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="建立表單草稿成功；直接回傳 FormDefinition，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=FormDefinition.class)))
     public FormDefinition create(@RequestBody FormDefinition def,
-                                 @CallerId
+                                 @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                                  String userId) {
         // createdBy = 登入者（省略時必須寫入，而不是留 null：
         // 欄位可為 null 會讓「這張審核表是誰做的」變成無解）。
@@ -122,8 +130,14 @@ public class FormDefinitionController {
      */
     @PostMapping("/{formKey}/revisions")
     @Transactional("formTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="建立下一表單草稿版本", description="依formKey建立next draft並記錄稽核。 需要bpm:form:design或ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="FormDefinitionController_createRevision")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="建立下一表單草稿版本成功；直接回傳 FormDefinition，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public FormDefinition createRevision(@PathVariable String formKey,
-                                         @CallerId
+                                         @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                                          String userId) {
         FormDefinition draft = formService.createNextDraft(formKey, userId);
         audit("FORM_UPDATE", userId, draft, "revise");
@@ -131,12 +145,24 @@ public class FormDefinitionController {
     }
 
     @GetMapping
+    @io.swagger.v3.oas.annotations.Operation(summary="分頁列出表單版本", description="page從0、size預設20；回Spring Page<FormDefinition>。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="FormDefinitionController_list")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="分頁列出表單版本成功；直接回傳 Page<FormDefinition>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public Page<FormDefinition> list(@RequestParam(defaultValue = "0") int page,
                                       @RequestParam(defaultValue = "20") int size) {
         return formService.list(PageRequest.of(page, size));
     }
 
     @GetMapping("/{formKey}")
+    @io.swagger.v3.oas.annotations.Operation(summary="取得表單定義版本", description="formKey與選填version；版本選取以FormService為準。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="FormDefinitionController_getSchema")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="取得表單定義版本成功；直接回傳 FormDefinition，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public FormDefinition getSchema(@PathVariable String formKey,
                                      @RequestParam(required = false) Integer version) {
         return formService.getSchema(formKey, version);
@@ -162,8 +188,16 @@ public class FormDefinitionController {
      */
     @PutMapping("/{id}")
     @Transactional("formTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="更新表單草稿", description="只搬name/schemaJson；createdBy/version/status不被body覆寫，DSL依既有formKey驗證。 需要bpm:form:design或ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="FormDefinitionController_update")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="更新表單草稿成功；直接回傳 FormDefinition，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=FormDefinition.class)))
     public FormDefinition update(@PathVariable String id, @RequestBody FormDefinition def,
-                                 @CallerId
+                                 @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                                  String userId) {
         // 先確認資料列存在（次序同 FormDataController.update：不存在 → 404，
         // 與「內容不合法」是兩種不同的錯）。key／formKey 一致性以**既有列**的
@@ -190,8 +224,14 @@ public class FormDefinitionController {
      */
     @PostMapping("/{id}/publish")
     @Transactional("formTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="發布表單版本", description="先核對持久化DSL與key，再發布與記錄稽核。 需要bpm:form:design或ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="FormDefinitionController_publish")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="發布表單版本成功；直接回傳 FormDefinition，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public FormDefinition publish(@PathVariable String id,
-                                  @CallerId
+                                  @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                                   String userId) {
         FormDefinition existing = formService.getById(id);
         definitionValidator.validate(existing.getSchemaJson(), existing.getFormKey());
@@ -203,8 +243,14 @@ public class FormDefinitionController {
 
     @PostMapping("/{id}/archive")
     @Transactional("formTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="封存表單版本", description="由FormService執行狀態檢查並記錄稽核。 需要bpm:form:design或ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="FormDefinitionController_archive")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="封存表單版本成功；直接回傳 FormDefinition，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public FormDefinition archive(@PathVariable String id,
-                                  @CallerId
+                                  @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                                   String userId) {
         FormDefinition saved = formService.archive(id);
         audit("FORM_UPDATE", userId, saved, "archive");
@@ -213,8 +259,14 @@ public class FormDefinitionController {
 
     @DeleteMapping("/{id}")
     @Transactional("formTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="刪除表單版本", description="先確認存在，由service檢查可刪除性；回status=deleted。 需要bpm:form:design或ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="FormDefinitionController_delete")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="刪除表單版本成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.StatusView.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public Map<String, String> delete(@PathVariable String id,
-                                      @CallerId
+                                      @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                                       String userId) {
         FormDefinition existing = formService.getById(id);
         formService.delete(id);

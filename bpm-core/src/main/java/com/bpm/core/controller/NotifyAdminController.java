@@ -35,7 +35,7 @@ import java.util.List;
  */
 @RestController
 @RequestMapping("/api/admin")
-public class NotifyAdminController {
+    public class NotifyAdminController {
 
     private static final String TEMPLATE = "notify-template";
     private static final String CONFIG = "notify-config";
@@ -100,8 +100,17 @@ public class NotifyAdminController {
     // Templates
     @PostMapping("/notify-templates")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="新增通知模板", description="忽略輸入id並新增；保存後記錄稽核。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="NotifyAdminController_createTemplate")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="新增通知模板成功；直接回傳 NotifyTemplate，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=NotifyTemplate.class)))
     public NotifyTemplate createTemplate(@RequestBody NotifyTemplate t,
-                                         @CallerId String operatorId) {
+                                         @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String operatorId) {
         // 必定新增。夾帶 id 的話 save() 會走 merge → 覆寫既有模板
         // （可植入釣魚連結）。零稽核那一半已在本次補上（P2-4）。
         t.setId(null);
@@ -111,17 +120,40 @@ public class NotifyAdminController {
     }
 
     @GetMapping("/notify-templates")
+    @io.swagger.v3.oas.annotations.Operation(summary="列出通知模板", description="回傳通知模板陣列。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="NotifyAdminController_listTemplates")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="列出通知模板成功；直接回傳 List<NotifyTemplate>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public List<NotifyTemplate> listTemplates() { return templateRepo.findAll(); }
 
     @GetMapping("/notify-templates/{id}")
+    @io.swagger.v3.oas.annotations.Operation(summary="取得通知模板", description="模板不存在回404。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="NotifyAdminController_getTemplate")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="取得通知模板成功；直接回傳 NotifyTemplate，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public NotifyTemplate getTemplate(@PathVariable String id) {
         return templateRepo.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }
 
     @PutMapping("/notify-templates/{id}")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="更新通知模板", description="更新name/channel/subjectTemplate/bodyTemplate；保留id並記錄變更摘要。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="NotifyAdminController_updateTemplate")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="更新通知模板成功；直接回傳 NotifyTemplate，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=NotifyTemplate.class)))
     public NotifyTemplate updateTemplate(@PathVariable String id, @RequestBody NotifyTemplate t,
-                                         @CallerId String operatorId) {
+                                         @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String operatorId) {
         NotifyTemplate existing = templateRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
         // 先取摘要再套用 —— 順序反了就拿不到舊值。
@@ -160,7 +192,16 @@ public class NotifyAdminController {
      */
     @DeleteMapping("/notify-templates/{id}")
     @Transactional("primaryTransactionManager")
-    public void deleteTemplate(@PathVariable String id, @CallerId String operatorId) {
+    @io.swagger.v3.oas.annotations.Operation(summary="刪除通知模板", description="仍有通知設定引用時409；controller為void，成功200無本文，並非204。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="NotifyAdminController_deleteTemplate")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="操作成功，無JSON本文", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="409", description="目前狀態、版本或引用衝突；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    public void deleteTemplate(@PathVariable String id, @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String operatorId) {
         NotifyTemplate existing = templateRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
 
@@ -296,8 +337,17 @@ public class NotifyAdminController {
 
     @PostMapping("/notify-configs")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="新增通知設定", description="確認templateId存在並檢查Teams webhook；回應遮蔽敏感設定。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="NotifyAdminController_createConfig")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="新增通知設定成功；直接回傳 NotifyConfig，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=NotifyConfig.class)))
     public NotifyConfig createConfig(@RequestBody NotifyConfig c,
-                                     @CallerId String operatorId) {
+                                     @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String operatorId) {
         c.setId(null);
         requireExistingTemplate(c.getTemplateId());
         requireValidTeamsWebhook(c);
@@ -309,6 +359,12 @@ public class NotifyAdminController {
     }
 
     @GetMapping("/notify-configs")
+    @io.swagger.v3.oas.annotations.Operation(summary="列出通知設定", description="可依processDefinitionKey篩選；回傳遮蔽後設定。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="NotifyAdminController_listConfigs")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="列出通知設定成功；直接回傳 List<NotifyConfig>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public List<NotifyConfig> listConfigs(@RequestParam(required = false) String processDefinitionKey) {
         List<NotifyConfig> configs = processDefinitionKey != null
                 ? configRepo.findByProcessDefinitionKeyOrderByEventType(processDefinitionKey)
@@ -336,8 +392,18 @@ public class NotifyAdminController {
      */
     @PutMapping("/notify-configs/{id}")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="更新通知設定", description="核對模板與Teams webhook；保存稽核且回應遮蔽敏感設定。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="NotifyAdminController_updateConfig")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="更新通知設定成功；直接回傳 NotifyConfig，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=NotifyConfig.class)))
     public NotifyConfig updateConfig(@PathVariable String id, @RequestBody NotifyConfig c,
-                                     @CallerId String operatorId) {
+                                     @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String operatorId) {
         NotifyConfig existing = configRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
         // #32 收尾：list/create/update 的回應都遮蔽 webhookUrl，管理端
@@ -370,7 +436,15 @@ public class NotifyAdminController {
 
     @DeleteMapping("/notify-configs/{id}")
     @Transactional("primaryTransactionManager")
-    public void deleteConfig(@PathVariable String id, @CallerId String operatorId) {
+    @io.swagger.v3.oas.annotations.Operation(summary="刪除通知設定", description="不存在404；成功200無本文並記錄稽核。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="NotifyAdminController_deleteConfig")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="操作成功，無JSON本文", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    public void deleteConfig(@PathVariable String id, @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String operatorId) {
         // 同 deleteTemplate：對不存在的 id 靜默 no-op 會讓呼叫端以為刪掉了。
         NotifyConfig existing = configRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));

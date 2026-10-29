@@ -129,7 +129,7 @@ import java.util.TreeSet;
  */
 @RestController
 @RequestMapping("/api/me")
-public class MeController {
+    public class MeController {
 
     /**
      * 呼叫者自己的權限。
@@ -150,7 +150,13 @@ public class MeController {
      * @param callerId 已認證的呼叫者（JWT 的 {@code sub} 或閘道認證過的身分）
      */
     @GetMapping("/permissions")
-    public MyPermissions myPermissions(@CallerId String callerId) {
+    @io.swagger.v3.oas.annotations.Operation(summary="讀取我的權限", description="從SecurityContext取得callerId、permissions及admin；不接受body/query自報身分。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="MeController_myPermissions")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="讀取我的權限成功；直接回傳 MyPermissions，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    public MyPermissions myPermissions(@io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
         if (callerId == null || callerId.isBlank()) {
             // 正常情況下到不了這裡（/api/** 是 authenticated()）。
             // 真的到了代表授權層被改動過，那時寧可明確失敗，也不要

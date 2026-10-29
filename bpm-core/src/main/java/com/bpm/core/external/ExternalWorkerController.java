@@ -122,7 +122,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/external/worker")
-public class ExternalWorkerController {
+    public class ExternalWorkerController {
 
     /** 未指定 lockDurationSeconds 時的鎖定長度（秒）。 */
     static final int DEFAULT_LOCK_SECONDS = 300;
@@ -164,9 +164,18 @@ public class ExternalWorkerController {
      */
     @PostMapping("/tasks/acquire")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="取得並鎖定外部工作", description="topic必填且需授權；一次只取得1筆BPMN工作。workerId由system身分限制，lockDurationSeconds選填；回tasks。 X-API-Key與X-System-Id必須同時提供；另受allowedActions、IP白名單、啟用狀態及限流檢查。", operationId="ExternalWorkerController_acquire")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="externalApiKey")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-System-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required=true, description="與API key對應的外部系統識別碼")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="取得並鎖定外部工作成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.WorkerTasks.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="429", description="超過限流或催辦冷卻期；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=false, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.WorkerAcquireRequest.class)))
     public Map<String, Object> acquire(@RequestBody(required = false) Map<String, Object> body,
-                                       @RequestAttribute("externalSystemId") String systemId,
-                                       @RequestAttribute("externalSystem") ExternalSystem sys) {
+                                       @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystemId") String systemId,
+                                       @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystem") ExternalSystem sys) {
         String topic = requireTopic(body);
         // 授權先於一切（#88 的「授權先決」原則）：topic 沒被授權就沒有
         // 後續的 job 查詢 —— 不讓任何未授權的請求碰到佇列。
@@ -215,9 +224,17 @@ public class ExternalWorkerController {
      * 未授權的系統不該看得到別人的佇列存量。
      */
     @GetMapping("/tasks")
+    @io.swagger.v3.oas.annotations.Operation(summary="查詢可見外部工作", description="topic必填且需授權；只列未鎖定或由目前system鎖定的工作，回tasks。 X-API-Key與X-System-Id必須同時提供；另受allowedActions、IP白名單、啟用狀態及限流檢查。", operationId="ExternalWorkerController_query")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="externalApiKey")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-System-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required=true, description="與API key對應的外部系統識別碼")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢可見外部工作成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.WorkerTasks.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="429", description="超過限流或催辦冷卻期；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
     public Map<String, Object> query(@RequestParam(required = false) String topic,
-                                     @RequestAttribute("externalSystemId") String systemId,
-                                     @RequestAttribute("externalSystem") ExternalSystem sys) {
+                                     @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystemId") String systemId,
+                                     @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystem") ExternalSystem sys) {
         if (topic == null || topic.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "缺少 topic（必須是非空白字串）");
@@ -265,9 +282,18 @@ public class ExternalWorkerController {
      */
     @PostMapping("/tasks/{jobId}/complete")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="完成已鎖定外部工作", description="workerId及variables選填；必須仍持有job鎖，回jobId/status=completed。 X-API-Key與X-System-Id必須同時提供；另受allowedActions、IP白名單、啟用狀態及限流檢查。", operationId="ExternalWorkerController_complete")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="externalApiKey")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-System-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required=true, description="與API key對應的外部系統識別碼")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="完成已鎖定外部工作成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.JobStatus.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="429", description="超過限流或催辦冷卻期；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=false, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.WorkerCompleteRequest.class)))
     public Map<String, Object> complete(@PathVariable String jobId,
                                         @RequestBody(required = false) Map<String, Object> body,
-                                        @RequestAttribute("externalSystemId") String systemId) {
+                                        @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystemId") String systemId) {
         String workerId = effectiveWorkerId(systemId, body == null ? null : body.get("workerId"));
         ExternalWorkerJob job = requireLockedJob(jobId, workerId);
         Map<String, Object> variables = variablesOf(body);
@@ -324,9 +350,18 @@ public class ExternalWorkerController {
      */
     @PostMapping("/tasks/{jobId}/fail")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="回報外部工作失敗", description="workerId/errorCode/errorMessage選填；必須持有鎖，回jobId/status=failed/retriesLeft。 X-API-Key與X-System-Id必須同時提供；另受allowedActions、IP白名單、啟用狀態及限流檢查。", operationId="ExternalWorkerController_fail")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="externalApiKey")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-System-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required=true, description="與API key對應的外部系統識別碼")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="回報外部工作失敗成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.JobFailure.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="429", description="超過限流或催辦冷卻期；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=false, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.WorkerFailRequest.class)))
     public Map<String, Object> fail(@PathVariable String jobId,
                                     @RequestBody(required = false) Map<String, Object> body,
-                                    @RequestAttribute("externalSystemId") String systemId) {
+                                    @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystemId") String systemId) {
         String workerId = effectiveWorkerId(systemId, body == null ? null : body.get("workerId"));
         String errorCode = optionalString(body, "errorCode");
         String errorMessage = optionalString(body, "errorMessage");
@@ -385,9 +420,18 @@ public class ExternalWorkerController {
      */
     @PostMapping("/tasks/{jobId}/unacquire")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="釋放外部工作鎖", description="workerId選填；必須持有鎖，回jobId/status=unacquired。 X-API-Key與X-System-Id必須同時提供；另受allowedActions、IP白名單、啟用狀態及限流檢查。", operationId="ExternalWorkerController_unacquire")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="externalApiKey")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-System-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required=true, description="與API key對應的外部系統識別碼")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="釋放外部工作鎖成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.JobStatus.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="429", description="超過限流或催辦冷卻期；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=false, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.WorkerReleaseRequest.class)))
     public Map<String, Object> unacquire(@PathVariable String jobId,
                                          @RequestBody(required = false) Map<String, Object> body,
-                                         @RequestAttribute("externalSystemId") String systemId) {
+                                         @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystemId") String systemId) {
         String workerId = effectiveWorkerId(systemId, body == null ? null : body.get("workerId"));
         ExternalWorkerJob job = requireLockedJob(jobId, workerId);
 

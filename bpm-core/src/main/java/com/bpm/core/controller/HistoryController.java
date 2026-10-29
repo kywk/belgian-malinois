@@ -22,7 +22,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/history")
-public class HistoryController {
+    public class HistoryController {
 
     private final HistoryService historyService;
     private final TaskService taskService;
@@ -128,10 +128,17 @@ public class HistoryController {
      * 不受影響。
      */
     @GetMapping("/tasks")
+    @io.swagger.v3.oas.annotations.Operation(summary="查詢我的歷史任務", description="assignee須為本人；指定processInstanceId時驗證流程讀權。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="HistoryController_getHistoricTasks")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢我的歷史任務成功；直接回傳 List<Map<String, Object>>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public List<Map<String, Object>> getHistoricTasks(
             @RequestParam(required = false) String assignee,
             @RequestParam(required = false) String processInstanceId,
-            @CallerId String callerId) {
+            @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
 
         // 條件 1（永遠）：assignee 只准查自己。
         //
@@ -247,8 +254,14 @@ public class HistoryController {
      * 打成 404。
      */
     @GetMapping("/tasks/{taskId}/comments")
+    @io.swagger.v3.oas.annotations.Operation(summary="讀取歷史任務意見", description="需任務讀權；回id/message/userId/time陣列。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="HistoryController_getHistoricTaskComments")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="讀取歷史任務意見成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", array=@io.swagger.v3.oas.annotations.media.ArraySchema(schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.CommentView.class))))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public List<Map<String, Object>> getHistoricTaskComments(@PathVariable String taskId,
-                                                              @CallerId
+                                                              @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                                                               String callerId) {
         accessGuard.requireTaskReadAccess(taskId, callerId);
         return TaskController.mapComments(taskService.getTaskComments(taskId));
@@ -273,10 +286,16 @@ public class HistoryController {
      * 而不是照搬本方法。見 backlog #71 剩餘項目。
      */
     @GetMapping("/process-instances")
+    @io.swagger.v3.oas.annotations.Operation(summary="查詢我的歷史申請", description="initiator須為本人，finished預設false；含代辦標記onBehalf及結束狀態。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="HistoryController_getHistoricProcessInstances")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢我的歷史申請成功；直接回傳 List<Map<String, Object>>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public List<Map<String, Object>> getHistoricProcessInstances(
             @RequestParam(required = false) String initiator,
             @RequestParam(required = false, defaultValue = "false") boolean finished,
-            @CallerId String callerId) {
+            @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
         String self = accessGuard.requireSelf(initiator, callerId, "initiator");
         var query = historyService.createHistoricProcessInstanceQuery();
         // 代員工發起的案件（R-20）：initiator 是 system:<id>，員工記在 onBehalfOf。
@@ -316,7 +335,13 @@ public class HistoryController {
      * <p>授權：不帶任何參數，範圍就是「{@code isParticipant} 為真的案件」。
      */
     @GetMapping("/process-instances/involved")
-    public List<Map<String, Object>> getInvolvedHistoricProcessInstances(@CallerId String callerId) {
+    @io.swagger.v3.oas.annotations.Operation(summary="查詢我參與的歷史案件", description="依參與紀錄限制案件範圍，回involved與目前任務資訊。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="HistoryController_getInvolvedHistoricProcessInstances")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢我參與的歷史案件成功；直接回傳 List<Map<String, Object>>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    public List<Map<String, Object>> getInvolvedHistoricProcessInstances(@io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
         if (callerId == null || callerId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "無法確認身分，請先登入");
         }

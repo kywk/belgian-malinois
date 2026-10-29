@@ -41,7 +41,7 @@ import java.nio.charset.StandardCharsets;
  */
 @RestController
 @RequestMapping("/api/bpmn")
-public class BpmnLintController {
+    public class BpmnLintController {
 
     private final BpmnLintService lintService;
     private final int maxBytes;
@@ -53,6 +53,15 @@ public class BpmnLintController {
     }
 
     @PostMapping("/lint")
+    @io.swagger.v3.oas.annotations.Operation(summary="檢查 BPMN XML", description="接收原始XML文字；以UTF-8 bytes限制容量，空白400、過大413。回傳valid與lint問題，不部署流程。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="BpmnLintController_lint")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="檢查 BPMN XML成功；直接回傳 BpmnLintService.LintResult，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="413", description="輸入超過限制；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="text/plain", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=String.class)))
     public BpmnLintService.LintResult lint(@RequestBody String xml) {
         if (xml == null || xml.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "BPMN XML 不可為空");

@@ -26,7 +26,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/deployments")
-public class DeploymentController {
+    public class DeploymentController {
 
     /** 檔名允許的字元以外一律換成底線（白名單制）。 */
     private static final java.util.regex.Pattern UNSAFE_CHARS =
@@ -143,9 +143,18 @@ public class DeploymentController {
      */
     @PostMapping
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="部署 BPMN 檔案", description="multipart:file必填、name選填；先替換環境變數並lint，再部署。Git記錄啟用但失敗時503中止部署；回deploymentId/name/lint。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="DeploymentController_deploy")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="部署 BPMN 檔案成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.DeploymentResult.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="multipart/form-data", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.DeploymentUpload.class)))
     public Object deploy(@RequestParam("file") MultipartFile file,
                          @RequestParam(defaultValue = "") String name,
-                         @CallerId
+                         @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                          String operatorId) throws IOException {
         String xml = new String(file.getBytes());
         String deployName = name.isEmpty() ? file.getOriginalFilename() : name;

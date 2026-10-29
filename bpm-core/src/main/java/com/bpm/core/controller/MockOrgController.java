@@ -79,7 +79,7 @@ import java.util.*;
 @ConditionalOnProperty(name = "bpm.external.mock-enabled", havingValue = "true")
 @RestController
 @RequestMapping("/mock/org/api")
-public class MockOrgController {
+    public class MockOrgController {
 
     private static final Map<String, Map<String, Object>> USERS = new LinkedHashMap<>();
     private static final Map<String, String> MANAGER_MAP = new HashMap<>();
@@ -104,9 +104,15 @@ public class MockOrgController {
     }
 
     @GetMapping("/users")
+    @io.swagger.v3.oas.annotations.Operation(summary="列出模擬組織人員", description="僅mock-enabled時註冊；回內建測試人員。 僅bpm.external.mock-enabled=true時公開；production不得依賴此mock。", operationId="MockOrgController_listUsers")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="列出模擬組織人員成功；直接回傳 Collection<Map<String, Object>>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
     public Collection<Map<String, Object>> listUsers() { return USERS.values(); }
 
     @GetMapping("/users/search")
+    @io.swagger.v3.oas.annotations.Operation(summary="搜尋模擬人員", description="依keyword篩選，空字串回空陣列。 僅bpm.external.mock-enabled=true時公開；production不得依賴此mock。", operationId="MockOrgController_searchUsers")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="搜尋模擬人員成功；直接回傳 List<Map<String, Object>>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
     public List<Map<String, Object>> searchUsers(@RequestParam String keyword) {
         String query = keyword.trim().toLowerCase(Locale.ROOT);
         if (query.isEmpty()) return List.of();
@@ -117,6 +123,9 @@ public class MockOrgController {
     }
 
     @GetMapping("/users/{userId}")
+    @io.swagger.v3.oas.annotations.Operation(summary="讀取模擬人員", description="未知人員404；回測試人員物件。 僅bpm.external.mock-enabled=true時公開；production不得依賴此mock。", operationId="MockOrgController_getUser")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="讀取模擬人員成功；直接回傳 Map<String, Object>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
     public Map<String, Object> getUser(@PathVariable String userId) {
         var user = USERS.get(userId);
         if (user == null) throw unknown("使用者", userId);
@@ -129,6 +138,9 @@ public class MockOrgController {
      * 而且必須與 {@link #getManagerChain} 回 {@code []} 一致。
      */
     @GetMapping("/users/{userId}/manager")
+    @io.swagger.v3.oas.annotations.Operation(summary="查詢模擬主管", description="回managerId，無主管為空物件。 僅bpm.external.mock-enabled=true時公開；production不得依賴此mock。", operationId="MockOrgController_getManager")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢模擬主管成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.ManagerView.class)))
     public Map<String, String> getManager(@PathVariable String userId) {
         if (!USERS.containsKey(userId)) throw faultOrUnknown("使用者", userId);
         String mgr = MANAGER_MAP.get(userId);
@@ -136,6 +148,9 @@ public class MockOrgController {
     }
 
     @GetMapping("/users/{userId}/manager-chain")
+    @io.swagger.v3.oas.annotations.Operation(summary="查詢模擬主管鏈", description="levels預設3；回主管ID陣列。 僅bpm.external.mock-enabled=true時公開；production不得依賴此mock。", operationId="MockOrgController_getManagerChain")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢模擬主管鏈成功；直接回傳 List<String>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
     public List<String> getManagerChain(@PathVariable String userId, @RequestParam(defaultValue = "3") int levels) {
         if (!USERS.containsKey(userId)) throw unknown("使用者", userId);
         List<String> chain = new ArrayList<>();
@@ -150,6 +165,9 @@ public class MockOrgController {
     }
 
     @GetMapping("/users/{userId}/department")
+    @io.swagger.v3.oas.annotations.Operation(summary="查詢模擬部門", description="回deptId。 僅bpm.external.mock-enabled=true時公開；production不得依賴此mock。", operationId="MockOrgController_getDepartment")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢模擬部門成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.DepartmentView.class)))
     public Map<String, String> getDepartment(@PathVariable String userId) {
         String dept = DEPT_MAP.get(userId);
         if (dept == null) throw unknown("使用者", userId);
@@ -161,12 +179,18 @@ public class MockOrgController {
      * 這不是 fail-open：「沒有代理人」是誠實的答案，不會導致任務被錯派。
      */
     @GetMapping("/users/{userId}/substitute")
+    @io.swagger.v3.oas.annotations.Operation(summary="查詢模擬代理人", description="目前回空物件。 僅bpm.external.mock-enabled=true時公開；production不得依賴此mock。", operationId="MockOrgController_getSubstitute")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢模擬代理人成功；直接回傳 Map<String, String>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
     public Map<String, String> getSubstitute(@PathVariable String userId) {
         if (!USERS.containsKey(userId)) throw unknown("使用者", userId);
         return Map.of();
     }
 
     @GetMapping("/departments/{deptId}/members")
+    @io.swagger.v3.oas.annotations.Operation(summary="列出模擬部門成員", description="回人員ID陣列，未知部門404。 僅bpm.external.mock-enabled=true時公開；production不得依賴此mock。", operationId="MockOrgController_getDeptMembers")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="列出模擬部門成員成功；直接回傳 List<String>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
     public List<String> getDeptMembers(@PathVariable String deptId) {
         List<String> members = new ArrayList<>();
         DEPT_MAP.forEach((uid, dept) -> { if (dept.equals(deptId)) members.add(uid); });

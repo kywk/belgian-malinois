@@ -23,6 +23,10 @@ import org.springframework.context.annotation.Configuration;
  * <p>⚠️ 這個 bean 在 prod 仍會被建立（{@code enabled: false} 只是不註冊端點），
  * 所以這裡不得放入任何敏感資訊 —— 它只是一段對外公開的自我介紹。
  */
+@io.swagger.v3.oas.annotations.security.SecurityScheme(name="bpmBearer", type=io.swagger.v3.oas.annotations.enums.SecuritySchemeType.HTTP, scheme="bearer", bearerFormat="JWT")
+@io.swagger.v3.oas.annotations.security.SecurityScheme(name="gatewaySecret", type=io.swagger.v3.oas.annotations.enums.SecuritySchemeType.APIKEY, in=io.swagger.v3.oas.annotations.enums.SecuritySchemeIn.HEADER, paramName="X-Gateway-Secret", description="僅啟用且受信任來源可用；另須X-User-Id或X-System-Id")
+@io.swagger.v3.oas.annotations.security.SecurityScheme(name="externalApiKey", type=io.swagger.v3.oas.annotations.enums.SecuritySchemeType.APIKEY, in=io.swagger.v3.oas.annotations.enums.SecuritySchemeIn.HEADER, paramName="X-API-Key", description="須同時提供X-System-Id")
+@io.swagger.v3.oas.annotations.security.SecurityScheme(name="callbackSignature", type=io.swagger.v3.oas.annotations.enums.SecuritySchemeType.APIKEY, in=io.swagger.v3.oas.annotations.enums.SecuritySchemeIn.HEADER, paramName="X-Callback-Signature", description="原始body的HMAC簽章；另須系統識別與時間戳")
 @Configuration
 public class OpenApiConfig {
 

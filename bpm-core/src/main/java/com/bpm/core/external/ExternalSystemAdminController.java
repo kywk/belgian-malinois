@@ -82,7 +82,7 @@ import java.util.Objects;
  */
 @RestController
 @RequestMapping("/api/admin/external-systems")
-public class ExternalSystemAdminController {
+    public class ExternalSystemAdminController {
 
     /** 授權相關欄位。update 時逐一比對前後值寫進稽核。 */
     private static final List<String> AUDITED_FIELDS =
@@ -128,8 +128,17 @@ public class ExternalSystemAdminController {
 
     @PostMapping
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="註冊外部系統", description="systemId必填且不得重複；apiKey與callbackSecret僅建立回應提供明文，後續查詢遮蔽。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ExternalSystemAdminController_create")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="註冊外部系統成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.SystemCreated.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="409", description="目前狀態、版本或引用衝突；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=ExternalSystem.class)))
     public Map<String, Object> create(@RequestBody ExternalSystem sys,
-                                      @CallerId
+                                      @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                                       String operatorId) {
         // systemId 有 unique 約束，但靠約束失敗會得到一個看不懂的 500。
         // 明確檢查並回 409，同時避免「建立」意外變成覆寫 ——
@@ -180,21 +189,41 @@ public class ExternalSystemAdminController {
     }
 
     @GetMapping
+    @io.swagger.v3.oas.annotations.Operation(summary="列出外部系統", description="回遮蔽後的設定陣列，不提供明文key。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ExternalSystemAdminController_list")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="列出外部系統成功；直接回傳 List<ExternalSystem>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public List<ExternalSystem> list() {
         List<ExternalSystem> all = repo.findAll();
         return all.stream().map(ExternalSystemAdminController::masked).toList();
     }
 
     @GetMapping("/{systemId}")
+    @io.swagger.v3.oas.annotations.Operation(summary="取得外部系統設定", description="回遮蔽後設定。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ExternalSystemAdminController_get")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="取得外部系統設定成功；直接回傳 ExternalSystem，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public ExternalSystem get(@PathVariable String systemId) {
         return masked(find(systemId));
     }
 
     @PutMapping("/{systemId}")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="更新外部系統授權", description="更新名稱、允許流程／動作／群組／topic、回呼URL、IP白名單與啟用狀態，回遮蔽後設定。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ExternalSystemAdminController_update")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="更新外部系統授權成功；直接回傳 ExternalSystem，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=ExternalSystem.class)))
     public ExternalSystem update(@PathVariable String systemId,
                                  @RequestBody ExternalSystem req,
-                                 @CallerId
+                                 @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                                  String operatorId) {
         ExternalSystem sys = find(systemId);
 
@@ -245,8 +274,14 @@ public class ExternalSystemAdminController {
 
     @DeleteMapping("/{systemId}")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="停用外部系統", description="回status=disabled，記錄管理操作。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ExternalSystemAdminController_disable")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="停用外部系統成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.StatusView.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public Map<String, String> disable(@PathVariable String systemId,
-                                       @CallerId
+                                       @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                                        String operatorId) {
         ExternalSystem sys = find(systemId);
         boolean wasEnabled = Boolean.TRUE.equals(sys.getEnabled());
@@ -284,8 +319,14 @@ public class ExternalSystemAdminController {
      */
     @PostMapping("/{systemId}/rotate-key")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="輪替外部系統 API key", description="回systemId/apiKey/previousKeyValidUntil；新明文僅此回應可取得，舊key有過渡期限。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ExternalSystemAdminController_rotateKey")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="輪替外部系統 API key成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.RotatedKey.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public Map<String, String> rotateKey(@PathVariable String systemId,
-                                         @CallerId
+                                         @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                                          String operatorId) {
         ExternalSystem sys = find(systemId);
         String oldHashPrefix = hashPrefix(sys.getApiKey());
@@ -339,8 +380,14 @@ public class ExternalSystemAdminController {
      */
     @PostMapping("/{systemId}/rotate-callback-secret")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="輪替回呼 HMAC secret", description="回systemId/callbackSecret；明文僅此回應可取得。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ExternalSystemAdminController_rotateCallbackSecret")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="輪替回呼 HMAC secret成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.RotatedCallback.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public Map<String, String> rotateCallbackSecret(@PathVariable String systemId,
-                                                    @CallerId
+                                                    @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId
                                                     String operatorId) {
         ExternalSystem sys = find(systemId);
         String oldHashPrefix = secretHashPrefix(sys.getCallbackSecret());
@@ -391,13 +438,20 @@ public class ExternalSystemAdminController {
      * 回傳的 detail 可能含流程變數，翻閱它與翻閱稽核庫是同一種敏感行為。
      */
     @GetMapping("/{systemId}/usage-logs")
+    @io.swagger.v3.oas.annotations.Operation(summary="查詢外部系統使用稽核", description="startDate/endDate為Instant；page從0、size預設20；此路由在admin區，另依方法現有檢查授權。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ExternalSystemAdminController_usageLogs")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢外部系統使用稽核成功；直接回傳 Page<AuditLog>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public Page<AuditLog> usageLogs(
             @PathVariable String systemId,
             @RequestParam(required = false) String startDate,
             @RequestParam(required = false) String endDate,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
-            @CallerId String requesterId) {
+            @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String requesterId) {
 
         find(systemId); // 未知系統 → 404；已停用系統仍可查（見上方說明）。
 

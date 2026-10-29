@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/admin/dlq")
-public class DlqAdminController {
+    public class DlqAdminController {
 
     private final DlqReplayService replayService;
 
@@ -41,10 +41,16 @@ public class DlqAdminController {
      * @param operatorId 已認證的呼叫者，寫入 {@code DLQ_REPLAY} 稽核
      */
     @PostMapping("/replay")
+    @io.swagger.v3.oas.annotations.Operation(summary="重放死信佇列", description="query queue與max（預設100）；由服務核對佇列及上限，回ReplayResult並記錄操作者。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="DlqAdminController_replay")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="重放死信佇列成功；直接回傳 DlqReplayService.ReplayResult，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public DlqReplayService.ReplayResult replay(
             @RequestParam String queue,
             @RequestParam(defaultValue = "100") int max,
-            @CallerId String operatorId) {
+            @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String operatorId) {
         return replayService.replay(queue, max, operatorId);
     }
 }

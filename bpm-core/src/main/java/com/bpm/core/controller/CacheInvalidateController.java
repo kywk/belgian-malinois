@@ -11,7 +11,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/internal/cache-invalidate")
-public class CacheInvalidateController {
+    public class CacheInvalidateController {
 
     private final OrgService orgService;
     private final BpmPermissionService permService;
@@ -30,6 +30,14 @@ public class CacheInvalidateController {
      * {@link ResponseStatusException}，否則 IllegalArgumentException 會變成 500。
      */
     @PostMapping("/org")
+    @io.swagger.v3.oas.annotations.Operation(summary="失效組織快取", description="依userIds/type與deptIds清除對應快取；僅ROLE_GATEWAY可呼叫。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="CacheInvalidateController_invalidateOrg")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="失效組織快取成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.StatusView.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=CacheInvalidateRequest.class)))
     public Map<String, String> invalidateOrg(@RequestBody CacheInvalidateRequest req) {
         try {
             orgService.invalidateCache(req.userIds(), req.type());
@@ -43,6 +51,14 @@ public class CacheInvalidateController {
     }
 
     @PostMapping("/perm")
+    @io.swagger.v3.oas.annotations.Operation(summary="失效權限快取", description="依userIds及permCodes清除權限快取；僅ROLE_GATEWAY可呼叫。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="CacheInvalidateController_invalidatePerm")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="失效權限快取成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.StatusView.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=CacheInvalidateRequest.class)))
     public Map<String, String> invalidatePerm(@RequestBody CacheInvalidateRequest req) {
         permService.invalidateCache(req.userIds(), req.permCodes());
         return Map.of("status", "ok");

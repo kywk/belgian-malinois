@@ -87,7 +87,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/callback")
-public class CallbackController {
+    public class CallbackController {
 
     private static final Logger log = LoggerFactory.getLogger(CallbackController.class);
 
@@ -110,9 +110,21 @@ public class CallbackController {
 
     @PostMapping("/{type}")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="接收外部系統 HMAC 回呼", description="body processInstanceId與deliveryId必填，variables選填；依systemId+deliveryId去重，重複回status=duplicate；無等待訊息404、多筆訂閱409。 必須同時提供X-System-Id、X-Callback-Signature、X-Callback-Timestamp；驗證原始body簽章及時間窗。", operationId="CallbackController_receive")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="callbackSignature")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-System-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required=true, description="外部系統識別碼")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-Callback-Timestamp", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required=true, description="簽章時間戳，必須在伺服器接受時間窗內")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="接收外部系統 HMAC 回呼成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.CallbackResult.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="409", description="目前狀態、版本或引用衝突；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=false, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.CallbackRequest.class)))
     public Map<String, Object> receive(@PathVariable String type,
                                        @RequestBody(required = false) Map<String, Object> body,
-                                       @RequestAttribute("externalSystemId") String systemId) {
+                                       @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystemId") String systemId) {
         // ── 形狀（400）────────────────────────────────────────────
         String processInstanceId;
         String deliveryId;

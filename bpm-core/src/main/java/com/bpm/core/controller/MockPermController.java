@@ -44,7 +44,7 @@ import java.util.*;
 @ConditionalOnProperty(name = "bpm.external.mock-enabled", havingValue = "true")
 @RestController
 @RequestMapping("/mock/perm/api")
-public class MockPermController {
+    public class MockPermController {
 
     private static final Map<String, List<String>> PERM_USERS = new HashMap<>();
     private static final Map<String, List<String>> USER_PERMS = new HashMap<>();
@@ -116,6 +116,10 @@ public class MockPermController {
     }
 
     @GetMapping("/permissions/{permCode}/users")
+    @io.swagger.v3.oas.annotations.Operation(summary="查詢模擬權限人員", description="permCode與選填deptId；未知權限404。 僅bpm.external.mock-enabled=true時公開；production不得依賴此mock。", operationId="MockPermController_getUsersByPermission")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢模擬權限人員成功；直接回傳 List<String>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public List<String> getUsersByPermission(@PathVariable String permCode,
                                               @RequestParam(required = false) String deptId) {
         List<String> users = PERM_USERS.get(permCode);
@@ -139,12 +143,18 @@ public class MockPermController {
      * 不用 404，因為那會把一次乾淨的權限拒絕變成 500。
      */
     @GetMapping("/users/{userId}/permissions")
+    @io.swagger.v3.oas.annotations.Operation(summary="讀取模擬人員權限", description="回權限字串陣列，未配置為空。 僅bpm.external.mock-enabled=true時公開；production不得依賴此mock。", operationId="MockPermController_getUserPermissions")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="讀取模擬人員權限成功；直接回傳 List<String>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
     public List<String> getUserPermissions(@PathVariable String userId) {
         return USER_PERMS.getOrDefault(userId, List.of());
     }
 
     /** 判定型：不認識的使用者回 {@code false}（拒絕）。理由同上。 */
     @GetMapping("/users/{userId}/has-permission")
+    @io.swagger.v3.oas.annotations.Operation(summary="檢查模擬權限", description="query code；回hasPermission布林值。 僅bpm.external.mock-enabled=true時公開；production不得依賴此mock。", operationId="MockPermController_hasPermission")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="檢查模擬權限成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.PermissionResult.class)))
     public Map<String, Object> hasPermission(@PathVariable String userId, @RequestParam String code) {
         List<String> perms = USER_PERMS.getOrDefault(userId, List.of());
         boolean has = perms.contains("*") || perms.contains(code);

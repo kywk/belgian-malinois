@@ -17,7 +17,7 @@ import java.util.Locale;
 import java.util.Map;
 
 @RestController
-public class ProcessVariableSpecController {
+    public class ProcessVariableSpecController {
 
     private final ProcessVariableSpecRepository repo;
     private final ExternalSystemPolicy policy;
@@ -87,9 +87,18 @@ public class ProcessVariableSpecController {
      */
     @PostMapping("/api/admin/process-definitions/{key}/variable-spec")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="整批取代流程變數規格", description="body為ProcessVariableSpec陣列；先驗名稱再刪舊資料，輸入id不沿用，避免merge覆寫。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ProcessVariableSpecController_batchSave")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="整批取代流程變數規格成功；直接回傳 List<ProcessVariableSpec>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", array=@io.swagger.v3.oas.annotations.media.ArraySchema(schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=ProcessVariableSpec.class))))
     public List<ProcessVariableSpec> batchSave(@PathVariable String key,
                                                 @RequestBody List<ProcessVariableSpec> specs,
-                                                @CallerId String operatorId) {
+                                                @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String operatorId) {
         // ⚠️ 必須在「刪掉舊規格」之前擋。放後面會變成「資料已經清空才回 400」——
         // 那正是本方法最不能出現的組合（見 requireUsableVariableNames 的說明）。
         requireUsableVariableNames(specs);
@@ -562,9 +571,19 @@ public class ProcessVariableSpecController {
      */
     @PutMapping("/api/admin/process-definitions/{key}/variable-spec/{id}")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="更新單筆流程變數規格", description="key與id需同屬一個流程；檢查名稱空白與重複。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ProcessVariableSpecController_update")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="更新單筆流程變數規格成功；直接回傳 ProcessVariableSpec，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=ProcessVariableSpec.class)))
     public ProcessVariableSpec update(@PathVariable String key, @PathVariable String id,
                                        @RequestBody ProcessVariableSpec spec,
-                                       @CallerId String operatorId) {
+                                       @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String operatorId) {
         ProcessVariableSpec existing = repo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
         if (!key.equals(existing.getProcessDefinitionKey())) {
@@ -632,8 +651,15 @@ public class ProcessVariableSpecController {
      * 必須檢查 allowedProcessKeys 是否包含目標流程。
      */
     @GetMapping("/api/external/process-definitions/{key}/variable-spec")
+    @io.swagger.v3.oas.annotations.Operation(summary="外部系統讀取變數規格", description="需外部系統key且process key在授權清單內。 X-API-Key與X-System-Id必須同時提供；另受allowedActions、IP白名單、啟用狀態及限流檢查。", operationId="ProcessVariableSpecController_getSpec")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="externalApiKey")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-System-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required=true, description="與API key對應的外部系統識別碼")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="外部系統讀取變數規格成功；直接回傳 List<ProcessVariableSpec>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="429", description="超過限流或催辦冷卻期；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
     public List<ProcessVariableSpec> getSpec(@PathVariable String key,
-                                              @RequestAttribute("externalSystem") ExternalSystem sys) {
+                                              @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystem") ExternalSystem sys) {
         if (!policy.isProcessKeyAllowed(sys, key)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                     "此系統未被授權存取流程: " + key);

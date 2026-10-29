@@ -122,7 +122,7 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/admin/tasks")
-public class SubstituteForwardController {
+    public class SubstituteForwardController {
 
     private static final Logger log = LoggerFactory.getLogger(SubstituteForwardController.class);
 
@@ -162,7 +162,13 @@ public class SubstituteForwardController {
      */
     @PostMapping("/forward-substitutes")
     @Transactional("primaryTransactionManager")
-    public ForwardResult forwardSubstitutes(@CallerId String operatorId) {
+    @io.swagger.v3.oas.annotations.Operation(summary="將任務轉給有效代理人", description="掃描任務後依代理人規則轉派；回scanned/forwarded/skipped，操作人來自認證身分。 需要ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="SubstituteForwardController_forwardSubstitutes")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="將任務轉給有效代理人成功；直接回傳 ForwardResult，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    public ForwardResult forwardSubstitutes(@io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String operatorId) {
         if (operatorId == null || operatorId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "無法確認身分，請先登入");
         }

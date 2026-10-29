@@ -55,7 +55,7 @@ import java.util.Map;
  * </ul>
  */
 @RestController
-public class FormEnvelopeController {
+    public class FormEnvelopeController {
 
     private final TaskService taskService;
     private final RepositoryService repositoryService;
@@ -98,7 +98,15 @@ public class FormEnvelopeController {
      * </ul>
      */
     @GetMapping("/api/tasks/{taskId}/form")
-    public Map<String, Object> taskForm(@PathVariable String taskId, @CallerId String callerId) {
+    @io.swagger.v3.oas.annotations.Operation(summary="讀取任務表單 Envelope", description="先驗任務關係／持有者；加簽沿伺服器父鏈尋找表單且唯讀。返回UniForm投影與選項標籤快照，不返回未授權原文。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="FormEnvelopeController_taskForm")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="讀取任務表單 Envelope成功；直接回傳 Map<String, Object>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="409", description="目前狀態、版本或引用衝突；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    public Map<String, Object> taskForm(@PathVariable String taskId, @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
         Task task = taskService.createTaskQuery().taskId(taskId).singleResult();
         if (task == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "任務不存在: " + taskId);
@@ -170,6 +178,14 @@ public class FormEnvelopeController {
      * </ul>
      */
     @GetMapping("/api/process-definitions/{key}/start-form")
+    @io.swagger.v3.oas.annotations.Operation(summary="讀取起始表單與版本脈絡", description="取得最新流程與published表單；suspended回409。applicationContext含流程及表單版本，送件必須回傳以查核過期。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="FormEnvelopeController_startForm")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="讀取起始表單與版本脈絡成功；直接回傳 Map<String, Object>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="409", description="目前狀態、版本或引用衝突；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public Map<String, Object> startForm(@PathVariable String key) {
         ProcessDefinition pd = repositoryService.createProcessDefinitionQuery()
                 .processDefinitionKey(key).latestVersion().singleResult();
@@ -205,6 +221,14 @@ public class FormEnvelopeController {
      * 前端要預覽「填入後的樣子」時，那是前端的本地狀態，不是伺服器的 Envelope。
      */
     @PostMapping("/api/forms/preview")
+    @io.swagger.v3.oas.annotations.Operation(summary="預覽未保存的 UniForm DSL", description="schemaJson經DSL驗證；以fill/editable profile產生Envelope，不新增表單版本。 需要bpm:form:design或ROLE_ADMIN。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="FormEnvelopeController_preview")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="預覽未保存的 UniForm DSL成功；直接回傳 Map<String, Object>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=FormPreviewRequest.class)))
     public Map<String, Object> preview(@RequestBody FormPreviewRequest req) {
         String schemaJson = req != null ? req.schemaJson() : null;
         Map<String, Object> dsl = definitionValidator.parse(schemaJson);

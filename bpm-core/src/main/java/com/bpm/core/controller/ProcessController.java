@@ -39,7 +39,7 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/process-instances")
-public class ProcessController {
+    public class ProcessController {
 
     /**
      * 不可由呼叫端在<b>啟動流程</b>時指定的流程變數。
@@ -241,8 +241,19 @@ public class ProcessController {
      */
     @PostMapping
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="啟動流程申請", description="initiator由認證者決定，body不得指定；驗證流程／表單版本脈絡及formData，條件不符拒絕啟動。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ProcessController_startProcess")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="啟動流程申請成功；直接回傳 Map<String, Object>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="409", description="目前狀態、版本或引用衝突；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=StartProcessRequest.class)))
     public Map<String, Object> startProcess(@RequestBody StartProcessRequest req,
-                                            @CallerId String callerId) {
+                                            @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
         // ⚠️ 為什麼 callerId 為 null 要回 401，而不是 fallback 到任何標頭：
         // CallerIdArgumentResolver 的類別註解已說明 —— 退回讀標頭會讓整套
         // 認證變成裝飾：任何一條沒被授權規則涵蓋的路徑，身分就退回可偽造的
@@ -593,9 +604,20 @@ public class ProcessController {
      */
     @PostMapping("/{id}/cancel")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="撤回我的流程申請", description="只有申請人且尚未進入處理可撤回；已處理409，回processInstanceId/status=cancelled。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ProcessController_cancelProcess")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="撤回我的流程申請成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.ProcessStatus.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="409", description="目前狀態、版本或引用衝突；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=false, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(type="object", description="選填操作資料；只有申請人且尚未進入處理可撤回；已處理409，回processInstanceId/status=cancelled")))
     public Map<String, Object> cancelProcess(@PathVariable String id,
                                              @RequestBody(required = false) Map<String, Object> body,
-                                             @CallerId String callerId) {
+                                             @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
         if (callerId == null || callerId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "無法確認身分，請先登入");
         }
@@ -745,9 +767,15 @@ public class ProcessController {
      * 這個端點沒有同樣的需求。
      */
     @GetMapping
+    @io.swagger.v3.oas.annotations.Operation(summary="列出我的進行中申請", description="initiator若提供必須是本人；回流程與目前任務摘要。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ProcessController_getProcessInstances")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="列出我的進行中申請成功；直接回傳 List<Map<String, Object>>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public List<Map<String, Object>> getProcessInstances(
             @RequestParam(required = false) String initiator,
-            @CallerId String callerId) {
+            @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
         String self = accessGuard.requireSelf(initiator, callerId, "initiator");
         var query = runtimeService.createProcessInstanceQuery();
         // 代員工發起的案件（R-20）：initiator 是 system:<id>，員工記在 onBehalfOf。
@@ -819,7 +847,13 @@ public class ProcessController {
      * 而 {@code getProcessInstances} 的逐案查詢是既有端點的 N+1，不在本次範圍。
      */
     @GetMapping("/involved")
-    public List<Map<String, Object>> getInvolvedProcessInstances(@CallerId String callerId) {
+    @io.swagger.v3.oas.annotations.Operation(summary="列出我參與的進行中案件", description="依伺服器參與紀錄查詢，結果帶involved/currentTask/currentTaskCount。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ProcessController_getInvolvedProcessInstances")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="列出我參與的進行中案件成功；直接回傳 List<Map<String, Object>>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    public List<Map<String, Object>> getInvolvedProcessInstances(@io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
         if (callerId == null || callerId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "無法確認身分，請先登入");
         }
@@ -901,7 +935,14 @@ public class ProcessController {
      * 而回應組裝階段的例外會讓它永遠寫不進去。
      */
     @GetMapping("/{id}/variables")
-    public Map<String, Object> getVariables(@PathVariable String id, @CallerId String callerId) {
+    @io.swagger.v3.oas.annotations.Operation(summary="讀取流程變數", description="需流程讀權；回動態變數名稱到JSON值的物件，稽核旁路會留存軌跡。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ProcessController_getVariables")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="讀取流程變數成功；直接回傳 Map<String, Object>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    public Map<String, Object> getVariables(@PathVariable String id, @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
         boolean auditBypass = accessGuard.requireReadAccess(id, callerId);
         if (auditBypass) {
             // 參與者讀自己的表單值不留痕（那是日常操作）；稽核旁路必須留痕。
@@ -994,8 +1035,15 @@ public class ProcessController {
      * 而回應組裝階段的例外會讓它永遠寫不進去。
      */
     @GetMapping("/{id}/bpmn-xml")
+    @io.swagger.v3.oas.annotations.Operation(summary="讀取流程圖及活動節點", description="需流程讀權；回xml及activeIds，流程不在runtime時可能回空XML及空陣列。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="ProcessController_getBpmnXml")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="讀取流程圖及活動節點成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.ProcessDiagram.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public Map<String, Object> getBpmnXml(@PathVariable String id,
-                                          @CallerId String callerId) throws Exception {
+                                          @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) throws Exception {
         // 授權先於存在性檢查：沒有權限的人不該靠狀態碼分辨
         // 「這個 id 不存在」與「我不該看這個 id」（兩者都必須是 404）。
         if (accessGuard.requireReadAccess(id, callerId)) {

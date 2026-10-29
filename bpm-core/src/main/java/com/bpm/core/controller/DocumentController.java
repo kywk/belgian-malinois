@@ -26,7 +26,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/documents")
-public class DocumentController {
+    public class DocumentController {
 
     private final DocumentRequestRepository docRepo;
     private final RuntimeService runtimeService;
@@ -86,8 +86,17 @@ public class DocumentController {
      */
     @PostMapping
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="建立公文申請", description="清除輸入id/processInstanceId；createdBy不得冒用，依認證者啟動流程並寫入文件。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="DocumentController_create")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="建立公文申請成功；直接回傳 DocumentRequest，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=DocumentRequest.class)))
     public DocumentRequest create(@RequestBody DocumentRequest req,
-                                  @CallerId String callerId) {
+                                  @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
         // 與 ProcessController 同一理由：未認證就拒絕，不 fallback 到標頭。
         // 見 CallerIdArgumentResolver 類別註解 —— 退回讀標頭會讓整套認證
         // 變成裝飾。而這條路會寫入稽核（fail-closed 前提），所以更不能
@@ -226,7 +235,14 @@ public class DocumentController {
      * 否則稽核上會出現兩種「被拒絕」而沒有人知道它們其實是同一件事。
      */
     @GetMapping("/{id}")
-    public DocumentRequest getById(@PathVariable String id, @CallerId String callerId) {
+    @io.swagger.v3.oas.annotations.Operation(summary="取得公文申請", description="先找資料再驗讀權，不存在404。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="DocumentController_getById")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="取得公文申請成功；直接回傳 DocumentRequest，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    public DocumentRequest getById(@PathVariable String id, @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
         DocumentRequest doc = docRepo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
         requireReadable(doc, callerId);
@@ -314,8 +330,14 @@ public class DocumentController {
      * 與 {@link ProcessAccessGuard} 的其他讀端呼叫端同一型。
      */
     @GetMapping
+    @io.swagger.v3.oas.annotations.Operation(summary="列出我的公文申請", description="createdBy若提供須為本人；依建立時間遞減。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="DocumentController_list")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="列出我的公文申請成功；直接回傳 List<DocumentRequest>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public List<DocumentRequest> list(@RequestParam(required = false) String createdBy,
-                                     @CallerId String callerId) {
+                                     @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String callerId) {
         String self = accessGuard.requireSelf(createdBy, callerId, "createdBy");
         return docRepo.findByCreatedByOrderByCreatedAtDesc(self);
     }

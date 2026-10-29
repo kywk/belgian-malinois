@@ -17,7 +17,7 @@ import java.util.Map;
 
 /** 選項讀取與表單共用可信綁定、版本及案件讀取授權。 */
 @RestController
-public class UniformOptionsController {
+    public class UniformOptionsController {
     private final TaskService tasks;
     private final RepositoryService repository;
     private final ProcessAccessGuard access;
@@ -50,11 +50,26 @@ public class UniformOptionsController {
     }
 
     @GetMapping("/api/forms/option-providers")
+    @io.swagger.v3.oas.annotations.Operation(summary="列出選項提供者", description="回傳已註冊provider目錄，供表單設計使用。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="UniformOptionsController_catalog")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="列出選項提供者成功；直接回傳 List<Map<String, Object>>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
     public List<Map<String, Object>> catalog() { return providers.catalog(); }
 
     @PostMapping("/api/process-definitions/{key}/start-form/options")
+    @io.swagger.v3.oas.annotations.Operation(summary="查詢起始表單欄位選項", description="fieldId、applicationContext及data；核對目前流程與表單版本，變更時拒絕舊脈絡。回傳options。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="UniformOptionsController_startOptions")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢起始表單欄位選項成功；直接回傳 Map<String, Object>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=StartOptionsRequest.class)))
     public Map<String, Object> startOptions(@PathVariable String key,
-            @RequestBody StartOptionsRequest request, @CallerId String caller) {
+            @RequestBody StartOptionsRequest request, @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String caller) {
         ProcessDefinition process = repository.createProcessDefinitionQuery()
                 .processDefinitionKey(key).latestVersion().singleResult();
         if (process == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "流程定義不存在");
@@ -80,8 +95,17 @@ public class UniformOptionsController {
     }
 
     @PostMapping("/api/tasks/{taskId}/form/options")
+    @io.swagger.v3.oas.annotations.Operation(summary="查詢任務表單欄位選項", description="fieldId及data；需流程讀權，先用任務profile合併可接受資料再查詢provider。回傳options。 身分由JWT或已啟用且受信任的閘道建立；CallerId由SecurityContext取得，不是query參數。", operationId="UniformOptionsController_taskOptions")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirements({@io.swagger.v3.oas.annotations.security.SecurityRequirement(name="bpmBearer"), @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="gatewaySecret")})
+    @io.swagger.v3.oas.annotations.Parameter(name="X-User-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, description="僅信任閘道模式使用；與X-System-Id至少一項，須同時帶X-Gateway-Secret，JWT身分優先")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="查詢任務表單欄位選項成功；直接回傳 Map<String, Object>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=TaskOptionsRequest.class)))
     public Map<String, Object> taskOptions(@PathVariable String taskId,
-            @RequestBody TaskOptionsRequest request, @CallerId String caller) {
+            @RequestBody TaskOptionsRequest request, @io.swagger.v3.oas.annotations.Parameter(hidden=true) @CallerId String caller) {
         Task task = tasks.createTaskQuery().taskId(taskId).singleResult();
         if (task == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "任務不存在");
         access.requireReadAccess(task.getProcessInstanceId(), caller);

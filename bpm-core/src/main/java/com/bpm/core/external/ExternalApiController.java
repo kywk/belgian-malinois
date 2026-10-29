@@ -25,7 +25,7 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/external")
-public class ExternalApiController {
+    public class ExternalApiController {
 
     private final RuntimeService runtimeService;
     private final TaskService taskService;
@@ -85,9 +85,20 @@ public class ExternalApiController {
 
     @PostMapping("/process-instances")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="外部系統啟動流程", description="processDefinitionKey必填；initiator禁止自報，固定system身分；onBehalfOf需額外授權，firstTaskAssignee／候選群組／變數須合法。 X-API-Key與X-System-Id必須同時提供；另受allowedActions、IP白名單、啟用狀態及限流檢查。", operationId="ExternalApiController_startProcess")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="externalApiKey")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-System-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required=true, description="與API key對應的外部系統識別碼")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="外部系統啟動流程成功；直接回傳 Map<String, Object>，動態Map欄位依本operation描述及領域內容。", useReturnTypeSchema=true)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="429", description="超過限流或催辦冷卻期；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.ExternalStartRequest.class)))
     public Map<String, Object> startProcess(@RequestBody Map<String, Object> body,
-                                             @RequestAttribute("externalSystemId") String systemId,
-                                             @RequestAttribute("externalSystem") ExternalSystem sys) {
+                                             @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystemId") String systemId,
+                                             @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystem") ExternalSystem sys) {
         String processDefKey = (String) body.get("processDefinitionKey");
         String businessKey = (String) body.get("businessKey");
         // ⚠️ initiator 一律由 server 決定（R-20）。
@@ -424,8 +435,15 @@ public class ExternalApiController {
     // ── 2. Query Status ──
 
     @GetMapping("/process-instances/{processInstanceId}/status")
+    @io.swagger.v3.oas.annotations.Operation(summary="外部系統讀取案件狀態", description="核對系統擁有權；回processInstanceId/businessKey/status/startedAt/completedAt/result/currentTasks。 X-API-Key與X-System-Id必須同時提供；另受allowedActions、IP白名單、啟用狀態及限流檢查。", operationId="ExternalApiController_getStatus")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="externalApiKey")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-System-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required=true, description="與API key對應的外部系統識別碼")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="外部系統讀取案件狀態成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.ExternalStatus.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="429", description="超過限流或催辦冷卻期；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
     public Map<String, Object> getStatus(@PathVariable String processInstanceId,
-                                          @RequestAttribute("externalSystemId") String systemId) {
+                                          @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystemId") String systemId) {
         return buildStatusResponse(processInstanceId, systemId);
     }
 
@@ -470,8 +488,15 @@ public class ExternalApiController {
      * businessKey 查詢的結果量本來就小，逐筆多一次變數查詢是可接受的代價。
      */
     @GetMapping("/process-instances")
+    @io.swagger.v3.oas.annotations.Operation(summary="依業務鍵查詢外部案件", description="businessKey必填；以_externalSystemId限制擁有權，包含執行中與已結束。 X-API-Key與X-System-Id必須同時提供；另受allowedActions、IP白名單、啟用狀態及限流檢查。", operationId="ExternalApiController_queryByBusinessKey")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="externalApiKey")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-System-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required=true, description="與API key對應的外部系統識別碼")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="依業務鍵查詢外部案件成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", array=@io.swagger.v3.oas.annotations.media.ArraySchema(schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.ExternalStatus.class))))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="429", description="超過限流或催辦冷卻期；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
     public List<Map<String, Object>> queryByBusinessKey(@RequestParam String businessKey,
-                                                         @RequestAttribute("externalSystemId") String systemId) {
+                                                         @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystemId") String systemId) {
         // Search in history (covers both running and completed)
         List<HistoricProcessInstance> hits = historyService.createHistoricProcessInstanceQuery()
                 .processInstanceBusinessKey(businessKey)
@@ -533,10 +558,21 @@ public class ExternalApiController {
      */
     @PutMapping("/tasks/{taskId}")
     @Transactional("primaryTransactionManager")
+    @io.swagger.v3.oas.annotations.Operation(summary="外部系統完成任務", description="核對執行中案件擁有權、允許流程及任務限制；variables由變數規格驗證。回taskId/status=completed。 X-API-Key與X-System-Id必須同時提供；另受allowedActions、IP白名單、啟用狀態及限流檢查。", operationId="ExternalApiController_completeTask")
+    @io.swagger.v3.oas.annotations.security.SecurityRequirement(name="externalApiKey")
+    @io.swagger.v3.oas.annotations.Parameter(name="X-System-Id", in=io.swagger.v3.oas.annotations.enums.ParameterIn.HEADER, required=true, description="與API key對應的外部系統識別碼")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="200", description="外部系統完成任務成功；直接回傳所列資料，不另加code/data envelope", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.TaskResult.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="400", description="輸入形狀或業務前置條件不合法；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="401", description="未通過身分驗證；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="403", description="身分有效但不具路由或資源權限；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="404", description="資源或等待訂閱不存在；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="429", description="超過限流或催辦冷卻期；filter body為error/status", content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.FilterError.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode="503", description="依賴或稽核寫入不可用；框架依錯誤處理設定輸出，非成功資料schema", content=@io.swagger.v3.oas.annotations.media.Content)
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(required=true, content=@io.swagger.v3.oas.annotations.media.Content(mediaType="application/json", schema=@io.swagger.v3.oas.annotations.media.Schema(implementation=com.bpm.core.config.BpmDocumentationModels.ExternalCompleteRequest.class)))
     public Map<String, Object> completeTask(@PathVariable String taskId,
                                              @RequestBody Map<String, Object> body,
-                                             @RequestAttribute("externalSystemId") String systemId,
-                                             @RequestAttribute("externalSystem") ExternalSystem sys) {
+                                             @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystemId") String systemId,
+                                             @io.swagger.v3.oas.annotations.Parameter(hidden=true) @RequestAttribute("externalSystem") ExternalSystem sys) {
         Task task = taskService.createTaskQuery().taskId(taskId).singleResult();
         if (task == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Task not found");
 
