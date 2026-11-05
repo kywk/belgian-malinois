@@ -2,6 +2,14 @@
   <div id="app">
     <!-- 登入 overlay -->
     <div v-if="!auth.isAuthenticated" style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:12px">
+      <template v-if="staffSsoEnabled">
+        <h2>BPM 內勤工作台</h2>
+        <p>請使用公司內勤帳號登入，查看待辦與辦理簽核。</p>
+        <button @click="loginWithSso" :disabled="ssoBusy" style="padding:10px 24px;cursor:pointer">
+          {{ ssoBusy ? '正在確認登入…' : '內勤 SSO 登入' }}
+        </button>
+      </template>
+      <template v-else>
       <h2>BPM Platform — 測試登入</h2>
       <select v-model="selectedUser" style="padding:8px;font-size:14px">
         <option value="">選擇測試用戶</option>
@@ -22,12 +30,13 @@
                style="padding:8px;width:420px;font-size:12px"/>
         <button @click="loginWithPastedToken" style="padding:8px 24px;cursor:pointer">以 token 登入</button>
       </template>
-      <p v-if="loginError" style="color:#c00;font-size:13px;max-width:460px;text-align:center">{{ loginError }}</p>
+      </template>
+      <p v-if="loginError || auth.sessionError" style="color:#c00;font-size:13px;max-width:460px;text-align:center">{{ loginError || auth.sessionError }}</p>
     </div>
 
     <!-- 主畫面 -->
     <template v-else>
-      <el-menu mode="horizontal" router>
+      <el-menu mode="horizontal" router :ellipsis="false" style="overflow-x:auto">
         <el-menu-item index="/">儀表板</el-menu-item>
         <el-menu-item index="/start">發起申請</el-menu-item>
         <el-menu-item index="/tasks">待辦清單</el-menu-item>
@@ -62,7 +71,8 @@
 
 <script setup>
 import { devSigningAvailable, mintDevToken } from './services/devToken'
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { staffSsoEnabled, beginStaffSso, consumeStaffCallback } from './services/staffSso'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from './stores/auth'
 
@@ -73,6 +83,7 @@ const router = useRouter()
 const selectedUser = ref('')
 const pastedToken = ref('')
 const loginError = ref('')
+const ssoBusy = ref(false)
 const isAdmin = computed(() => auth.isAdmin)
 const isAuditor = computed(() => auth.isAuditor)
 // 表單編輯器：bpm:form:design 或 ROLE_ADMIN（後端 /api/forms/** 寫入的規則）。
@@ -89,6 +100,27 @@ const canDesignForms = computed(() => auth.canDesignForms)
  * 簽發只在 Vite dev server 下可用（見 devToken.js）。靜態部署時
  * devSigningAvailable 為 false，登入畫面會改為要求貼上 token。
  */
+async function loginWithSso() {
+  loginError.value = ''
+  ssoBusy.value = true
+  try { await beginStaffSso() } catch (error) {
+    loginError.value = error.message
+    ssoBusy.value = false
+  }
+}
+onMounted(async () => {
+  if (!staffSsoEnabled) return
+  ssoBusy.value = true
+  try {
+    const token = await consumeStaffCallback()
+    if (token) await auth.setToken(token)
+    else if (auth.token) await auth.loadPermissions()
+    if (auth.isAuthenticated && (token || window.location.pathname === '/')) await router.replace('/tasks')
+  } catch (error) {
+    auth.logout()
+    loginError.value = error.response?.data?.message || error.message
+  } finally { ssoBusy.value = false }
+})
 async function login() {
   loginError.value = ''
   try {

@@ -95,6 +95,15 @@ public class CandidateGroupMembership {
      * 而非「看到不該看到的」或「整個功能不可用」。
      */
     public Set<String> groupsOf(String callerId) {
+        var staff = com.bpm.core.staff.StaffAuthentication.current();
+        if (staff != null) {
+            if (!staff.getName().equals(callerId)) return Set.of();
+            Set<String> groups = new LinkedHashSet<>(staff.permissions());
+            groups.add(staff.staff().deptId());
+            groups.addAll(staff.staff().orgObjectIds());
+            staff.permissions().forEach(code -> groups.add(com.bpm.core.staff.StaffPermissions.ALIASES.getOrDefault(code, code)));
+            return groups;
+        }
         Set<String> out = new LinkedHashSet<>();
         if (callerId == null || callerId.isBlank()) return out;
 

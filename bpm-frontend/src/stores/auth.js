@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { staffSsoEnabled, fetchStaffSession } from '../services/staffSso'
 import {
   clearToken,
   decodeToken,
@@ -39,6 +40,8 @@ import { fetchMyPermissions } from '../services/permissionsApi'
 export const useAuthStore = defineStore('auth', {
   state: () => ({
     token: getToken(),
+    staffSession: null,
+    sessionError: null,
 
     /**
      * 呼叫者實際被授權的權限碼。
@@ -92,10 +95,11 @@ export const useAuthStore = defineStore('auth', {
     permissionsInFlight: null,
   }),
   getters: {
-    isAuthenticated: (state) => !!state.token,
-    userId: (state) => decodeToken(state.token).userId,
-    roles: (state) => decodeToken(state.token).roles,
-    isAdmin: (state) => state.admin || decodeToken(state.token).roles.includes('admin'),
+    canActTasks: (state) => !staffSsoEnabled || state.permissions.includes('bpm:task:work:act'),
+    isAuthenticated: (state) => !!state.token && (!staffSsoEnabled || !!state.staffSession),
+    userId: (state) => staffSsoEnabled ? state.staffSession?.userId ?? null : decodeToken(state.token).userId,
+    roles: (state) => staffSsoEnabled ? [] : decodeToken(state.token).roles,
+    isAdmin: (state) => state.admin || (!staffSsoEnabled && decodeToken(state.token).roles.includes('admin')),
 
     /**
      * 是否可檢視稽核。
@@ -115,7 +119,7 @@ export const useAuthStore = defineStore('auth', {
     isAuditor: (state) => state.permissions.includes('audit:log:read'),
 
     /** 是否可設計表單。後端接受 bpm:form:design **或** ROLE_ADMIN。 */
-    canDesignForms: (state) => state.admin || state.permissions.includes('bpm:form:design'),
+    canDesignForms: (state) => (!staffSsoEnabled && state.admin) || state.permissions.includes('bpm:form:design'),
   },
   actions: {
     /**
@@ -165,7 +169,7 @@ export const useAuthStore = defineStore('auth', {
       // 換人登入時必須重置：留著上一個人的權限會讓新使用者看得到
       // 不屬於他的選單 —— 而且那正是「看到選項、點下去被擋」的症狀。
       this.resetPermissions()
-      this.loadPermissions().catch(() => {
+      return this.loadPermissions().catch(() => {
         // loadPermissions 內部已降級，不會 reject。這裡只是不讓
         // 未處理的 promise rejection 讓 dev console 變雜訊。
       })
@@ -191,15 +195,39 @@ export const useAuthStore = defineStore('auth', {
       // 而且兩次回應的先後順序可能讓狀態被舊的答案蓋掉。
       if (this.permissionsInFlight) return this.permissionsInFlight
 
+      const tokenAtStart = this.token
       const { roles } = decodeToken(this.token)
       this.permissionsInFlight = (async () => {
         try {
-          const data = await fetchMyPermissions()
+          const data = staffSsoEnabled ? await fetchStaffSession() : await fetchMyPermissions()
+          if (this.token !== tokenAtStart) return
+          if (staffSsoEnabled) {
+            if (data?.userType !== 'STAFF' || !data.userId || !Array.isArray(data.permissions)
+                || !data.permissions.includes('bpm:console:access:use')) throw new Error('內勤身分或後台權限尚未確認')
+            this.staffSession = data
+            const aliases = { 'bpm:form:definition:design': 'bpm:form:design', 'bpm:audit:log:read': 'audit:log:read', 'bpm:bpmn:definition:deploy': 'bpm:bpmn:deploy' }
+            this.permissions = data.permissions.map(code => aliases[code] || code)
+            this.admin = data.permissions.includes('bpm:system:config:manage')
+            this.permissionsUserId = data.userId
+            this.permissionsUnverified = false
+            return
+          }
           this.permissions = Array.isArray(data?.permissions) ? data.permissions : []
           this.admin = data?.admin === true
           this.permissionsUserId = data?.userId ?? null
           this.permissionsUnverified = false
-        } catch {
+        } catch (error) {
+          if (this.token !== tokenAtStart) return
+          if (staffSsoEnabled) {
+            this.staffSession = null
+            this.permissions = []
+            this.admin = false
+            this.permissionsUnverified = true
+            this.sessionError = error.response?.data?.message || error.message || '內勤登入驗證失敗'
+            this.token = null
+            clearToken()
+            return
+          }
           // 降級：形狀像權限碼的 claim 項目。`*` 不展開 ——
           // 它在 roles claim 裡的處理是後端的政策（`*` → ROLE_ADMIN），
           // 前端展開它就是在猜（見 permissionsApi.js 的 ⚠️）。
@@ -211,14 +239,18 @@ export const useAuthStore = defineStore('auth', {
         } finally {
           // 無論成功失敗都要標記已問過 —— 否則後端故障時 router guard
           // 會無限等待，整個 app 卡在載入中。
-          this.permissionsLoaded = true
-          this.permissionsInFlight = null
+          if (this.token === tokenAtStart || (staffSsoEnabled && this.token === null)) {
+            this.permissionsLoaded = true
+            this.permissionsInFlight = null
+          }
         }
       })()
       return this.permissionsInFlight
     },
 
     resetPermissions() {
+      this.staffSession = null
+      this.sessionError = null
       this.permissions = []
       this.permissionsLoaded = false
       this.admin = false

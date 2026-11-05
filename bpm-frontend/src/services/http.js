@@ -22,7 +22,7 @@ const http = axios.create({
 // ── Request：統一附上身分 ──────────────────────────────────────────
 http.interceptors.request.use((config) => {
   const { userId, raw } = currentIdentity()
-  if (raw) {
+  if (raw && !config.anonymous) {
     config.headers['Authorization'] = `Bearer ${raw}`
     // ⚠️ 不要再送 X-User-Id（R-01）。
     //
@@ -42,6 +42,8 @@ http.interceptors.response.use(
     const status = error.response?.status
     // 後端以 ResponseStatusException 回傳時訊息在 message，其餘情況退回 axios 訊息
     const detail = error.response?.data?.message || error.response?.data?.error
+
+    if (error.config?.silentAuth) return Promise.reject(error)
 
     if (status === 401) {
       // 憑證失效：清掉 session 並回首頁。

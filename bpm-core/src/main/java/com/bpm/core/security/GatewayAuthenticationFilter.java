@@ -131,7 +131,7 @@ public class GatewayAuthenticationFilter extends OncePerRequestFilter {
         // 與「使用者本人操作」（/api/internal/** 就只接受前者）。
         var authorities = new java.util.ArrayList<org.springframework.security.core.GrantedAuthority>();
         authorities.add(new org.springframework.security.core.authority.SimpleGrantedAuthority(ROLE_GATEWAY));
-        authorities.addAll(authorityResolver.fromPermissionCentre(userId));
+        if (!machineOnly) authorities.addAll(authorityResolver.fromPermissionCentre(userId));
 
         var auth = new UsernamePasswordAuthenticationToken(userId, null, authorities);
         auth.setDetails(request.getRemoteAddr());
@@ -147,6 +147,9 @@ public class GatewayAuthenticationFilter extends OncePerRequestFilter {
      * 讓攻擊者能用回應時間逐位元組猜出密鑰。
      * {@code MessageDigest.isEqual} 是為此設計的。
      */
+    private boolean machineOnly;
+    public void setMachineOnly(boolean machineOnly) { this.machineOnly = machineOnly; }
+
     private boolean secretMatches(String presented) {
         if (expectedSecret.length == 0) return false;   // 未設定密鑰 → 一律不通過
         return MessageDigest.isEqual(expectedSecret, presented.getBytes(StandardCharsets.UTF_8));

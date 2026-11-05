@@ -11,6 +11,8 @@ import java.util.Map;
 @Component
 public class OrgRestClient {
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.bpm.core.staff.StaffDirectoryClient staffDirectory;
     private final RestClient restClient;
 
     /**
@@ -79,11 +81,16 @@ public class OrgRestClient {
     }
 
     public Map<String, Object> getUser(String userId) {
+        if (staffDirectory != null) {
+            var staff = staffDirectory.byUserId(userId);
+            return Map.of("userId", staff.userId(), "name", staff.displayName(), "deptId", staff.deptId());
+        }
         return restClient.get().uri("/api/users/{userId}", userId)
                 .retrieve().body(new ParameterizedTypeReference<>() {});
     }
 
     public List<Map<String, Object>> searchUsers(String keyword) {
+        if (staffDirectory != null) throw new com.bpm.core.staff.StaffFailure("BPM_ROUTING_UNAVAILABLE", 503, "此組織查詢尚無正式來源契約");
         return restClient.get().uri(builder -> builder.path("/api/users/search")
                         .queryParam("keyword", keyword).build())
                 .retrieve().body(new ParameterizedTypeReference<>() {});
@@ -98,29 +105,34 @@ public class OrgRestClient {
      * 放行一個沒有人能簽的身分 —— 見該類別註解。
      */
     public String getManager(String userId) {
+        if (staffDirectory != null) throw new com.bpm.core.staff.StaffFailure("BPM_ROUTING_UNAVAILABLE", 503, "此組織查詢尚無正式來源契約");
         Map<String, Object> result = restClient.get().uri("/api/users/{userId}/manager", userId)
                 .retrieve().body(new ParameterizedTypeReference<>() {});
         return result != null ? (String) result.get("managerId") : null;
     }
 
     public List<String> getManagerChain(String userId, int levels) {
+        if (staffDirectory != null) throw new com.bpm.core.staff.StaffFailure("BPM_ROUTING_UNAVAILABLE", 503, "此組織查詢尚無正式來源契約");
         return restClient.get().uri("/api/users/{userId}/manager-chain?levels={levels}", userId, levels)
                 .retrieve().body(new ParameterizedTypeReference<>() {});
     }
 
     public String getDepartment(String userId) {
+        if (staffDirectory != null) return staffDirectory.byUserId(userId).deptId();
         Map<String, Object> result = restClient.get().uri("/api/users/{userId}/department", userId)
                 .retrieve().body(new ParameterizedTypeReference<>() {});
         return result != null ? (String) result.get("deptId") : null;
     }
 
     public String getSubstitute(String userId) {
+        if (staffDirectory != null) throw new com.bpm.core.staff.StaffFailure("BPM_ROUTING_UNAVAILABLE", 503, "此組織查詢尚無正式來源契約");
         Map<String, Object> result = restClient.get().uri("/api/users/{userId}/substitute", userId)
                 .retrieve().body(new ParameterizedTypeReference<>() {});
         return result != null ? (String) result.get("substituteId") : null;
     }
 
     public List<String> getDeptMembers(String deptId) {
+        if (staffDirectory != null) throw new com.bpm.core.staff.StaffFailure("BPM_ROUTING_UNAVAILABLE", 503, "此組織查詢尚無正式來源契約");
         return restClient.get().uri("/api/departments/{deptId}/members", deptId)
                 .retrieve().body(new ParameterizedTypeReference<>() {});
     }

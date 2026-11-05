@@ -186,6 +186,8 @@ public class ExternalActorGuard {
     private static final Logger log = LoggerFactory.getLogger(ExternalActorGuard.class);
 
     /** 候選群組白名單是授權設定，規則由 ExternalSystemPolicy 唯一負責。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.bpm.core.staff.StaffDirectoryClient staffDirectory;
     private final OrgService orgService;
     private final ExternalSystemPolicy policy;
 
@@ -290,6 +292,10 @@ public class ExternalActorGuard {
         //
         // catch 全部例外是刻意的 fail-closed（不論故障還是查無此人都不放行），
         // 但**狀態碼分開** —— 見類別註解「故障與拒絕必須分開」。
+        if (staffDirectory != null) {
+            staffDirectory.byUserId(userId);
+            return;
+        }
         try {
             orgService.getDirectManager(userId);
         } catch (Exception e) {

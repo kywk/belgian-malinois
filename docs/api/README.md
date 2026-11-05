@@ -3,6 +3,8 @@
 主要流程、成功／失敗範例與重試條件見 [操作流程](workflows.md)。
 本頁補充 OpenAPI 以外的操作順序與安全邊界，依目前 Controller、DTO 與 SecurityConfig 整理。不是正式環境驗收報告，也不是所有端點的完整欄位規格。
 
+雙入口規格見 [內勤與 agent BFF 契約 v1](../plan/contracts/staff-agent-v1/README.md)。內勤模式已實作 `/api/me/session`、SSO、組織與 AuthZ 接線，啟用與正式環境缺口見 [內勤整合指南](staff-sso-integration.md)；`/api/external/v1/**` 仍待實作。下列 ROLE_ADMIN 等規則描述既有開發模式，正式內勤模式改用 v1 分離權限。
+
 ## 入口與身分
 
 服務端自有 API 使用 `/api/`，不直接暴露 Flowable 原生 REST。一般使用者請求使用 `Authorization: Bearer <JWT>`；可信 gateway 身分與外部系統 API key 是不同入口，不可互換。

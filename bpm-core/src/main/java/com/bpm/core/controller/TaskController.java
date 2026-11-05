@@ -94,6 +94,9 @@ import java.util.stream.Stream;
     /** 催辦冷卻的 Redis key 前綴。key 是案件（processInstanceId），見 {@link #urgeTask}。 */
     static final String URGE_KEY_PREFIX = "bpm:urge:";
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.bpm.core.staff.StaffTaskAuthorization staffAuthorization;
+
     private final TaskService taskService;
     private final RuntimeService runtimeService;
     private final RepositoryService repositoryService;
@@ -390,6 +393,7 @@ import java.util.stream.Stream;
         // 因此 complete／reassign／delegate 都不會改動任何資料。
         // 未認證 → 401。判斷規則見 TaskHolderGuard（與待辦清單同一份）。
         holderGuard.requireHolder(task, callerId);
+        if (staffAuthorization != null) staffAuthorization.require(task, req);
 
         // ── #1：returnTo 只對 complete 有意義 ─────────────────────────
         //

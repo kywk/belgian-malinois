@@ -238,7 +238,7 @@
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-failsafe-plugin</artifactId>
                         <configuration>
-                            <includes><include>**/BrowserE2eIT.java</include></includes>
+                            <includes><include>**/BrowserE2eIT.java</include><include>**/StaffBrowserE2eIT.java</include></includes>
                             <systemPropertyVariables>
                                 <e2e.frontend.dir>${project.basedir}/../bpm-frontend</e2e.frontend.dir>
                             </systemPropertyVariables>

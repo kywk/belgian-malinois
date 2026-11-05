@@ -41,7 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li><b>{@code _formVersions} 已由 FormVersionLocker 鎖定</b>。</li>
  * </ol>
  *
- * <p>拒絕路徑一律驗「零副作用」：400 時案件數、表單列數、稽核筆數全部不變。
+ * <p>拒絕路徑一律驗「零副作用」：400 時案件數、表單列數不變，且該 businessKey 不得留下送件稽核。
  *
  * <h2>⚠️ 為什麼狀態碼走真實 HTTP</h2>
  *
@@ -67,6 +67,9 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private com.bpm.core.audit.AuditEventPublisher auditPublisher;
+
     private final HttpClient http = HttpClient.newHttpClient();
 
     // ── HTTP／資料查詢小工具 ───────────────────────────────────────
@@ -80,6 +83,12 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
         return http.send(req, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> post(String body, String businessKey) throws Exception {
+        var payload = (tools.jackson.databind.node.ObjectNode) objectMapper.readTree(body);
+        payload.put("businessKey", businessKey);
+        return post(objectMapper.writeValueAsString(payload));
     }
 
     /** 組出「啟動 leave-approval + 帶 formData」的請求 body。 */
@@ -157,10 +166,12 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
         return out;
     }
 
-    private static long auditRowCount() {
+    private static long auditRowCount(String businessKey) {
         long[] out = {-1L};
         withAuditConnection(c -> {
-            try (PreparedStatement ps = c.prepareStatement("SELECT COUNT(*) FROM bpm_audit_log")) {
+            try (PreparedStatement ps = c.prepareStatement("SELECT COUNT(*) FROM bpm_audit_log "
+                    + "WHERE JSON_VALUE(CASE WHEN ISJSON(detail) = 1 THEN detail ELSE N'{}' END, '$.businessKey') = ?")) {
+                ps.setString(1, businessKey);
                 var rs = ps.executeQuery();
                 rs.next();
                 out[0] = rs.getLong(1);
@@ -178,9 +189,10 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
         String marker = "請假理由-" + UUID.randomUUID();
         long before = countRunning(LEAVE);
 
-        var res = post(startBody(def.getId(), leaveValues(marker)));
+        var res = post(startBody(def.getId(), leaveValues(marker)), marker);
 
         assertThat(res.statusCode()).as("body=%s", res.body()).isEqualTo(200);
+        assertThat(auditRowCount(marker)).as("正控：成功送件確實留下該 businessKey 的稽核").isEqualTo(1);
         String pid = field(res.body(), "processInstanceId");
         String formDataId = field(res.body(), "formDataId");
         assertThat(pid).isNotBlank();
@@ -213,14 +225,14 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
         FormDefinition def = leaveRequest();
         long instancesBefore = countRunning(LEAVE);
         int rowsBefore = formRowCount(def.getId());
-        long auditBefore = auditRowCount();
+        String businessKey = "rejected-form-" + UUID.randomUUID();
 
-        var res = post(startBody(LEAVE_FORM_KEY, leaveValues("不能用 formKey 代替 UUID")));
+        var res = post(startBody(LEAVE_FORM_KEY, leaveValues("不能用 formKey 代替 UUID")), businessKey);
 
         assertThat(res.statusCode()).as("body=%s", res.body()).isEqualTo(400);
         assertThat(countRunning(LEAVE)).isEqualTo(instancesBefore);
         assertThat(formRowCount(def.getId())).isEqualTo(rowsBefore);
-        assertThat(auditRowCount()).isEqualTo(auditBefore);
+        assertThat(auditRowCount(businessKey)).isZero();
     }
 
     // ── ② 拒絕路徑：400 且零副作用 ────────────────────────────────
@@ -230,7 +242,7 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
     void schemaViolationIsRejectedWithoutSideEffects() throws Exception {
         FormDefinition def = leaveRequest();
         long instancesBefore = countRunning(LEAVE);
-        long auditBefore = auditRowCount();
+        String businessKey = "rejected-form-" + UUID.randomUUID();
         int rowsBefore = formRowCount(def.getId());
 
         // (a) 必填缺漏：整包資料沒有 reason 這個 key。
@@ -239,7 +251,7 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
         // uni-form 的語意不同 —— 這裡釘的是新語意）。
         var missing = post(startBody(def.getId(),
                 Map.of("leaveType", "annual",
-                        "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"))));
+                        "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"))), businessKey);
         assertThat(missing.statusCode()).as("body=%s", missing.body()).isEqualTo(400);
         assertThat(missing.body()).contains("reason", "必填");
 
@@ -247,13 +259,13 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
         var wrongType = post(startBody(def.getId(),
                 Map.of("leaveType", 123,
                         "dateRange", Map.of("start", "2026-10-01", "end", "2026-10-03"),
-                        "reason", "x")));
+                        "reason", "x")), businessKey);
         assertThat(wrongType.statusCode()).as("body=%s", wrongType.body()).isEqualTo(400);
         assertThat(wrongType.body()).contains("leaveType");
 
         assertThat(countRunning(LEAVE)).as("被拒的請求不得留下案件").isEqualTo(instancesBefore);
         assertThat(formRowCount(def.getId())).as("被拒的請求不得留下表單資料").isEqualTo(rowsBefore);
-        assertThat(auditRowCount()).as("被拒的請求不得留下稽核").isEqualTo(auditBefore);
+        assertThat(auditRowCount(businessKey)).as("被拒的請求不得留下該送件的稽核").isZero();
     }
 
     @Test
@@ -353,17 +365,22 @@ class StartProcessWithFormDataTest extends IntegrationTestBase {
     void applicationCannotStartWithVariablesOnly() throws Exception {
         long instancesBefore = countRunning(LEAVE);
         int rowsBefore = formRowCount(leaveRequest().getId());
-        long auditBefore = auditRowCount();
+        String businessKey = "rejected-form-" + UUID.randomUUID();
         Map<String, Object> payload = applicationStartPayload(LEAVE, USER, "{}");
         payload.remove("formData");
-        payload.put("businessKey", "missing-form-" + UUID.randomUUID());
+        payload.put("businessKey", businessKey);
         payload.put("variables", Map.of("leaveType", "personal", "days", 2));
 
         var res = post(objectMapper.writeValueAsString(payload));
+        // Deterministically reproduce unrelated background audit traffic between the two observations.
+        String unrelatedKey = "unrelated-" + UUID.randomUUID();
+        auditPublisher.publishDetached(new com.bpm.core.dto.AuditEvent("DLQ_MESSAGE", "system",
+                unrelatedKey, null, Map.of("event", "validation-test-noise", "businessKey", unrelatedKey)));
+        assertThat(auditRowCount(unrelatedKey)).as("對照：背景稽核確實落地但不屬於此次送件").isEqualTo(1);
 
         assertThat(res.statusCode()).as("body=%s", res.body()).isEqualTo(400);
         assertThat(countRunning(LEAVE)).isEqualTo(instancesBefore);
         assertThat(formRowCount(leaveRequest().getId())).isEqualTo(rowsBefore);
-        assertThat(auditRowCount()).isEqualTo(auditBefore);
+        assertThat(auditRowCount(businessKey)).isZero();
     }
 }

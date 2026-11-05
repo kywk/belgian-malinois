@@ -391,7 +391,11 @@ public class OrgService {
     // 它掛掉應該退化成「每次都問來源」，而不是讓整個功能不可用。
 
     /** 讀快取；任何 Redis 故障都視為 cache miss。 */
+    @org.springframework.beans.factory.annotation.Value("${bpm.staff.enabled:false}")
+    private boolean staffMode;
+
     private String cacheGet(String key) {
+        if (staffMode) return null;
         try {
             return redis.opsForValue().get(key);
         } catch (Exception e) {
@@ -402,6 +406,7 @@ public class OrgService {
 
     /** 寫快取；失敗只記錄，不影響已取得的正確結果。 */
     private void cachePut(String key, String value, Duration ttl) {
+        if (staffMode) return;
         try {
             redis.opsForValue().set(key, value, ttl);
         } catch (Exception e) {

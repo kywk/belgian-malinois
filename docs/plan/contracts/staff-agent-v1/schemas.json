@@ -1,0 +1,2084 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:bpm:staff-agent:contract:v1",
+  "title": "BPM staff and agent contract v1 — target schemas, not deployed API",
+  "definitions": {
+    "CaseRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "applicationId",
+        "submissionId",
+        "workflowRole",
+        "submissionRevision"
+      ],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9_-]+$"
+        },
+        "applicationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "submissionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "workflowRole": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9_-]+$"
+        },
+        "submissionRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "AgentActor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "agentCode",
+        "issuer",
+        "subject"
+      ],
+      "properties": {
+        "type": {
+          "const": "AGENT"
+        },
+        "agentCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^\\S+$"
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^https://[^\\s]+$"
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^\\S(?:.*\\S)?$"
+        }
+      }
+    },
+    "FormData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "formDefinitionId",
+        "formVersion",
+        "dataJson"
+      ],
+      "properties": {
+        "formDefinitionId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "formVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "dataJson": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 1048576,
+          "format": "json-object-string"
+        }
+      }
+    },
+    "Variables": {
+      "type": "object",
+      "patternProperties": {
+        "^(?!_|initiator$|effectiveInitiator$|onBehalfOf$|approved$|rejected$)[A-Za-z][A-Za-z0-9_]*$": {}
+      },
+      "additionalProperties": false
+    },
+    "BpmStartRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "workflowCode",
+        "bindingVersion",
+        "caseRef",
+        "actor",
+        "processDefinitionId",
+        "formData",
+        "variables"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "workflowCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9._-]+$"
+        },
+        "bindingVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "caseRef": {
+          "$ref": "#/definitions/CaseRef"
+        },
+        "actor": {
+          "$ref": "#/definitions/AgentActor"
+        },
+        "processDefinitionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "formData": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FormData"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "variables": {
+          "$ref": "#/definitions/Variables"
+        }
+      }
+    },
+    "StaffIdentitySnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "userId",
+        "displayName",
+        "userType",
+        "status",
+        "deptId",
+        "orgObjectIds",
+        "sourceRevision",
+        "observedAt",
+        "validUntil"
+      ],
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^\\S+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "userType": {
+          "const": "STAFF"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "ACTIVE",
+            "INACTIVE"
+          ]
+        },
+        "deptId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "orgObjectIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "sourceRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "observedAt": {
+          "type": "string",
+          "format": "utc-date-time"
+        },
+        "validUntil": {
+          "type": "string",
+          "format": "utc-date-time"
+        }
+      }
+    },
+    "StaffSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "userId",
+        "displayName",
+        "userType",
+        "deptId",
+        "permissions",
+        "expiresAt",
+        "authorizationCheckedAt"
+      ],
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^\\S+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "userType": {
+          "const": "STAFF"
+        },
+        "deptId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "bpm:console:access:use",
+              "bpm:task:work:read",
+              "bpm:task:work:act",
+              "bpm:form:definition:design",
+              "bpm:bpmn:definition:deploy",
+              "bpm:system:config:manage",
+              "bpm:audit:log:read",
+              "bpm:approval:bff_contract_review:approve"
+            ]
+          },
+          "minItems": 0,
+          "uniqueItems": true,
+          "contains": {
+            "const": "bpm:console:access:use"
+          }
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "utc-date-time"
+        },
+        "authorizationCheckedAt": {
+          "type": "string",
+          "format": "utc-date-time"
+        }
+      }
+    },
+    "AuthzCheckRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject_ids",
+        "system_code",
+        "permissions",
+        "mode",
+        "subject_attributes"
+      ],
+      "properties": {
+        "subject_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 164,
+            "pattern": "^(staff|org)-[a-z0-9_-]+$"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "system_code": {
+          "const": "bpm"
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "bpm:console:access:use",
+              "bpm:task:work:read",
+              "bpm:task:work:act",
+              "bpm:form:definition:design",
+              "bpm:bpmn:definition:deploy",
+              "bpm:system:config:manage",
+              "bpm:audit:log:read",
+              "bpm:approval:bff_contract_review:approve"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "mode": {
+          "const": "ALL"
+        },
+        "subject_attributes": {
+          "type": "object",
+          "maxProperties": 0,
+          "additionalProperties": false
+        }
+      }
+    },
+    "AuthzCheckResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "data",
+        "trace_id"
+      ],
+      "properties": {
+        "code": {
+          "const": "0000"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "allowed",
+            "reason"
+          ],
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          }
+        },
+        "trace_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        }
+      }
+    },
+    "Receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "state",
+        "caseRef",
+        "businessKey",
+        "processInstanceId",
+        "errorCode",
+        "retryAfterSeconds"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "PROCESSING",
+            "CONFIRMED",
+            "REJECTED",
+            "UNCERTAIN"
+          ]
+        },
+        "caseRef": {
+          "$ref": "#/definitions/CaseRef"
+        },
+        "businessKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 195
+        },
+        "processInstanceId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errorCode": {
+          "anyOf": [
+            {
+              "enum": [
+                "BPM_AUTH_INVALID",
+                "BPM_STAFF_REQUIRED",
+                "BPM_ACCOUNT_INACTIVE",
+                "BPM_PERMISSION_DENIED",
+                "BPM_SERVICE_AUTH_INVALID",
+                "BPM_SERVICE_FORBIDDEN",
+                "BPM_WORKFLOW_NOT_ALLOWED",
+                "BPM_NOT_FOUND",
+                "BPM_VALIDATION_ERROR",
+                "BPM_PAYLOAD_TOO_LARGE",
+                "BPM_CASE_VERSION_CONFLICT",
+                "BPM_CASE_STATE_CONFLICT",
+                "BPM_DEFINITION_VERSION_MISMATCH",
+                "BPM_FORM_VERSION_MISMATCH",
+                "BPM_FORM_VALIDATION_FAILED",
+                "BPM_IDEMPOTENCY_CONFLICT",
+                "BPM_CASE_ALREADY_STARTED",
+                "BPM_RATE_LIMITED",
+                "BPM_IDENTITY_UNAVAILABLE",
+                "BPM_AUTHZ_UNAVAILABLE",
+                "BPM_ROUTING_UNAVAILABLE",
+                "BPM_INTEGRATION_NOT_CONFIGURED",
+                "BPM_UPSTREAM_UNAVAILABLE",
+                "BPM_OPERATION_UNCERTAIN",
+                "BPM_INTERNAL_ERROR"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retryAfterSeconds": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "CONFIRMED"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "processInstanceId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "errorCode": {
+                "type": "null"
+              },
+              "retryAfterSeconds": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "PROCESSING"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "processInstanceId": {
+                "type": "null"
+              },
+              "errorCode": {
+                "type": "null"
+              },
+              "retryAfterSeconds": {
+                "const": 2
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "REJECTED"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "processInstanceId": {
+                "type": "null"
+              },
+              "errorCode": {
+                "enum": [
+                  "BPM_AUTH_INVALID",
+                  "BPM_STAFF_REQUIRED",
+                  "BPM_ACCOUNT_INACTIVE",
+                  "BPM_PERMISSION_DENIED",
+                  "BPM_SERVICE_AUTH_INVALID",
+                  "BPM_SERVICE_FORBIDDEN",
+                  "BPM_WORKFLOW_NOT_ALLOWED",
+                  "BPM_NOT_FOUND",
+                  "BPM_VALIDATION_ERROR",
+                  "BPM_PAYLOAD_TOO_LARGE",
+                  "BPM_CASE_VERSION_CONFLICT",
+                  "BPM_CASE_STATE_CONFLICT",
+                  "BPM_DEFINITION_VERSION_MISMATCH",
+                  "BPM_FORM_VERSION_MISMATCH",
+                  "BPM_FORM_VALIDATION_FAILED",
+                  "BPM_IDEMPOTENCY_CONFLICT",
+                  "BPM_CASE_ALREADY_STARTED",
+                  "BPM_RATE_LIMITED",
+                  "BPM_IDENTITY_UNAVAILABLE",
+                  "BPM_AUTHZ_UNAVAILABLE",
+                  "BPM_ROUTING_UNAVAILABLE",
+                  "BPM_INTEGRATION_NOT_CONFIGURED",
+                  "BPM_UPSTREAM_UNAVAILABLE",
+                  "BPM_INTERNAL_ERROR"
+                ]
+              },
+              "retryAfterSeconds": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "UNCERTAIN"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "errorCode": {
+                "const": "BPM_OPERATION_UNCERTAIN"
+              },
+              "retryAfterSeconds": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ProcessStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "processInstanceId",
+        "processDefinitionId",
+        "processDefinitionKey",
+        "workflowCode",
+        "bindingVersion",
+        "caseRef",
+        "businessKey",
+        "formDefinitionId",
+        "formVersion",
+        "engineState",
+        "reviewStatus",
+        "outcome",
+        "reasonCode",
+        "sourceRevision",
+        "updatedAt"
+      ],
+      "properties": {
+        "processInstanceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "processDefinitionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "processDefinitionKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "workflowCode": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "bindingVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "caseRef": {
+          "$ref": "#/definitions/CaseRef"
+        },
+        "businessKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 195
+        },
+        "formDefinitionId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "formVersion": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "engineState": {
+          "type": "string",
+          "enum": [
+            "RUNNING",
+            "COMPLETED",
+            "CANCELLED"
+          ]
+        },
+        "reviewStatus": {
+          "type": "string",
+          "enum": [
+            "UNKNOWN",
+            "RUNNING",
+            "RETURNED",
+            "COMPLETED"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "UNKNOWN",
+            "APPROVED",
+            "REJECTED"
+          ]
+        },
+        "reasonCode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "utc-date-time"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "formDefinitionId": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "formDefinitionId"
+            ]
+          },
+          "then": {
+            "properties": {
+              "formVersion": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "formVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "engineState": {
+                "const": "CANCELLED"
+              }
+            },
+            "required": [
+              "engineState"
+            ]
+          },
+          "then": {
+            "properties": {
+              "reviewStatus": {
+                "const": "COMPLETED"
+              },
+              "outcome": {
+                "const": "UNKNOWN"
+              },
+              "reasonCode": {
+                "const": "PROCESS_CANCELLED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "APPROVED",
+                  "REJECTED"
+                ]
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "engineState": {
+                "const": "COMPLETED"
+              },
+              "reviewStatus": {
+                "const": "COMPLETED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reviewStatus": {
+                "enum": [
+                  "UNKNOWN",
+                  "RUNNING",
+                  "RETURNED"
+                ]
+              }
+            },
+            "required": [
+              "reviewStatus"
+            ]
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "const": "UNKNOWN"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ProcessList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "items"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProcessStatus"
+          },
+          "maxItems": 1
+        }
+      }
+    },
+    "CaseView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "application_id",
+        "submission_id",
+        "workflow_role",
+        "delivery_status",
+        "review_status",
+        "outcome",
+        "source_revision",
+        "updated_at",
+        "capabilities"
+      ],
+      "properties": {
+        "application_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "submission_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "workflow_role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9_-]+$"
+        },
+        "delivery_status": {
+          "type": "string",
+          "enum": [
+            "PENDING",
+            "DISPATCHING",
+            "CONFIRMED",
+            "UNCERTAIN",
+            "FAILED"
+          ]
+        },
+        "review_status": {
+          "type": "string",
+          "enum": [
+            "UNKNOWN",
+            "RUNNING",
+            "RETURNED",
+            "COMPLETED"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "UNKNOWN",
+            "APPROVED",
+            "REJECTED"
+          ]
+        },
+        "source_revision": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "utc-date-time"
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "can_view",
+            "can_supplement"
+          ],
+          "properties": {
+            "can_view": {
+              "const": true
+            },
+            "can_supplement": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "delivery_status": {
+                "const": "CONFIRMED"
+              }
+            },
+            "required": [
+              "delivery_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "source_revision": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "review_status": {
+                "const": "UNKNOWN"
+              },
+              "outcome": {
+                "const": "UNKNOWN"
+              },
+              "source_revision": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "APPROVED",
+                  "REJECTED"
+                ]
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "review_status": {
+                "const": "COMPLETED"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "BpmError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "traceId",
+        "requestId",
+        "retryable",
+        "outcome"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "BPM_AUTH_INVALID",
+            "BPM_STAFF_REQUIRED",
+            "BPM_ACCOUNT_INACTIVE",
+            "BPM_PERMISSION_DENIED",
+            "BPM_SERVICE_AUTH_INVALID",
+            "BPM_SERVICE_FORBIDDEN",
+            "BPM_WORKFLOW_NOT_ALLOWED",
+            "BPM_NOT_FOUND",
+            "BPM_VALIDATION_ERROR",
+            "BPM_PAYLOAD_TOO_LARGE",
+            "BPM_CASE_VERSION_CONFLICT",
+            "BPM_CASE_STATE_CONFLICT",
+            "BPM_DEFINITION_VERSION_MISMATCH",
+            "BPM_FORM_VERSION_MISMATCH",
+            "BPM_FORM_VALIDATION_FAILED",
+            "BPM_IDEMPOTENCY_CONFLICT",
+            "BPM_CASE_ALREADY_STARTED",
+            "BPM_RATE_LIMITED",
+            "BPM_IDENTITY_UNAVAILABLE",
+            "BPM_AUTHZ_UNAVAILABLE",
+            "BPM_ROUTING_UNAVAILABLE",
+            "BPM_INTEGRATION_NOT_CONFIGURED",
+            "BPM_UPSTREAM_UNAVAILABLE",
+            "BPM_OPERATION_UNCERTAIN",
+            "BPM_INTERNAL_ERROR"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "traceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "requestId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "NOT_APPLIED",
+            "UNKNOWN",
+            "NOT_APPLICABLE"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "UNKNOWN"
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "retryable": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "BPM_OPERATION_UNCERTAIN"
+              }
+            },
+            "required": [
+              "code"
+            ]
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "const": "UNKNOWN"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AgentCaseRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "application_id",
+        "submission_id",
+        "workflow_role",
+        "submission_revision"
+      ],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9_-]+$"
+        },
+        "application_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "submission_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "workflow_role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-z0-9_-]+$"
+        },
+        "submission_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "AgentAgentActor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "agent_code",
+        "issuer",
+        "subject"
+      ],
+      "properties": {
+        "type": {
+          "const": "AGENT"
+        },
+        "agent_code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^\\S+$"
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^https://[^\\s]+$"
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^\\S(?:.*\\S)?$"
+        }
+      }
+    },
+    "AgentFormData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "form_definition_id",
+        "form_version",
+        "data_json"
+      ],
+      "properties": {
+        "form_definition_id": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "form_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "data_json": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 1048576,
+          "format": "json-object-string"
+        }
+      }
+    },
+    "AgentVariables": {
+      "type": "object",
+      "patternProperties": {
+        "^(?!_|initiator$|effectiveInitiator$|onBehalfOf$|approved$|rejected$)[A-Za-z][A-Za-z0-9_]*$": {}
+      },
+      "additionalProperties": false
+    },
+    "AgentReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "state",
+        "case_ref",
+        "business_key",
+        "process_instance_id",
+        "error_code",
+        "retry_after_seconds"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "PROCESSING",
+            "CONFIRMED",
+            "REJECTED",
+            "UNCERTAIN"
+          ]
+        },
+        "case_ref": {
+          "$ref": "#/definitions/AgentCaseRef"
+        },
+        "business_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 195
+        },
+        "process_instance_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "enum": [
+                "BPM_AUTH_INVALID",
+                "BPM_STAFF_REQUIRED",
+                "BPM_ACCOUNT_INACTIVE",
+                "BPM_PERMISSION_DENIED",
+                "BPM_SERVICE_AUTH_INVALID",
+                "BPM_SERVICE_FORBIDDEN",
+                "BPM_WORKFLOW_NOT_ALLOWED",
+                "BPM_NOT_FOUND",
+                "BPM_VALIDATION_ERROR",
+                "BPM_PAYLOAD_TOO_LARGE",
+                "BPM_CASE_VERSION_CONFLICT",
+                "BPM_CASE_STATE_CONFLICT",
+                "BPM_DEFINITION_VERSION_MISMATCH",
+                "BPM_FORM_VERSION_MISMATCH",
+                "BPM_FORM_VALIDATION_FAILED",
+                "BPM_IDEMPOTENCY_CONFLICT",
+                "BPM_CASE_ALREADY_STARTED",
+                "BPM_RATE_LIMITED",
+                "BPM_IDENTITY_UNAVAILABLE",
+                "BPM_AUTHZ_UNAVAILABLE",
+                "BPM_ROUTING_UNAVAILABLE",
+                "BPM_INTEGRATION_NOT_CONFIGURED",
+                "BPM_UPSTREAM_UNAVAILABLE",
+                "BPM_OPERATION_UNCERTAIN",
+                "BPM_INTERNAL_ERROR"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retry_after_seconds": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "CONFIRMED"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "process_instance_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "error_code": {
+                "type": "null"
+              },
+              "retry_after_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "PROCESSING"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "process_instance_id": {
+                "type": "null"
+              },
+              "error_code": {
+                "type": "null"
+              },
+              "retry_after_seconds": {
+                "const": 2
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "REJECTED"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "process_instance_id": {
+                "type": "null"
+              },
+              "error_code": {
+                "enum": [
+                  "BPM_AUTH_INVALID",
+                  "BPM_STAFF_REQUIRED",
+                  "BPM_ACCOUNT_INACTIVE",
+                  "BPM_PERMISSION_DENIED",
+                  "BPM_SERVICE_AUTH_INVALID",
+                  "BPM_SERVICE_FORBIDDEN",
+                  "BPM_WORKFLOW_NOT_ALLOWED",
+                  "BPM_NOT_FOUND",
+                  "BPM_VALIDATION_ERROR",
+                  "BPM_PAYLOAD_TOO_LARGE",
+                  "BPM_CASE_VERSION_CONFLICT",
+                  "BPM_CASE_STATE_CONFLICT",
+                  "BPM_DEFINITION_VERSION_MISMATCH",
+                  "BPM_FORM_VERSION_MISMATCH",
+                  "BPM_FORM_VALIDATION_FAILED",
+                  "BPM_IDEMPOTENCY_CONFLICT",
+                  "BPM_CASE_ALREADY_STARTED",
+                  "BPM_RATE_LIMITED",
+                  "BPM_IDENTITY_UNAVAILABLE",
+                  "BPM_AUTHZ_UNAVAILABLE",
+                  "BPM_ROUTING_UNAVAILABLE",
+                  "BPM_INTEGRATION_NOT_CONFIGURED",
+                  "BPM_UPSTREAM_UNAVAILABLE",
+                  "BPM_INTERNAL_ERROR"
+                ]
+              },
+              "retry_after_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "UNCERTAIN"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "error_code": {
+                "const": "BPM_OPERATION_UNCERTAIN"
+              },
+              "retry_after_seconds": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AgentProcessStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "process_instance_id",
+        "process_definition_id",
+        "process_definition_key",
+        "workflow_code",
+        "binding_version",
+        "case_ref",
+        "business_key",
+        "form_definition_id",
+        "form_version",
+        "engine_state",
+        "review_status",
+        "outcome",
+        "reason_code",
+        "source_revision",
+        "updated_at"
+      ],
+      "properties": {
+        "process_instance_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "process_definition_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "process_definition_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "workflow_code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "binding_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "case_ref": {
+          "$ref": "#/definitions/AgentCaseRef"
+        },
+        "business_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 195
+        },
+        "form_definition_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "form_version": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "engine_state": {
+          "type": "string",
+          "enum": [
+            "RUNNING",
+            "COMPLETED",
+            "CANCELLED"
+          ]
+        },
+        "review_status": {
+          "type": "string",
+          "enum": [
+            "UNKNOWN",
+            "RUNNING",
+            "RETURNED",
+            "COMPLETED"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "UNKNOWN",
+            "APPROVED",
+            "REJECTED"
+          ]
+        },
+        "reason_code": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "utc-date-time"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "form_definition_id": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "form_definition_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "form_version": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "form_version": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "engine_state": {
+                "const": "CANCELLED"
+              }
+            },
+            "required": [
+              "engine_state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "review_status": {
+                "const": "COMPLETED"
+              },
+              "outcome": {
+                "const": "UNKNOWN"
+              },
+              "reason_code": {
+                "const": "PROCESS_CANCELLED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "APPROVED",
+                  "REJECTED"
+                ]
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "engine_state": {
+                "const": "COMPLETED"
+              },
+              "review_status": {
+                "const": "COMPLETED"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "review_status": {
+                "enum": [
+                  "UNKNOWN",
+                  "RUNNING",
+                  "RETURNED"
+                ]
+              }
+            },
+            "required": [
+              "review_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "const": "UNKNOWN"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AgentBpmError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "trace_id",
+        "request_id",
+        "retryable",
+        "outcome"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "BPM_AUTH_INVALID",
+            "BPM_STAFF_REQUIRED",
+            "BPM_ACCOUNT_INACTIVE",
+            "BPM_PERMISSION_DENIED",
+            "BPM_SERVICE_AUTH_INVALID",
+            "BPM_SERVICE_FORBIDDEN",
+            "BPM_WORKFLOW_NOT_ALLOWED",
+            "BPM_NOT_FOUND",
+            "BPM_VALIDATION_ERROR",
+            "BPM_PAYLOAD_TOO_LARGE",
+            "BPM_CASE_VERSION_CONFLICT",
+            "BPM_CASE_STATE_CONFLICT",
+            "BPM_DEFINITION_VERSION_MISMATCH",
+            "BPM_FORM_VERSION_MISMATCH",
+            "BPM_FORM_VALIDATION_FAILED",
+            "BPM_IDEMPOTENCY_CONFLICT",
+            "BPM_CASE_ALREADY_STARTED",
+            "BPM_RATE_LIMITED",
+            "BPM_IDENTITY_UNAVAILABLE",
+            "BPM_AUTHZ_UNAVAILABLE",
+            "BPM_ROUTING_UNAVAILABLE",
+            "BPM_INTEGRATION_NOT_CONFIGURED",
+            "BPM_UPSTREAM_UNAVAILABLE",
+            "BPM_OPERATION_UNCERTAIN",
+            "BPM_INTERNAL_ERROR"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "trace_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "NOT_APPLIED",
+            "UNKNOWN",
+            "NOT_APPLICABLE"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "UNKNOWN"
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "retryable": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "BPM_OPERATION_UNCERTAIN"
+              }
+            },
+            "required": [
+              "code"
+            ]
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "const": "UNKNOWN"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AgentStartRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "workflow_code",
+        "binding_version",
+        "case_ref",
+        "actor",
+        "process_definition_id",
+        "form_data",
+        "variables"
+      ],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "workflow_code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9._-]+$"
+        },
+        "binding_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "case_ref": {
+          "$ref": "#/definitions/AgentCaseRef"
+        },
+        "actor": {
+          "$ref": "#/definitions/AgentAgentActor"
+        },
+        "process_definition_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "form_data": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AgentFormData"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "variables": {
+          "$ref": "#/definitions/AgentVariables"
+        }
+      }
+    },
+    "AgentError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "trace_id",
+        "request_id",
+        "retryable",
+        "outcome",
+        "data"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "BPM_AUTH_INVALID",
+            "BPM_STAFF_REQUIRED",
+            "BPM_ACCOUNT_INACTIVE",
+            "BPM_PERMISSION_DENIED",
+            "BPM_SERVICE_AUTH_INVALID",
+            "BPM_SERVICE_FORBIDDEN",
+            "BPM_WORKFLOW_NOT_ALLOWED",
+            "BPM_NOT_FOUND",
+            "BPM_VALIDATION_ERROR",
+            "BPM_PAYLOAD_TOO_LARGE",
+            "BPM_CASE_VERSION_CONFLICT",
+            "BPM_CASE_STATE_CONFLICT",
+            "BPM_DEFINITION_VERSION_MISMATCH",
+            "BPM_FORM_VERSION_MISMATCH",
+            "BPM_FORM_VALIDATION_FAILED",
+            "BPM_IDEMPOTENCY_CONFLICT",
+            "BPM_CASE_ALREADY_STARTED",
+            "BPM_RATE_LIMITED",
+            "BPM_IDENTITY_UNAVAILABLE",
+            "BPM_AUTHZ_UNAVAILABLE",
+            "BPM_ROUTING_UNAVAILABLE",
+            "BPM_INTEGRATION_NOT_CONFIGURED",
+            "BPM_UPSTREAM_UNAVAILABLE",
+            "BPM_OPERATION_UNCERTAIN",
+            "BPM_INTERNAL_ERROR"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "trace_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "NOT_APPLIED",
+            "UNKNOWN",
+            "NOT_APPLICABLE"
+          ]
+        },
+        "data": {
+          "type": "null"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "UNKNOWN"
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "retryable": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "BPM_OPERATION_UNCERTAIN"
+              }
+            },
+            "required": [
+              "code"
+            ]
+          },
+          "then": {
+            "properties": {
+              "outcome": {
+                "const": "UNKNOWN"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AgentReceiptResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "data",
+        "trace_id"
+      ],
+      "properties": {
+        "code": {
+          "const": "0000"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "data": {
+          "$ref": "#/definitions/AgentReceipt"
+        },
+        "trace_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        }
+      }
+    },
+    "AgentStatusResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "data",
+        "trace_id"
+      ],
+      "properties": {
+        "code": {
+          "const": "0000"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "data": {
+          "$ref": "#/definitions/AgentProcessStatus"
+        },
+        "trace_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        }
+      }
+    },
+    "PublicCaseResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "data",
+        "trace_id"
+      ],
+      "properties": {
+        "code": {
+          "const": "0000"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "data": {
+          "$ref": "#/definitions/CaseView"
+        },
+        "trace_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        }
+      }
+    }
+  }
+}

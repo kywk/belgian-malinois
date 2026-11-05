@@ -43,6 +43,8 @@ import java.nio.charset.StandardCharsets;
  * 且啟動驗證擋得住。
  */
 @Configuration
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        name = "bpm.staff.enabled", havingValue = "false", matchIfMissing = true)
 public class JwtDecoderConfig {
 
     private static final Logger log = LoggerFactory.getLogger(JwtDecoderConfig.class);
@@ -51,6 +53,8 @@ public class JwtDecoderConfig {
     static final int MIN_DEV_SECRET_BYTES = 32;
 
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name = "bpm.staff.enabled", havingValue = "false", matchIfMissing = true)
     JwtDecoder jwtDecoder(
             @Value("${bpm.security.jwt.issuer-uri:}") String issuerUri,
             @Value("${bpm.security.jwt.dev-secret:}") String devSecret) {

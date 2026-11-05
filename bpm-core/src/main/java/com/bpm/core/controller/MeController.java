@@ -173,6 +173,12 @@ import java.util.TreeSet;
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
         }
 
+        if (auth instanceof com.bpm.core.staff.StaffAuthentication staff) {
+            return new MyPermissions(staff.getName(), staff.permissions().stream()
+                    .map(code -> com.bpm.core.staff.StaffPermissions.ALIASES.getOrDefault(code, code)).sorted().toList(),
+                    staff.permissions().contains(com.bpm.core.staff.StaffPermissions.MANAGE));
+        }
+
         // TreeSet：排序讓回應是決定性的（測試與 diff 都看得出差別），
         // 而 hasAuthority 的比對本來就與順序無關。
         Set<String> permissions = new TreeSet<>();

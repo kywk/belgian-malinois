@@ -1,0 +1,1705 @@
+{
+  "contractVersion": "1.0.0",
+  "scope": "SCHEMA_EXAMPLES_ONLY",
+  "cases": [
+    {
+      "id": "start",
+      "schema": "BpmStartRequest",
+      "expectValid": true,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "private-start",
+      "schema": "AgentStartRequest",
+      "expectValid": true,
+      "data": {
+        "request_id": "10000000-0000-4000-8000-000000000001",
+        "workflow_code": "contract.staff-review",
+        "binding_version": 1,
+        "case_ref": {
+          "domain": "contract-fixture",
+          "application_id": "app-a",
+          "submission_id": "sub-a1",
+          "workflow_role": "review",
+          "submission_revision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agent_code": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "process_definition_id": "bff-contract-review:1:fixture",
+        "form_data": {
+          "form_definition_id": "20000000-0000-4000-8000-000000000001",
+          "form_version": 1,
+          "data_json": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "identity",
+      "schema": "StaffIdentitySnapshot",
+      "expectValid": true,
+      "data": {
+        "userId": "W9000001",
+        "displayName": "契約測試內勤甲",
+        "userType": "STAFF",
+        "status": "ACTIVE",
+        "deptId": "50310001",
+        "orgObjectIds": [
+          "50310001"
+        ],
+        "sourceRevision": "fixture-1",
+        "observedAt": "2026-11-05T02:00:00Z",
+        "validUntil": "2026-11-05T02:01:00Z"
+      }
+    },
+    {
+      "id": "session",
+      "schema": "StaffSession",
+      "expectValid": true,
+      "data": {
+        "userId": "W9000001",
+        "displayName": "契約測試內勤甲",
+        "userType": "STAFF",
+        "deptId": "50310001",
+        "permissions": [
+          "bpm:console:access:use",
+          "bpm:task:work:read"
+        ],
+        "expiresAt": "2026-11-05T02:30:00Z",
+        "authorizationCheckedAt": "2026-11-05T02:00:00Z"
+      }
+    },
+    {
+      "id": "authz-request",
+      "schema": "AuthzCheckRequest",
+      "expectValid": true,
+      "data": {
+        "subject_ids": [
+          "staff-w9000001",
+          "org-50310001"
+        ],
+        "system_code": "bpm",
+        "permissions": [
+          "bpm:console:access:use",
+          "bpm:task:work:act",
+          "bpm:approval:bff_contract_review:approve"
+        ],
+        "mode": "ALL",
+        "subject_attributes": {}
+      }
+    },
+    {
+      "id": "receipt",
+      "schema": "Receipt",
+      "expectValid": true,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "state": "CONFIRMED",
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "businessKey": "contract-fixture/app-a/sub-a1/review",
+        "processInstanceId": "process-fixture-1",
+        "errorCode": null,
+        "retryAfterSeconds": null
+      }
+    },
+    {
+      "id": "status",
+      "schema": "ProcessStatus",
+      "expectValid": true,
+      "data": {
+        "processInstanceId": "process-fixture-1",
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "processDefinitionKey": "bff-contract-review",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "businessKey": "contract-fixture/app-a/sub-a1/review",
+        "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+        "formVersion": 1,
+        "engineState": "RUNNING",
+        "reviewStatus": "RUNNING",
+        "outcome": "UNKNOWN",
+        "reasonCode": null,
+        "sourceRevision": 1,
+        "updatedAt": "2026-11-05T02:00:00Z"
+      }
+    },
+    {
+      "id": "public-status",
+      "schema": "PublicCaseResponse",
+      "expectValid": true,
+      "data": {
+        "code": "0000",
+        "message": "success",
+        "data": {
+          "application_id": "app-a",
+          "submission_id": "sub-a1",
+          "workflow_role": "review",
+          "delivery_status": "CONFIRMED",
+          "review_status": "RUNNING",
+          "outcome": "UNKNOWN",
+          "source_revision": 1,
+          "updated_at": "2026-11-05T02:00:00Z",
+          "capabilities": {
+            "can_view": true,
+            "can_supplement": false
+          }
+        },
+        "trace_id": "fixture-trace-1"
+      }
+    },
+    {
+      "id": "private-receipt",
+      "schema": "AgentReceiptResponse",
+      "expectValid": true,
+      "data": {
+        "code": "0000",
+        "message": "success",
+        "data": {
+          "request_id": "10000000-0000-4000-8000-000000000001",
+          "state": "CONFIRMED",
+          "case_ref": {
+            "domain": "contract-fixture",
+            "application_id": "app-a",
+            "submission_id": "sub-a1",
+            "workflow_role": "review",
+            "submission_revision": 1
+          },
+          "business_key": "contract-fixture/app-a/sub-a1/review",
+          "process_instance_id": "process-fixture-1",
+          "error_code": null,
+          "retry_after_seconds": null
+        },
+        "trace_id": "fixture-trace-1"
+      }
+    },
+    {
+      "id": "private-status",
+      "schema": "AgentStatusResponse",
+      "expectValid": true,
+      "data": {
+        "code": "0000",
+        "message": "success",
+        "data": {
+          "process_instance_id": "process-fixture-1",
+          "process_definition_id": "bff-contract-review:1:fixture",
+          "process_definition_key": "bff-contract-review",
+          "workflow_code": "contract.staff-review",
+          "binding_version": 1,
+          "case_ref": {
+            "domain": "contract-fixture",
+            "application_id": "app-a",
+            "submission_id": "sub-a1",
+            "workflow_role": "review",
+            "submission_revision": 1
+          },
+          "business_key": "contract-fixture/app-a/sub-a1/review",
+          "form_definition_id": "20000000-0000-4000-8000-000000000001",
+          "form_version": 1,
+          "engine_state": "RUNNING",
+          "review_status": "RUNNING",
+          "outcome": "UNKNOWN",
+          "reason_code": null,
+          "source_revision": 1,
+          "updated_at": "2026-11-05T02:00:00Z"
+        },
+        "trace_id": "fixture-trace-1"
+      }
+    },
+    {
+      "id": "empty-process-query",
+      "schema": "ProcessList",
+      "expectValid": true,
+      "data": {
+        "items": []
+      }
+    },
+    {
+      "id": "authz-true",
+      "schema": "AuthzCheckResponse",
+      "expectValid": true,
+      "data": {
+        "code": "0000",
+        "message": "success",
+        "data": {
+          "allowed": true,
+          "reason": "ALLOW"
+        },
+        "trace_id": "fixture-trace-1"
+      }
+    },
+    {
+      "id": "authz-false",
+      "schema": "AuthzCheckResponse",
+      "expectValid": true,
+      "data": {
+        "code": "0000",
+        "message": "success",
+        "data": {
+          "allowed": false,
+          "reason": "DENY"
+        },
+        "trace_id": "fixture-trace-1"
+      }
+    },
+    {
+      "id": "receipt-processing",
+      "schema": "Receipt",
+      "expectValid": true,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "state": "PROCESSING",
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "businessKey": "contract-fixture/app-a/sub-a1/review",
+        "processInstanceId": null,
+        "errorCode": null,
+        "retryAfterSeconds": 2
+      }
+    },
+    {
+      "id": "receipt-rejected",
+      "schema": "Receipt",
+      "expectValid": true,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "state": "REJECTED",
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "businessKey": "contract-fixture/app-a/sub-a1/review",
+        "processInstanceId": null,
+        "errorCode": "BPM_FORM_VERSION_MISMATCH",
+        "retryAfterSeconds": null
+      }
+    },
+    {
+      "id": "receipt-uncertain",
+      "schema": "Receipt",
+      "expectValid": true,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "state": "UNCERTAIN",
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "businessKey": "contract-fixture/app-a/sub-a1/review",
+        "processInstanceId": null,
+        "errorCode": "BPM_OPERATION_UNCERTAIN",
+        "retryAfterSeconds": null
+      }
+    },
+    {
+      "id": "approved-status",
+      "schema": "ProcessStatus",
+      "expectValid": true,
+      "data": {
+        "processInstanceId": "process-fixture-1",
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "processDefinitionKey": "bff-contract-review",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "businessKey": "contract-fixture/app-a/sub-a1/review",
+        "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+        "formVersion": 1,
+        "engineState": "COMPLETED",
+        "reviewStatus": "COMPLETED",
+        "outcome": "APPROVED",
+        "reasonCode": null,
+        "sourceRevision": 2,
+        "updatedAt": "2026-11-05T02:00:00Z"
+      }
+    },
+    {
+      "id": "cancelled-status",
+      "schema": "ProcessStatus",
+      "expectValid": true,
+      "data": {
+        "processInstanceId": "process-fixture-1",
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "processDefinitionKey": "bff-contract-review",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "businessKey": "contract-fixture/app-a/sub-a1/review",
+        "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+        "formVersion": 1,
+        "engineState": "CANCELLED",
+        "reviewStatus": "COMPLETED",
+        "outcome": "UNKNOWN",
+        "reasonCode": "PROCESS_CANCELLED",
+        "sourceRevision": 1,
+        "updatedAt": "2026-11-05T02:00:00Z"
+      }
+    },
+    {
+      "id": "technical-no-form",
+      "schema": "BpmStartRequest",
+      "expectValid": true,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.technical-noform",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-technical:1:fixture",
+        "formData": null,
+        "variables": {}
+      }
+    },
+    {
+      "id": "preserve-business-variable-key",
+      "schema": "AgentStartRequest",
+      "expectValid": true,
+      "data": {
+        "request_id": "10000000-0000-4000-8000-000000000001",
+        "workflow_code": "contract.staff-review",
+        "binding_version": 1,
+        "case_ref": {
+          "domain": "contract-fixture",
+          "application_id": "app-a",
+          "submission_id": "sub-a1",
+          "workflow_role": "review",
+          "submission_revision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agent_code": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "process_definition_id": "bff-contract-review:1:fixture",
+        "form_data": {
+          "form_definition_id": "20000000-0000-4000-8000-000000000001",
+          "form_version": 1,
+          "data_json": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {
+          "requestAmount": 1
+        }
+      }
+    },
+    {
+      "id": "missing-request-id",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "actor-injection",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {},
+        "initiator": "W9000001"
+      }
+    },
+    {
+      "id": "callback-injection",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {},
+        "callbackUrl": "https://example.invalid"
+      }
+    },
+    {
+      "id": "negative-binding",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 0,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "reserved-_externalSystemId",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {
+          "_externalSystemId": "forged"
+        }
+      }
+    },
+    {
+      "id": "reserved-initiator",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {
+          "initiator": "forged"
+        }
+      }
+    },
+    {
+      "id": "reserved-effectiveInitiator",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {
+          "effectiveInitiator": "forged"
+        }
+      }
+    },
+    {
+      "id": "reserved-onBehalfOf",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {
+          "onBehalfOf": "forged"
+        }
+      }
+    },
+    {
+      "id": "reserved-approved",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {
+          "approved": "forged"
+        }
+      }
+    },
+    {
+      "id": "reserved-rejected",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {
+          "rejected": "forged"
+        }
+      }
+    },
+    {
+      "id": "bad-actor-STAFF",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "STAFF",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "bad-actor-TALENT",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "TALENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "bad-actor-SERVICE",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "SERVICE",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "missing-agent-code",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "array-form-data",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "[]"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "invalid-form-json",
+      "schema": "BpmStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "not-json"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "wrong-private-casing",
+      "schema": "AgentStartRequest",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000001",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "unknown-role-wildcard",
+      "schema": "StaffSession",
+      "expectValid": false,
+      "data": {
+        "userId": "W9000001",
+        "displayName": "契約測試內勤甲",
+        "userType": "STAFF",
+        "deptId": "50310001",
+        "permissions": [
+          "*"
+        ],
+        "expiresAt": "2026-11-05T02:30:00Z",
+        "authorizationCheckedAt": "2026-11-05T02:00:00Z"
+      }
+    },
+    {
+      "id": "non-staff-snapshot",
+      "schema": "StaffIdentitySnapshot",
+      "expectValid": false,
+      "data": {
+        "userId": "W9000001",
+        "displayName": "契約測試內勤甲",
+        "userType": "AGENT",
+        "status": "ACTIVE",
+        "deptId": "50310001",
+        "orgObjectIds": [
+          "50310001"
+        ],
+        "sourceRevision": "fixture-1",
+        "observedAt": "2026-11-05T02:00:00Z",
+        "validUntil": "2026-11-05T02:01:00Z"
+      }
+    },
+    {
+      "id": "stale-doc-authz-field",
+      "schema": "AuthzCheckRequest",
+      "expectValid": false,
+      "data": {
+        "system_code": "bpm",
+        "permissions": [
+          "bpm:console:access:use",
+          "bpm:task:work:act",
+          "bpm:approval:bff_contract_review:approve"
+        ],
+        "mode": "ALL",
+        "subject_attributes": {},
+        "effective_subject_ids": [
+          "staff-w9000001",
+          "org-50310001"
+        ]
+      }
+    },
+    {
+      "id": "browser-abac",
+      "schema": "AuthzCheckRequest",
+      "expectValid": false,
+      "data": {
+        "subject_ids": [
+          "staff-w9000001",
+          "org-50310001"
+        ],
+        "system_code": "bpm",
+        "permissions": [
+          "bpm:console:access:use",
+          "bpm:task:work:act",
+          "bpm:approval:bff_contract_review:approve"
+        ],
+        "mode": "ALL",
+        "subject_attributes": {
+          "DEPT": "IT"
+        }
+      }
+    },
+    {
+      "id": "numeric-authz-code",
+      "schema": "AuthzCheckResponse",
+      "expectValid": false,
+      "data": {
+        "code": 200,
+        "message": "success",
+        "data": {
+          "allowed": true,
+          "reason": "ALLOW"
+        },
+        "trace_id": "fixture-trace-1"
+      }
+    },
+    {
+      "id": "missing-authz-allowed",
+      "schema": "AuthzCheckResponse",
+      "expectValid": false,
+      "data": {
+        "code": "0000",
+        "message": "success",
+        "data": {
+          "reason": "ALLOW"
+        },
+        "trace_id": "fixture-trace-1"
+      }
+    },
+    {
+      "id": "confirmed-without-process",
+      "schema": "Receipt",
+      "expectValid": false,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "state": "CONFIRMED",
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "businessKey": "contract-fixture/app-a/sub-a1/review",
+        "processInstanceId": null,
+        "errorCode": null,
+        "retryAfterSeconds": null
+      }
+    },
+    {
+      "id": "cancel-is-not-approved",
+      "schema": "ProcessStatus",
+      "expectValid": false,
+      "data": {
+        "processInstanceId": "process-fixture-1",
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "processDefinitionKey": "bff-contract-review",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "businessKey": "contract-fixture/app-a/sub-a1/review",
+        "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+        "formVersion": 1,
+        "engineState": "CANCELLED",
+        "reviewStatus": "COMPLETED",
+        "outcome": "APPROVED",
+        "reasonCode": "PROCESS_CANCELLED",
+        "sourceRevision": 1,
+        "updatedAt": "2026-11-05T02:00:00Z"
+      }
+    },
+    {
+      "id": "form-version-without-id",
+      "schema": "ProcessStatus",
+      "expectValid": false,
+      "data": {
+        "processInstanceId": "process-fixture-1",
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "processDefinitionKey": "bff-contract-review",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "businessKey": "contract-fixture/app-a/sub-a1/review",
+        "formDefinitionId": null,
+        "formVersion": 1,
+        "engineState": "RUNNING",
+        "reviewStatus": "RUNNING",
+        "outcome": "UNKNOWN",
+        "reasonCode": null,
+        "sourceRevision": 1,
+        "updatedAt": "2026-11-05T02:00:00Z"
+      }
+    },
+    {
+      "id": "two-v1-processes",
+      "schema": "ProcessList",
+      "expectValid": false,
+      "data": {
+        "items": [
+          {
+            "processInstanceId": "process-fixture-1",
+            "processDefinitionId": "bff-contract-review:1:fixture",
+            "processDefinitionKey": "bff-contract-review",
+            "workflowCode": "contract.staff-review",
+            "bindingVersion": 1,
+            "caseRef": {
+              "domain": "contract-fixture",
+              "applicationId": "app-a",
+              "submissionId": "sub-a1",
+              "workflowRole": "review",
+              "submissionRevision": 1
+            },
+            "businessKey": "contract-fixture/app-a/sub-a1/review",
+            "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+            "formVersion": 1,
+            "engineState": "RUNNING",
+            "reviewStatus": "RUNNING",
+            "outcome": "UNKNOWN",
+            "reasonCode": null,
+            "sourceRevision": 1,
+            "updatedAt": "2026-11-05T02:00:00Z"
+          },
+          {
+            "processInstanceId": "process-fixture-1",
+            "processDefinitionId": "bff-contract-review:1:fixture",
+            "processDefinitionKey": "bff-contract-review",
+            "workflowCode": "contract.staff-review",
+            "bindingVersion": 1,
+            "caseRef": {
+              "domain": "contract-fixture",
+              "applicationId": "app-a",
+              "submissionId": "sub-a1",
+              "workflowRole": "review",
+              "submissionRevision": 1
+            },
+            "businessKey": "contract-fixture/app-a/sub-a1/review",
+            "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+            "formVersion": 1,
+            "engineState": "RUNNING",
+            "reviewStatus": "RUNNING",
+            "outcome": "UNKNOWN",
+            "reasonCode": null,
+            "sourceRevision": 1,
+            "updatedAt": "2026-11-05T02:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "id": "public-assignee-leak",
+      "schema": "PublicCaseResponse",
+      "expectValid": false,
+      "data": {
+        "code": "0000",
+        "message": "success",
+        "data": {
+          "application_id": "app-a",
+          "submission_id": "sub-a1",
+          "workflow_role": "review",
+          "delivery_status": "CONFIRMED",
+          "review_status": "RUNNING",
+          "outcome": "UNKNOWN",
+          "source_revision": 1,
+          "updated_at": "2026-11-05T02:00:00Z",
+          "capabilities": {
+            "can_view": true,
+            "can_supplement": false
+          },
+          "assignee": "W9000001"
+        },
+        "trace_id": "fixture-trace-1"
+      }
+    },
+    {
+      "id": "pending-not-approved",
+      "schema": "PublicCaseResponse",
+      "expectValid": false,
+      "data": {
+        "code": "0000",
+        "message": "success",
+        "data": {
+          "application_id": "app-a",
+          "submission_id": "sub-a1",
+          "workflow_role": "review",
+          "delivery_status": "PENDING",
+          "review_status": "RUNNING",
+          "outcome": "APPROVED",
+          "source_revision": 1,
+          "updated_at": "2026-11-05T02:00:00Z",
+          "capabilities": {
+            "can_view": true,
+            "can_supplement": false
+          }
+        },
+        "trace_id": "fixture-trace-1"
+      }
+    },
+    {
+      "id": "error-BPM_AUTH_INVALID",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_AUTH_INVALID",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": null,
+        "retryable": false,
+        "outcome": "NOT_APPLICABLE"
+      },
+      "httpStatus": 401
+    },
+    {
+      "id": "error-BPM_STAFF_REQUIRED",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_STAFF_REQUIRED",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": null,
+        "retryable": false,
+        "outcome": "NOT_APPLICABLE"
+      },
+      "httpStatus": 403
+    },
+    {
+      "id": "error-BPM_ACCOUNT_INACTIVE",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_ACCOUNT_INACTIVE",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": null,
+        "retryable": false,
+        "outcome": "NOT_APPLICABLE"
+      },
+      "httpStatus": 403
+    },
+    {
+      "id": "error-BPM_PERMISSION_DENIED",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_PERMISSION_DENIED",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": null,
+        "retryable": false,
+        "outcome": "NOT_APPLICABLE"
+      },
+      "httpStatus": 403
+    },
+    {
+      "id": "error-BPM_SERVICE_AUTH_INVALID",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_SERVICE_AUTH_INVALID",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": null,
+        "retryable": false,
+        "outcome": "NOT_APPLICABLE"
+      },
+      "httpStatus": 401
+    },
+    {
+      "id": "error-BPM_SERVICE_FORBIDDEN",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_SERVICE_FORBIDDEN",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": null,
+        "retryable": false,
+        "outcome": "NOT_APPLICABLE"
+      },
+      "httpStatus": 403
+    },
+    {
+      "id": "error-BPM_WORKFLOW_NOT_ALLOWED",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_WORKFLOW_NOT_ALLOWED",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": null,
+        "retryable": false,
+        "outcome": "NOT_APPLICABLE"
+      },
+      "httpStatus": 403
+    },
+    {
+      "id": "error-BPM_NOT_FOUND",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_NOT_FOUND",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": null,
+        "retryable": false,
+        "outcome": "NOT_APPLICABLE"
+      },
+      "httpStatus": 404
+    },
+    {
+      "id": "error-BPM_VALIDATION_ERROR",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_VALIDATION_ERROR",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 400
+    },
+    {
+      "id": "error-BPM_PAYLOAD_TOO_LARGE",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_PAYLOAD_TOO_LARGE",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 413
+    },
+    {
+      "id": "error-BPM_CASE_VERSION_CONFLICT",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_CASE_VERSION_CONFLICT",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 409
+    },
+    {
+      "id": "error-BPM_CASE_STATE_CONFLICT",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_CASE_STATE_CONFLICT",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 409
+    },
+    {
+      "id": "error-BPM_DEFINITION_VERSION_MISMATCH",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_DEFINITION_VERSION_MISMATCH",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 409
+    },
+    {
+      "id": "error-BPM_FORM_VERSION_MISMATCH",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_FORM_VERSION_MISMATCH",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 409
+    },
+    {
+      "id": "error-BPM_FORM_VALIDATION_FAILED",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_FORM_VALIDATION_FAILED",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 422
+    },
+    {
+      "id": "error-BPM_IDEMPOTENCY_CONFLICT",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_IDEMPOTENCY_CONFLICT",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 409
+    },
+    {
+      "id": "error-BPM_CASE_ALREADY_STARTED",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_CASE_ALREADY_STARTED",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 409
+    },
+    {
+      "id": "error-BPM_RATE_LIMITED",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_RATE_LIMITED",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": true,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 429
+    },
+    {
+      "id": "error-BPM_IDENTITY_UNAVAILABLE",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_IDENTITY_UNAVAILABLE",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": true,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 503
+    },
+    {
+      "id": "error-BPM_AUTHZ_UNAVAILABLE",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_AUTHZ_UNAVAILABLE",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": true,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 503
+    },
+    {
+      "id": "error-BPM_ROUTING_UNAVAILABLE",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_ROUTING_UNAVAILABLE",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 503
+    },
+    {
+      "id": "error-BPM_INTEGRATION_NOT_CONFIGURED",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_INTEGRATION_NOT_CONFIGURED",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 503
+    },
+    {
+      "id": "error-BPM_UPSTREAM_UNAVAILABLE",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_UPSTREAM_UNAVAILABLE",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": true,
+        "outcome": "NOT_APPLIED"
+      },
+      "httpStatus": 503
+    },
+    {
+      "id": "error-BPM_OPERATION_UNCERTAIN",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_OPERATION_UNCERTAIN",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "UNKNOWN"
+      },
+      "httpStatus": 500
+    },
+    {
+      "id": "public-uncertain",
+      "schema": "AgentError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_OPERATION_UNCERTAIN",
+        "message": "合成錯誤範例",
+        "trace_id": "fixture-trace-1",
+        "request_id": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "UNKNOWN",
+        "data": null
+      },
+      "httpStatus": 500
+    },
+    {
+      "id": "uncertain-cannot-auto-retry",
+      "schema": "BpmError",
+      "expectValid": false,
+      "data": {
+        "code": "BPM_OPERATION_UNCERTAIN",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": true,
+        "outcome": "UNKNOWN"
+      },
+      "httpStatus": 500
+    },
+    {
+      "id": "error-BPM_INTERNAL_ERROR",
+      "schema": "BpmError",
+      "expectValid": true,
+      "data": {
+        "code": "BPM_INTERNAL_ERROR",
+        "message": "合成錯誤範例",
+        "traceId": "fixture-trace-1",
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "retryable": false,
+        "outcome": "UNKNOWN"
+      },
+      "httpStatus": 500
+    },
+    {
+      "id": "second-agent-same-sub",
+      "schema": "BpmStartRequest",
+      "expectValid": true,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000002",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-b",
+          "submissionId": "sub-b1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "AGENT",
+          "agentCode": "AG000002",
+          "issuer": "https://idp.example.invalid",
+          "subject": "fixture-shared-sub"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "session-without-console",
+      "schema": "StaffSession",
+      "expectValid": false,
+      "data": {
+        "userId": "W9000001",
+        "displayName": "契約測試內勤甲",
+        "userType": "STAFF",
+        "deptId": "50310001",
+        "permissions": [
+          "bpm:task:work:read"
+        ],
+        "expiresAt": "2026-11-05T02:30:00Z",
+        "authorizationCheckedAt": "2026-11-05T02:00:00Z"
+      }
+    },
+    {
+      "id": "impossible-session-date",
+      "schema": "StaffSession",
+      "expectValid": false,
+      "data": {
+        "userId": "W9000001",
+        "displayName": "契約測試內勤甲",
+        "userType": "STAFF",
+        "deptId": "50310001",
+        "permissions": [
+          "bpm:console:access:use",
+          "bpm:task:work:read"
+        ],
+        "expiresAt": "2026-02-30T02:00:00Z",
+        "authorizationCheckedAt": "2026-11-05T02:00:00Z"
+      }
+    }
+  ]
+}

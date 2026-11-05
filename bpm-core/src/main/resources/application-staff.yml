@@ -1,0 +1,24 @@
+# Activate together with prod (or dev for loopback contract tests): prod,staff.
+# Required placeholders intentionally have no production defaults.
+bpm:
+  security:
+    jwt:
+      issuer-uri: ${STAFF_SSO_ISSUER}
+      dev-secret: ""
+  staff:
+    enabled: true
+    audience: ${STAFF_SSO_AUDIENCE}
+    key-id: ${STAFF_SSO_KEY_ID}
+    public-key-location: ${STAFF_SSO_PUBLIC_KEY_LOCATION}
+    saml-url: ${STAFF_SAML_URL}
+    callback-url: ${STAFF_SSO_CALLBACK_URL}
+    identity-url: ${STAFF_IDENTITY_URL}
+    identity-token: ${STAFF_IDENTITY_AUTHORIZATION}
+    authz-url: ${STAFF_AUTHZ_URL}
+    authz-token: ${STAFF_AUTHZ_AUTHORIZATION}
+    allow-human-deploy: false
+    gateway-deploy-user-id: ${STAFF_CI_GATEWAY_USER_ID:}
+    gateway-deploy-subject-id: ${STAFF_CI_AUTHZ_SUBJECT_ID:}
+    # Configure real process-definition-key -> canonical approval permission in deployment config.
+    # Do not deploy the synthetic bff-contract-review permission as a business grant.
+    approval-permissions: {}

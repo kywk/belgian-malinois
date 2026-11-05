@@ -64,6 +64,8 @@ import java.util.Map;
 @RequestMapping("/api/countersign")
     public class CountersignController {
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.bpm.core.staff.StaffTaskAuthorization staffAuthorization;
     private final TaskService taskService;
     private final AuditEventPublisher auditPublisher;
     private final TaskHolderGuard holderGuard;
@@ -190,6 +192,7 @@ import java.util.Map;
         // 未認證 → 401；非持有者 → 404。兩種狀態都發生在任何寫入之前。
         // 拒絕會由 requireHolder 留一筆 DATA_ACCESS {denied:true}。
         holderGuard.requireHolder(parent, callerId);
+        if (staffAuthorization != null) staffAuthorization.require(parent, null);
 
         String assignee = req == null ? null : req.get("countersignUserId");
 
@@ -455,6 +458,7 @@ import java.util.Map;
         // 的生命週期分析）；後者會在未來支援「候選人領取加簽」時
         // 靜默把它打死，而那正是「查不到就不查」的老問題。
         holderGuard.requireHolder(subtask, operatorId);
+        if (staffAuthorization != null) staffAuthorization.require(subtask, null);
 
         Task parent = taskService.createTaskQuery().taskId(taskId).singleResult();
         String processInstanceId = parent != null ? parent.getProcessInstanceId() : null;

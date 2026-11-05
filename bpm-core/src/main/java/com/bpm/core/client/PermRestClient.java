@@ -11,6 +11,12 @@ import java.util.Map;
 @Component
 public class PermRestClient {
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.bpm.core.staff.StaffDirectoryClient staffDirectory;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.bpm.core.staff.StaffAuthzClient staffAuthz;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.bpm.core.staff.StaffIntegrationProperties staffProperties;
     private final RestClient restClient;
 
     /**
@@ -79,21 +85,37 @@ public class PermRestClient {
     }
 
     public List<String> getUsersByPermission(String permCode) {
+        if (staffAuthz != null) throw new com.bpm.core.staff.StaffFailure("BPM_ROUTING_UNAVAILABLE", 503, "權限反查人員尚無正式來源契約");
         return restClient.get().uri("/api/permissions/{permCode}/users", permCode)
                 .retrieve().body(new ParameterizedTypeReference<>() {});
     }
 
     public List<String> getUsersByPermissionAndDept(String permCode, String deptId) {
+        if (staffAuthz != null) throw new com.bpm.core.staff.StaffFailure("BPM_ROUTING_UNAVAILABLE", 503, "權限反查人員尚無正式來源契約");
         return restClient.get().uri("/api/permissions/{permCode}/users?deptId={deptId}", permCode, deptId)
                 .retrieve().body(new ParameterizedTypeReference<>() {});
     }
 
     public List<String> getUserPermissions(String userId) {
+        if (staffAuthz != null) {
+            var staff = staffDirectory.byUserId(userId);
+            var candidates = new java.util.LinkedHashSet<>(com.bpm.core.staff.StaffPermissions.CATALOG);
+            candidates.addAll(staffProperties.approvalPermissions().values());
+            var result = new java.util.ArrayList<String>();
+            for (String code : candidates) if (staffAuthz.allowed(staff, code)) {
+                result.add(code);
+                String alias = com.bpm.core.staff.StaffPermissions.ALIASES.get(code);
+                if (alias != null) result.add(alias);
+            }
+            return List.copyOf(result);
+        }
         return restClient.get().uri("/api/users/{userId}/permissions", userId)
                 .retrieve().body(new ParameterizedTypeReference<>() {});
     }
 
     public boolean hasPermission(String userId, String permCode) {
+        if (staffAuthz != null) return staffAuthz.allowed(staffDirectory.byUserId(userId),
+                com.bpm.core.staff.StaffPermissions.canonical(permCode));
         Map<String, Object> result = restClient.get()
                 .uri("/api/users/{userId}/has-permission?code={code}", userId, permCode)
                 .retrieve().body(new ParameterizedTypeReference<>() {});

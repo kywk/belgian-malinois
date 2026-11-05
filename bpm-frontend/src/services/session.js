@@ -27,6 +27,7 @@
  * ⚠️ 這份清單是 UX 層防線，不是安全邊界（見 permissionsApi.js）。
  */
 const TOKEN_KEY = 'token'
+const storage = () => import.meta.env.VITE_STAFF_SSO === 'true' ? sessionStorage : localStorage
 
 /**
  * 把 JWT 解析成身分資訊。
@@ -81,7 +82,7 @@ function decodeBase64Url(value) {
 // 因此一律包 try/catch，並讓失敗等同「未登入」而非讓整個 app 崩掉。
 export function getToken() {
   try {
-    return localStorage.getItem(TOKEN_KEY)
+    return storage().getItem(TOKEN_KEY)
   } catch {
     return null
   }
@@ -89,7 +90,7 @@ export function getToken() {
 
 export function setToken(token) {
   try {
-    localStorage.setItem(TOKEN_KEY, token)
+    storage().setItem(TOKEN_KEY, token)
   } catch {
     /* 無法持久化時仍可在記憶體中使用本次 session */
   }
@@ -97,7 +98,7 @@ export function setToken(token) {
 
 export function clearToken() {
   try {
-    localStorage.removeItem(TOKEN_KEY)
+    storage().removeItem(TOKEN_KEY)
   } catch {
     /* ignore */
   }

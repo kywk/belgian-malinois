@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { staffSsoEnabled } from '../services/staffSso'
 // 設計器與流程圖依路由載入，避免一般使用者首頁下載管理介面。
 const Dashboard = () => import('../views/Dashboard.vue')
 const TaskInbox = () => import('../views/TaskInbox.vue')
@@ -124,7 +125,7 @@ router.beforeEach(async (to) => {
     // 「推測自己是管理員」是自己發明權限。相對地，一個明確寫在
     // 簽章 claim 裡的具名權限碼是可以採信的降級 —— 而且寫入時
     // 後端會再擋一次，所以最壞情況只是「看得到編輯器、存不進去」。
-    const acceptsAdmin = !!to.meta?.acceptsAdmin
+    const acceptsAdmin = !staffSsoEnabled && !!to.meta?.acceptsAdmin
     const granted = auth.hasPermission(requiredPermission)
       // ⚠️ acceptsAdmin 是**每條路由**的屬性，不是全域設定。
       // 同一個 meta 寫成 true 與 false，差別就是「這條規則後端接不接受

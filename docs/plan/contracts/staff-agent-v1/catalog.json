@@ -1,0 +1,240 @@
+{
+  "contractVersion": "1.0.0",
+  "implementationStatus": "PLANNED",
+  "systemCode": "bpm",
+  "externalSystemId": "agent-bff",
+  "permissions": [
+    {
+      "code": "bpm:console:access:use",
+      "legacyAuthority": null,
+      "purpose": "後台入口",
+      "testOnly": false
+    },
+    {
+      "code": "bpm:task:work:read",
+      "legacyAuthority": null,
+      "purpose": "待辦讀取",
+      "testOnly": false
+    },
+    {
+      "code": "bpm:task:work:act",
+      "legacyAuthority": null,
+      "purpose": "任務動作",
+      "testOnly": false
+    },
+    {
+      "code": "bpm:form:definition:design",
+      "legacyAuthority": "bpm:form:design",
+      "purpose": "表單設計",
+      "testOnly": false
+    },
+    {
+      "code": "bpm:bpmn:definition:deploy",
+      "legacyAuthority": "bpm:bpmn:deploy",
+      "purpose": "部署專用",
+      "testOnly": false
+    },
+    {
+      "code": "bpm:system:config:manage",
+      "legacyAuthority": null,
+      "purpose": "平台管理",
+      "testOnly": false
+    },
+    {
+      "code": "bpm:audit:log:read",
+      "legacyAuthority": "audit:log:read",
+      "purpose": "稽核讀取",
+      "testOnly": false
+    },
+    {
+      "code": "bpm:approval:bff_contract_review:approve",
+      "legacyAuthority": null,
+      "purpose": "僅合成測試核決",
+      "testOnly": true
+    }
+  ],
+  "errors": [
+    {
+      "code": "BPM_AUTH_INVALID",
+      "httpStatus": 401,
+      "retryable": false
+    },
+    {
+      "code": "BPM_STAFF_REQUIRED",
+      "httpStatus": 403,
+      "retryable": false
+    },
+    {
+      "code": "BPM_ACCOUNT_INACTIVE",
+      "httpStatus": 403,
+      "retryable": false
+    },
+    {
+      "code": "BPM_PERMISSION_DENIED",
+      "httpStatus": 403,
+      "retryable": false
+    },
+    {
+      "code": "BPM_SERVICE_AUTH_INVALID",
+      "httpStatus": 401,
+      "retryable": false
+    },
+    {
+      "code": "BPM_SERVICE_FORBIDDEN",
+      "httpStatus": 403,
+      "retryable": false
+    },
+    {
+      "code": "BPM_WORKFLOW_NOT_ALLOWED",
+      "httpStatus": 403,
+      "retryable": false
+    },
+    {
+      "code": "BPM_NOT_FOUND",
+      "httpStatus": 404,
+      "retryable": false
+    },
+    {
+      "code": "BPM_VALIDATION_ERROR",
+      "httpStatus": 400,
+      "retryable": false
+    },
+    {
+      "code": "BPM_PAYLOAD_TOO_LARGE",
+      "httpStatus": 413,
+      "retryable": false
+    },
+    {
+      "code": "BPM_CASE_VERSION_CONFLICT",
+      "httpStatus": 409,
+      "retryable": false
+    },
+    {
+      "code": "BPM_CASE_STATE_CONFLICT",
+      "httpStatus": 409,
+      "retryable": false
+    },
+    {
+      "code": "BPM_DEFINITION_VERSION_MISMATCH",
+      "httpStatus": 409,
+      "retryable": false
+    },
+    {
+      "code": "BPM_FORM_VERSION_MISMATCH",
+      "httpStatus": 409,
+      "retryable": false
+    },
+    {
+      "code": "BPM_FORM_VALIDATION_FAILED",
+      "httpStatus": 422,
+      "retryable": false
+    },
+    {
+      "code": "BPM_IDEMPOTENCY_CONFLICT",
+      "httpStatus": 409,
+      "retryable": false
+    },
+    {
+      "code": "BPM_CASE_ALREADY_STARTED",
+      "httpStatus": 409,
+      "retryable": false
+    },
+    {
+      "code": "BPM_RATE_LIMITED",
+      "httpStatus": 429,
+      "retryable": true
+    },
+    {
+      "code": "BPM_IDENTITY_UNAVAILABLE",
+      "httpStatus": 503,
+      "retryable": true
+    },
+    {
+      "code": "BPM_AUTHZ_UNAVAILABLE",
+      "httpStatus": 503,
+      "retryable": true
+    },
+    {
+      "code": "BPM_ROUTING_UNAVAILABLE",
+      "httpStatus": 503,
+      "retryable": false
+    },
+    {
+      "code": "BPM_INTEGRATION_NOT_CONFIGURED",
+      "httpStatus": 503,
+      "retryable": false
+    },
+    {
+      "code": "BPM_UPSTREAM_UNAVAILABLE",
+      "httpStatus": 503,
+      "retryable": true
+    },
+    {
+      "code": "BPM_OPERATION_UNCERTAIN",
+      "httpStatus": 500,
+      "retryable": false
+    },
+    {
+      "code": "BPM_INTERNAL_ERROR",
+      "httpStatus": 500,
+      "retryable": false
+    }
+  ],
+  "roleTemplates": [
+    {
+      "name": "bpm_staff_user",
+      "principalType": "STAFF",
+      "testOnly": false,
+      "permissions": [
+        "bpm:console:access:use",
+        "bpm:task:work:read"
+      ]
+    },
+    {
+      "name": "bpm_form_designer",
+      "principalType": "STAFF",
+      "testOnly": false,
+      "permissions": [
+        "bpm:console:access:use",
+        "bpm:form:definition:design"
+      ]
+    },
+    {
+      "name": "bpm_operator",
+      "principalType": "STAFF",
+      "testOnly": false,
+      "permissions": [
+        "bpm:console:access:use",
+        "bpm:system:config:manage"
+      ]
+    },
+    {
+      "name": "bpm_auditor",
+      "principalType": "STAFF",
+      "testOnly": false,
+      "permissions": [
+        "bpm:console:access:use",
+        "bpm:audit:log:read"
+      ]
+    },
+    {
+      "name": "bpm_ci_deployer",
+      "principalType": "SERVICE",
+      "testOnly": false,
+      "permissions": [
+        "bpm:bpmn:definition:deploy"
+      ]
+    },
+    {
+      "name": "bpm_contract_reviewer",
+      "principalType": "STAFF",
+      "testOnly": true,
+      "permissions": [
+        "bpm:console:access:use",
+        "bpm:task:work:read",
+        "bpm:task:work:act",
+        "bpm:approval:bff_contract_review:approve"
+      ]
+    }
+  ]
+}

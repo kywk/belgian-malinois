@@ -57,7 +57,7 @@
         <ApprovalTimeline :process-instance-id="task?.processInstanceId" />
       </el-col>
       <el-col :span="12">
-        <CommentPanel :task-id="taskId" :readonly="isUnclaimed" />
+        <CommentPanel :task-id="taskId" :readonly="isUnclaimed || !auth.canActTasks" />
       </el-col>
     </el-row>
 
@@ -67,7 +67,8 @@
            「不顯示任何任務動作」——以任務名稱猜測會讓補件任務在後端失聯時
            露出一整排審核按鈕（同意／拒絕），而補件任務的受指派人是申請人本人。
            載入狀態與失敗原因由上方表單區呈現。 -->
-      <el-space v-if="isUnclaimed">
+      <p v-if="!auth.canActTasks" style="color:#606266;margin:0">目前帳號僅可檢視此任務，尚未取得簽核權限。</p>
+      <el-space v-else-if="isUnclaimed">
         <span>此任務尚未認領，請先認領再處理。</span>
         <el-button type="primary" :loading="submitting" @click="handleClaim">認領任務</el-button>
       </el-space>

@@ -101,6 +101,8 @@ public class SecurityConfig {
 
     private static final String ADMIN = "ADMIN";
 
+    @Value("${bpm.staff.enabled:false}")
+    private boolean staffMode;
     private final AuthorityResolver authorityResolver;
 
     public SecurityConfig(AuthorityResolver authorityResolver) {
@@ -112,12 +114,15 @@ public class SecurityConfig {
             @Value("${bpm.security.gateway.enabled:false}") boolean enabled,
             @Value("${bpm.security.gateway.shared-secret:}") String sharedSecret,
             @Value("${bpm.security.gateway.trusted-proxies:}") List<String> trustedProxies) {
-        return new GatewayAuthenticationFilter(enabled, sharedSecret, trustedProxies, authorityResolver);
+        var filter = new GatewayAuthenticationFilter(enabled, sharedSecret, trustedProxies, authorityResolver);
+        filter.setMachineOnly(staffMode);
+        return filter;
     }
 
     @Bean
     SecurityFilterChain filterChain(HttpSecurity http,
                                     GatewayAuthenticationFilter gatewayFilter,
+                                    org.springframework.beans.factory.ObjectProvider<com.bpm.core.staff.StaffMachineAuthorization> machineAuthorization,
                                     @Value("${bpm.external.mock-enabled:false}") boolean mockEnabled)
             throws Exception {
 
@@ -292,7 +297,13 @@ public class SecurityConfig {
 
                     // ── 部署 BPMN：平台上最有後果的單一操作 ──────────
                     // 它決定所有後續案件的簽核路徑要送給誰，而且是覆寫式的。
-                    auth.requestMatchers(HttpMethod.POST, "/api/deployments/**").hasRole(ADMIN);
+                    if (staffMode) {
+                        auth.requestMatchers(HttpMethod.POST, "/api/deployments/**").access((authentication, context) ->
+                                new org.springframework.security.authorization.AuthorizationDecision(
+                                        machineAuthorization.getObject().canDeploy(authentication.get())));
+                    } else {
+                        auth.requestMatchers(HttpMethod.POST, "/api/deployments/**").hasRole(ADMIN);
+                    }
 
                     // ── 管理端點 ───────────────────────────────────
                     // /api/admin/external-systems 管的是外部系統的 API key 與
@@ -323,6 +334,11 @@ public class SecurityConfig {
                     auth.anyRequest().denyAll();
                 });
 
+        if (staffMode) http.exceptionHandling(errors -> errors
+                .authenticationEntryPoint((req, res, e) -> com.bpm.core.staff.StaffErrorWriter.write(req, res,
+                        e instanceof com.bpm.core.staff.StaffFailure f ? f : new com.bpm.core.staff.StaffFailure("BPM_AUTH_INVALID", 401, "機器認證無效")))
+                .accessDeniedHandler((req, res, e) -> com.bpm.core.staff.StaffErrorWriter.write(req, res,
+                        com.bpm.core.staff.StaffFailure.denied())));
         return http.build();
     }
 
@@ -343,6 +359,8 @@ public class SecurityConfig {
     }
 
     private Collection<GrantedAuthority> authoritiesFromJwt(Jwt jwt) {
+        // In staff mode this fallback chain serves machine endpoints only; user JWT roles never grant gateway/admin.
+        if (staffMode) return List.of();
         List<String> roles = jwt.getClaimAsStringList("roles");
         var fromClaim = authorityResolver.fromJwtRoles(roles);
         if (!fromClaim.isEmpty()) return fromClaim;

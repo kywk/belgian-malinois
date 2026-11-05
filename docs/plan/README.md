@@ -4,6 +4,10 @@
 
 ## 文件索引
 
+最新整合規劃：[BPM 內勤後台與 agent BFF](2026-11-05-staff-console-agent-bff-integration.md)。使用者已確認後台僅供內勤，外勤統一經 agent API；文件列出 SAML、ODS、AuthZ 與外部 API 的現況、缺口、實作順序及驗收條件。下方歷史估時不包含這份新增整合工作。
+
+第 1 項已固定為 [整合契約 v1](contracts/staff-agent-v1/README.md)：API 欄位、AuthZ 權限映射、錯誤碼、JSON Schema、正反例及驗收清單；內勤 SSO／session／組織與 AuthZ 消費端已實作，見 [整合指南](../api/staff-sso-integration.md)；external v1 案件路由與正式來源接線仍待後續完成。
+
 > 📌 **先讀這兩份**
 >
 > 1. [`2026-09-28-handover.md`](2026-09-28-handover.md) —— 重構交接。✅ **已驗證並併入 main（2026-09-28～29）**；僅供回溯。
