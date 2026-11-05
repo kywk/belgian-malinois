@@ -1,6 +1,7 @@
 # docs/handoff — 交接文件索引
 
-**最後更新**：2026-10-24（UniForm P5 OptionsProvider 正式 ODS 來源接線）
+**最後更新**：2026-11-05（補入完整回歸與服務啟動紀錄）
+**最新驗證**：[`2026-11-05-full-regression.md`](2026-11-05-full-regression.md)；後端 1,685、前端 266、瀏覽器六組全過，本機前後端已啟動。以下 P5 快照與待辦總表保留 2026-10-24 的範圍，不代表本輪重新驗收所有部署及外部整合項目。
 **最新交接／下一個對話 prompt**：[`2026-10-24-uniform-p5-ods-handoff.md`](2026-10-24-uniform-p5-ods-handoff.md)
 
 **P5 整合修訂（2026-10-24）**：[申請流程與最新 UniForm 整合檢視](../plan/2026-10-24-uniform-application-integration.md)。使用者已確認「流程不必重發，新申請使用最新已發布表單，既有案件維持原版」。主表綁定與 OptionsProvider 三批均已實作；正式 IdP／ODS 真資料仍待驗收。舊 P5 prompt 與本檢視衝突時以本檢視為準。

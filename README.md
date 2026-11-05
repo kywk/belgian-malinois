@@ -20,17 +20,15 @@ bash scripts/localdev.sh frontend
 若缺少 uni-form SDK 套件（例如首次建置或 SDK pin 改變），先從根目錄建置本機使用的 npm tarball 與 Java SNAPSHOT：
 
 ```bash
-cd vendor/uni-form
-mise exec node@24.21.0 -- corepack pnpm install --frozen-lockfile
-mise exec node@24.21.0 -- corepack pnpm exec bash scripts/pack-npm.sh
-cd ../..
+# 先將 Node 24 與 vendor/uni-form/package.json 指定版本的 pnpm 放入 PATH
+bash scripts/build-uniform-frontend.sh
 mvn -f vendor/uni-form/java -pl uniform-spec,uniform-core,uniform-jackson3,uniform-spring-boot4-starter -am clean install -DskipTests
 mvn -f bpm-core clean package -DskipTests
 ```
 
-只有完成 `pack-npm.sh` 產生 `vendor/uni-form/dist/npm/` tarball 後，才在 `bpm-frontend` 執行 `npm ci`。SDK pin 更新時須同步更新本機 tarball 的 lockfile integrity；Java reactor 與 bpm-core 使用 `clean` 重建，避免殘留已刪除資源或沿用舊 SNAPSHOT 內嵌依賴。`mvn verify` 使用 Testcontainers 啟動 MSSQL、RabbitMQ、Redis；需有可用的 Docker daemon，且目前執行環境可存取 Docker socket。
+只有完成 `build-uniform-frontend.sh` 產生 `vendor/uni-form/dist/npm/` tarball 後，才在 `bpm-frontend` 執行 `npm ci`。此入口在 SDK 打包後統一使用 Node gzip；直接執行 SDK 的 `pack-npm.sh` 可能產生內容相同但壓縮位元不同的套件，導致 `EINTEGRITY`。SDK pin 更新時，lockfile integrity 亦須取自這個入口產生的 tarball。Java reactor 與 bpm-core 使用 `clean` 重建，避免殘留已刪除資源或沿用舊 SNAPSHOT 內嵌依賴。`mvn verify` 使用 Testcontainers 啟動 MSSQL、RabbitMQ、Redis；需有可用的 Docker daemon，且目前執行環境可存取 Docker socket。
 
-Node 24 與 SDK 指定的 pnpm 已在 PATH 時，也可從根目錄執行 `bash scripts/build-uniform-frontend.sh`。前端 Docker 與 CI 共用此入口，再執行 `npm ci`；Docker 使用 repository root 作為 context：`docker build -f bpm-frontend/Dockerfile .`。UniForm 的 Git URL 為內網 SSH，CI runner 必須具備網路與讀取權限。
+前端 Docker 與 CI 共用上述建置入口，再執行 `npm ci`；Docker 使用 repository root 作為 context：`docker build -f bpm-frontend/Dockerfile .`。UniForm 的 Git URL 為內網 SSH，CI runner 必須具備網路與讀取權限。
 
 localenv 的 seed／acceptance runner 需要 Bash 4 以上；macOS 內建 Bash 3.2 不支援。若 Homebrew Bash 已安裝，可將它放在 PATH 前端再操作：
 

@@ -1,10 +1,15 @@
 package com.bpm.core.controller;
 
+import com.bpm.core.audit.AuditEventPublisher;
+import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.form.model.FormDefinition;
 import com.bpm.core.form.repository.FormDefinitionRepository;
 import com.bpm.core.support.IntegrationTestBase;
 import com.bpm.core.support.TestGatewayMockMvcCustomizer;
 import org.flowable.engine.RuntimeService;
+import org.flowable.engine.delegate.DelegateExecution;
+import org.flowable.engine.delegate.event.AbstractFlowableEngineEventListener;
+import org.flowable.engine.delegate.event.FlowableProcessStartedEvent;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,6 +24,7 @@ import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -76,6 +82,9 @@ class StartProcessFormDataCompensationTest extends IntegrationTestBase {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private AuditEventPublisher auditPublisher;
 
     private final HttpClient http = HttpClient.newHttpClient();
 
@@ -141,7 +150,12 @@ class StartProcessFormDataCompensationTest extends IntegrationTestBase {
     }
 
     private String startBody(String formDefinitionId, Map<String, Object> values) throws Exception {
+        return startBody(formDefinitionId, values, null);
+    }
+
+    private String startBody(String formDefinitionId, Map<String, Object> values, String businessKey) throws Exception {
         Map<String, Object> payload = applicationStartPayload(LEAVE, USER, objectMapper.writeValueAsString(values));
+        if (businessKey != null) payload.put("businessKey", businessKey);
         @SuppressWarnings("unchecked")
         Map<String, Object> formData = (Map<String, Object>) payload.get("formData");
         formData.put("formDefinitionId", formDefinitionId);
@@ -173,10 +187,12 @@ class StartProcessFormDataCompensationTest extends IntegrationTestBase {
         return rows[0];
     }
 
-    private static long auditRowCount() {
+    private static long auditRowCount(String processInstanceId) {
         long[] out = {-1L};
         withAuditConnection(c -> {
-            try (PreparedStatement ps = c.prepareStatement("SELECT COUNT(*) FROM bpm_audit_log")) {
+            try (PreparedStatement ps = c.prepareStatement(
+                    "SELECT COUNT(*) FROM bpm_audit_log WHERE process_instance_id = ?")) {
+                ps.setString(1, processInstanceId);
                 var rs = ps.executeQuery();
                 rs.next();
                 out[0] = rs.getLong(1);
@@ -202,18 +218,40 @@ class StartProcessFormDataCompensationTest extends IntegrationTestBase {
         failFormInsertsWhere(marker);
 
         long instancesBefore = countRunning(LEAVE);
-        long auditBefore = auditRowCount();
-
-        var res = post(startBody(def.getId(), leaveValues(marker)));
+        // 回滾後無法從引擎查回 ID；先以唯一 businessKey 捕捉這次實際啟動的案件。
+        // 以案件限定「所有稽核類型」，避免其他測試的 DLQ_MESSAGE 污染全表列數。
+        AtomicReference<String> startedId = new AtomicReference<>();
+        var listener = new AbstractFlowableEngineEventListener() {
+            @Override
+            protected void processStarted(FlowableProcessStartedEvent event) {
+                if (event.getEntity() instanceof DelegateExecution execution
+                        && marker.equals(execution.getProcessInstanceBusinessKey())) {
+                    startedId.set(execution.getProcessInstanceId());
+                }
+            }
+        };
+        HttpResponse<String> res;
+        runtimeService.addEventListener(listener);
+        try {
+            res = post(startBody(def.getId(), leaveValues(marker), marker));
+        } finally {
+            runtimeService.removeEventListener(listener);
+        }
 
         assertThat(res.statusCode()).as("body=%s", res.body()).isEqualTo(500);
+        assertThat(startedId.get()).as("必須捕捉到本次回滾的流程實例 ID").isNotBlank();
         assertThat(countRunning(LEAVE))
                 .as("表單寫入失敗時主交易必須回捲 —— 案件不得存在")
                 .isEqualTo(instancesBefore);
         assertThat(formRowsWithMarker(marker))
                 .as("form 交易自己回捲，不得留下資料列").isZero();
-        assertThat(auditRowCount())
-                .as("主交易回捲時稽核（beforeCommit）不得落地").isEqualTo(auditBefore);
+        // 確定性重現其他測試的死信稽核在此窗口落地；不依靠背景執行緒時序。
+        String unrelatedId = "unrelated-" + marker;
+        auditPublisher.publishDetached(new AuditEvent("DLQ_MESSAGE", "system",
+                unrelatedId, null, Map.of("event", "rollback-test-noise")));
+        assertThat(auditRowCount(unrelatedId)).as("對照：無關的稽核確實已落地").isEqualTo(1);
+        assertThat(auditRowCount(startedId.get()))
+                .as("主交易回捲時該案件的所有稽核（beforeCommit）不得落地").isZero();
     }
 
     // ── ② 表單已 commit、主交易 commit 才失敗 → 補償刪除 ─────────
