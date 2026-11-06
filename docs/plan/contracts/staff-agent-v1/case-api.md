@@ -55,6 +55,14 @@
 
 不回內勤 assignee、候選名單、全流程 variables、原始表單、API key 或 process ID。尚未取得 BPM 結果時 delivery_status 可為 PENDING／DISPATCHING／UNCERTAIN／FAILED，review_status=UNKNOWN、outcome=UNKNOWN、source_revision=null；只有 owning service 能證明的既有狀態可回傳，來源讀取失敗不能用假空值包成功。capabilities 每次由業務規則計算，僅供 UI 提示，異動還要重驗。
 
+## Staff 核閱當版送件附件
+
+Staff 待辦在已設定 Recruitment 附件來源時提供 `reviewEvidenceAvailable`。開啟任務後，Staff 以本人的 SSO 讀 `GET /api/tasks/{taskId}/review-evidence`，回應為 `applicationId`、`applicationType`、`submissionId`、`revision` 及 `documents`。每份文件提供 `documentId`、`version`、`contentHash`（SHA-256）、`purpose`、`fileName`、`contentType`、`sizeBytes`、`source`。按「核閱附件」時，`GET /api/tasks/{taskId}/review-evidence/documents/{documentId}` 回傳該文件的 bytes，兩種回應均為 `Cache-Control: no-store`。
+
+兩個 GET 均以 Flowable 當前 active task 的本人受派狀態與該流程即時核決權限授權，再依 `agent-bff` 的確認回執取得 application、submission、revision 與 instance。選填的 `applicationId`、`submissionId`、`revision` query 只用來核對，同案舊版、跨案拼接、已結束任務、未受派、代理與加簽子任務均拒讀。具有效身分但被撤除核決權限回 403；附件來源失聯或契約驗證失敗回 503。
+
+BPM 使用設定的 `BPM_STAFF_EVIDENCE_OWNER_URL` 與 `BPM_STAFF_EVIDENCE_OWNER_KEY`，以 `X-Service-Id: bpm-staff-review` 呼叫 Recruitment 私有 `/internal/staff-review/v1/applications/{applicationId}/submissions/{submissionId}/revisions/{revision}/instances/{processInstanceId}` 及其 `/documents/{documentId}`。Owner 驗證當版快照與可讀範圍，BPM 再核對型別、大小與 SHA-256。面談支援 PNG/JPEG，聯徵支援 PDF。本輪僅接受 `source=MOCK` 的 Recruitment 開發附件，來源缺失或無核定契約一律回 503。前版退件原因、前版附件的 Staff 跨版授權及正式 ECM 契約待權責方核定。
+
 ## 私有投遞與 BPM 啟動欄位
 
 私有 agent body 使用 snake_case，BPM body 使用下列 camelCase；schema 同時提供 AgentStartRequest／BpmStartRequest，欄位一對一映射。**只轉 DTO 欄位，variables 內的業務 key 和 dataJson 內容不轉名。** 私有成功回應使用 MASA envelope 與 snake_case data；BPM 成功直接回 DTO。

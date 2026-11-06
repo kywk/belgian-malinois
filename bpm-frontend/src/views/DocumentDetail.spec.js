@@ -74,8 +74,10 @@ function envelope(mode, data) {
   }
 }
 
-function mockLoad({ task = TASK_REVISION, form } = {}) {
+function mockLoad({ task = TASK_REVISION, form, evidence, documentBlob } = {}) {
   http.get.mockImplementation((url) => {
+    if (url === '/api/tasks/t-1/review-evidence/documents/d2') return Promise.resolve({ data: documentBlob })
+    if (url === '/api/tasks/t-1/review-evidence') return Promise.resolve({ data: evidence })
     if (url === '/api/tasks') return Promise.resolve({ data: [task] })
     if (url === '/api/tasks/t-1/form') {
       if (form instanceof Error) return Promise.reject(form)
@@ -297,4 +299,50 @@ describe('DocumentDetail：候選任務認領', () => {
     expect(buttonWithText(wrapper, '認領任務')).toBeFalsy()
     expect(pushMock).toHaveBeenCalledWith('/tasks')
   })
+})
+
+it('從當版任務讀取附件清單，開啟前不下載內容', async () => {
+  mockLoad({
+    task: { ...TASK, businessKey: 'recruitment/a/s2/review', reviewEvidenceAvailable: true }, form: envelope('view', {}),
+    evidence: { applicationId: 'a', submissionId: 's2', revision: 2, documents: [
+      { documentId: 'd2', version: '1', fileName: '本版聯徵.pdf', sizeBytes: 20, contentType: 'application/pdf' },
+    ] },
+  })
+  const wrapper = mountPage()
+  await flush()
+  await flush()
+  expect(wrapper.text()).toContain('本版聯徵.pdf')
+  expect(wrapper.text()).toContain('送件版本 2')
+  expect(buttonWithText(wrapper, '核閱附件')).toBeTruthy()
+  expect(http.get.mock.calls.some(([path]) => path.includes('/documents/'))).toBe(false)
+})
+
+it('核閱取得含當版關聯的圖片，關閉後釋放預覽', async () => {
+  const file = new Blob(['photo'], { type: 'image/png' })
+  const release = vi.fn()
+  vi.stubGlobal('URL', class extends URL {
+    static createObjectURL() { return 'blob:review-test' }
+    static revokeObjectURL = release
+  })
+  try {
+    mockLoad({
+      task: { ...TASK, reviewEvidenceAvailable: true }, form: envelope('view', {}), documentBlob: file,
+      evidence: { applicationId: 'a', submissionId: 's2', revision: 2, documents: [
+        { documentId: 'd2', version: '1', fileName: '本版照片.png', sizeBytes: file.size, contentType: file.type, source: 'MOCK' },
+      ] },
+    })
+    const wrapper = mountPage()
+    await flush()
+    await buttonWithText(wrapper, '核閱附件').trigger('click')
+    await flush()
+    expect(http.get).toHaveBeenCalledWith('/api/tasks/t-1/review-evidence/documents/d2', expect.objectContaining({
+      params: { applicationId: 'a', submissionId: 's2', revision: 2 }, responseType: 'blob',
+    }))
+    expect(wrapper.get('img[alt="本版照片.png"]').attributes('src')).toBe('blob:review-test')
+    await buttonWithText(wrapper, '關閉預覽').trigger('click')
+    expect(wrapper.find('img[alt="本版照片.png"]').exists()).toBe(false)
+    expect(release).toHaveBeenCalledWith('blob:review-test')
+  } finally {
+    vi.unstubAllGlobals()
+  }
 })

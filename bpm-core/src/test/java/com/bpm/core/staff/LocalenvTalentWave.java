@@ -48,7 +48,8 @@ public final class LocalenvTalentWave {
                             "process-definition-id", fixture.definition, "form-definition-id", fixture.form.getId(), "form-version", 1));
                 }
                 var tmp = Files.createTempFile(ready.getParent(), "bindings", ".tmp");
-                Files.writeString(tmp, ExternalCaseFixture.JSON.writeValueAsString(Map.of("bindings", bindings, "key", key + "agent-bff")));
+                Files.writeString(tmp, ExternalCaseFixture.JSON.writeValueAsString(Map.of("bindings", bindings,
+                        "key", key + "agent-bff", "otherStaffToken", staff.token("W9000002"))));
                 Files.move(tmp, ready, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
                 System.in.read();
             }

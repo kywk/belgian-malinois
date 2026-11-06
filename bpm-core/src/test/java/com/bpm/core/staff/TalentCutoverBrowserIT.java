@@ -17,6 +17,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.DynamicPropertyRegistrar;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /** Boots both portal UIs, the agent servlet and the owner against the real BPM/Flowable HTTP server. */
 @org.springframework.test.context.TestPropertySource(properties = {
@@ -31,12 +33,15 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
         catch (java.io.IOException e) { throw new IllegalStateException(e); }
     }
     private static final int STAFF_PORT = freePort();
+    private static final int EVIDENCE_PORT = freePort();
     static { PROVIDER.callbackUrl = "http://127.0.0.1:" + STAFF_PORT + "/"; }
     @TestConfiguration(proxyBeanMethods = false)
     static class CutoverSources {
         @Bean DynamicPropertyRegistrar cutoverProperties() {
             return r -> {
                 r.add("bpm.webhook.hmac-secret", () -> HOOK_SECRET);
+                r.add("bpm.staff.evidence.owner-url", () -> "http://127.0.0.1:" + EVIDENCE_PORT);
+                r.add("bpm.staff.evidence.owner-key", () -> HOOK_SECRET);
                 r.add("bpm.external.mock-enabled", () -> false);
                 r.add("bpm.external.org-service-url", PROVIDER::url);
                 r.add("bpm.external.perm-service-url", PROVIDER::url);
@@ -64,6 +69,16 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
     }
 
     private tools.jackson.databind.JsonNode completeCreditReturn() {
+        var review = startCreditReview();
+        var task = review.task();
+        tasks.complete(task.getId(), Map.of("approved", false, "rejected", false,
+                "_applicantReturnReason", "請補上最新月份的報告"));
+        return review.fixture().get(ExternalCaseFixture.COLLECTION + "/" + task.getProcessInstanceId());
+    }
+
+    private record Review(ExternalCaseFixture fixture, org.flowable.task.api.Task task, String submission) {}
+
+    private Review startCreditReview() {
         var f = new ExternalCaseFixture(context, apiPort, "recruitment.credit", null, UUID.randomUUID().toString(), true);
         var command = f.command();
         command.put("workflowCode", "recruitment.credit");
@@ -76,9 +91,82 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
         var receipt = f.expect(f.post(command), 201);
         var pid = receipt.path("processInstanceId").asString();
         var task = tasks.createTaskQuery().processInstanceId(pid).singleResult();
-        tasks.complete(task.getId(), Map.of("approved", false, "rejected", false,
-                "_applicantReturnReason", "請補上最新月份的報告"));
-        return f.get(ExternalCaseFixture.COLLECTION + "/" + pid);
+        return new Review(f, task, command.get("requestId").toString());
+    }
+
+    @Test void onlyCurrentAssigneeReadsFrozenEvidence() throws Exception {
+        var review = startCreditReview();
+        var task = review.task();
+        String taskPath = "/api/tasks/" + task.getId() + "/review-evidence";
+        String ownerPath = "/internal/staff-review/v1/applications/app-A/submissions/" + review.submission()
+                + "/revisions/1/instances/" + task.getProcessInstanceId();
+        String document = UUID.randomUUID().toString();
+        byte[] bytes = "%PDF-1.7 fixture %%EOF".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        String hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        var metadata = Map.of("applicationId", "app-A", "applicationType", "CREDIT_CHECK", "submissionId", review.submission(),
+                "revision", 1, "documents", java.util.List.of(Map.of("documentId", document, "version", "1",
+                "contentHash", hash, "purpose", "CREDIT_REPORT", "fileName", "credit.pdf", "contentType", "application/pdf",
+                "sizeBytes", bytes.length, "source", "MOCK")));
+        var hits = new java.util.concurrent.atomic.AtomicInteger();
+        var documentType = new java.util.concurrent.atomic.AtomicReference<>("application/pdf");
+        var documentBytes = new java.util.concurrent.atomic.AtomicReference<>(bytes);
+        var owner = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", EVIDENCE_PORT), 0);
+        owner.createContext(ownerPath, request -> {
+            try (request) {
+                var headers = request.getRequestHeaders();
+                if (!"bpm-staff-review".equals(headers.getFirst("X-Service-Id")) ||
+                        !HOOK_SECRET.equals(headers.getFirst("X-Service-Key")) || headers.containsKey("Authorization")) {
+                    request.sendResponseHeaders(401, -1); return;
+                }
+                boolean download = request.getRequestURI().getPath().equals(ownerPath + "/documents/" + document);
+                if (!download && !request.getRequestURI().getPath().equals(ownerPath)) {
+                    request.sendResponseHeaders(404, -1); return;
+                }
+                hits.incrementAndGet();
+                byte[] body = download ? documentBytes.get() : ExternalCaseFixture.JSON.writeValueAsBytes(metadata);
+                request.getResponseHeaders().add("Content-Type", download ? documentType.get() : "application/json");
+                request.sendResponseHeaders(200, body.length);
+                request.getResponseBody().write(body);
+            }
+        });
+        owner.start();
+        try {
+            String reviewer = "Bearer " + PROVIDER.token("login-alias");
+            String other = "Bearer " + PROVIDER.token("W9000002");
+            String content = taskPath + "/documents/" + document;
+            for (String path : java.util.List.of(taskPath, content)) {
+                mockMvc.perform(get(path).header("Authorization", other)).andExpect(status().isNotFound());
+                for (var pair : Map.of("applicationId","app-B","submissionId","old","revision","2").entrySet()) {
+                    mockMvc.perform(get(path).header("Authorization", reviewer).param(pair.getKey(), pair.getValue()))
+                            .andExpect(status().isNotFound());
+                }
+            }
+            assertThat(hits).hasValue(0);
+            mockMvc.perform(get(taskPath).header("Authorization", reviewer)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.submissionId").value(review.submission()))
+                    .andExpect(jsonPath("$.documents[0].contentHash").value(hash));
+            mockMvc.perform(get(content).header("Authorization", reviewer)).andExpect(status().isOk())
+                    .andExpect(content().bytes(bytes)).andExpect(header().string("Cache-Control", "no-store"));
+            mockMvc.perform(get(taskPath + "/documents/" + UUID.randomUUID()).header("Authorization", reviewer))
+                    .andExpect(status().isNotFound());
+            documentType.set("text/html");
+            mockMvc.perform(get(content).header("Authorization", reviewer)).andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.code").value("BPM_EVIDENCE_UNAVAILABLE"));
+            documentType.set("application/pdf");
+            documentBytes.set("%PDF-changed".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            mockMvc.perform(get(content).header("Authorization", reviewer)).andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.code").value("BPM_EVIDENCE_UNAVAILABLE"));
+            documentBytes.set(bytes);
+            PROVIDER.denied.add(StaffTestProvider.APPROVE);
+            mockMvc.perform(get(content).header("Authorization", reviewer)).andExpect(status().isForbidden());
+            PROVIDER.denied.remove(StaffTestProvider.APPROVE);
+            tasks.delegateTask(task.getId(), "W9000002");
+            mockMvc.perform(get(content).header("Authorization", other)).andExpect(status().isNotFound());
+            tasks.resolveTask(task.getId());
+            tasks.complete(task.getId(), Map.of("approved", true, "rejected", false));
+            mockMvc.perform(get(taskPath).header("Authorization", reviewer)).andExpect(status().isNotFound());
+            mockMvc.perform(get(content).header("Authorization", reviewer)).andExpect(status().isNotFound());
+        } finally { owner.stop(0); }
     }
 
     private void runCutover(String type, String workflow, String processKey, String logName) throws Exception {

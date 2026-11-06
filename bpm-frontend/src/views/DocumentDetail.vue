@@ -36,6 +36,8 @@
             <p v-else style="color:#909399;margin:0">此任務沒有動態表單。</p>
           </template>
         </el-card>
+        <TaskReviewEvidence v-if="task?.reviewEvidenceAvailable && task.assignee && !isCountersign && !isDelegated"
+          :key="taskId" :task-id="taskId" />
       </el-col>
       <el-col :span="8">
         <ProcessDiagram v-if="task?.processInstanceId" :process-instance-id="task.processInstanceId"
@@ -112,6 +114,7 @@ import { provideOptionsHost } from '../uniform/options.js'
 import { fetchTaskForm } from '../uniform/api.js'
 import ExternalFormLink from '../components/ExternalFormLink.vue'
 import ActionDialog from '../components/ActionDialog.vue'
+import TaskReviewEvidence from '../components/TaskReviewEvidence.vue'
 import CountersignDialog from '../components/CountersignDialog.vue'
 import CommentPanel from '../components/CommentPanel.vue'
 import ApprovalTimeline from '../components/ApprovalTimeline.vue'

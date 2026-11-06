@@ -178,6 +178,10 @@ bpmn:
     # 而不是靜默拿到一個不屬於這個環境的值。
 
 bpm:
+  staff:
+    evidence:
+      owner-url: ${BPM_STAFF_EVIDENCE_OWNER_URL:}
+      owner-key: ${BPM_STAFF_EVIDENCE_OWNER_KEY:}
   uniform:
     options:
       source: ${BPM_UNIFORM_OPTIONS_SOURCE:mock}

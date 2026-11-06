@@ -42,6 +42,9 @@ import java.util.stream.Stream;
 @RestController
 @RequestMapping("/api/tasks")
     public class TaskController {
+    @org.springframework.beans.factory.annotation.Value("${bpm.staff.evidence.owner-url:}")
+    private String evidenceOwnerUrl;
+
 
     /**
      * 不可由呼叫端以任務變數改寫的變數名。
@@ -1504,6 +1507,8 @@ import java.util.stream.Stream;
         if (pi != null) {
             m.put("processDefinitionKey", pi.getProcessDefinitionKey());
             m.put("businessKey", pi.getBusinessKey());
+            if (evidenceOwnerUrl != null && !evidenceOwnerUrl.isBlank() && pi.getBusinessKey() != null
+                    && pi.getBusinessKey().startsWith("recruitment/")) m.put("reviewEvidenceAvailable", true);
         }
         return m;
     }

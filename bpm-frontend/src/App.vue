@@ -64,7 +64,7 @@
           {{ auth.userId }} 登出
         </el-menu-item>
       </el-menu>
-      <router-view />
+      <router-view :key="$route.params.taskId" />
     </template>
   </div>
 </template>
