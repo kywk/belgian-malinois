@@ -145,6 +145,24 @@ public class TaskHolderGuard {
         this.auditPublisher = auditPublisher;
     }
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.bpm.core.staff.StaffDirectoryClient staffDirectory;
+
+    /** Check a named delegate even when the Flowable assignee link still exists. */
+    public void requireActiveDelegation(Task task, String userId) {
+        if (staffDirectory != null && userId != null && userId.equals(task.getAssignee())
+                && task.getDelegationState() == org.flowable.task.api.DelegationState.PENDING)
+            staffDirectory.requireDelegation(task.getOwner(), userId);
+    }
+
+    public boolean visibleInInbox(Task task, String userId) {
+        try { requireActiveDelegation(task, userId); return true; }
+        catch (com.bpm.core.staff.StaffFailure failure) {
+            if (failure.status() == 403) return false;
+            throw failure;
+        }
+    }
+
     // ── 讀端：一次撈回「我的待辦」的三個查詢 ────────────────────────
     /**
      * 讀端的三個查詢條件，與 {@link #isHolder} 走的是同一組查詢建構子。
@@ -238,7 +256,10 @@ public class TaskHolderGuard {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                     "無法確認操作的身分，請先登入");
         }
-        if (isHolder(task, callerId)) return;
+        if (isHolder(task, callerId)) {
+            requireActiveDelegation(task, callerId);
+            return;
+        }
         auditPublisher.publishDetached(new AuditEvent(OperationType.DATA_ACCESS.name(), callerId,
                 task.getProcessInstanceId(), task.getId(),
                 Map.of("denied", true, "reason", "not a task holder")));

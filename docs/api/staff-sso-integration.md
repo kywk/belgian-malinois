@@ -89,3 +89,16 @@ AuthZ 使用既有 `POST /api/v1/sdk/permissions/check`，固定 `system_code=bp
 6. CI 的 gateway 身分、AuthZ service subject、deploy grant 與來源網路允許清單需由環境提供。外勤 agent BFF 與 external v1 案件 API 留待下一階段。
 
 測試採本機 HTTP 合約 provider 與真實 MSSQL / Redis / RabbitMQ / Flowable；通過代表 BPM 消費端及瀏覽器流程可運作，不代表已連正式 IdP、組織或 AuthZ 環境。
+
+## 第 5 項撤權與已派任務
+
+內勤每個請求重新解析 issuer／sub，採用當次組織與 grant。來源的有效截止為 observedAt 加 60 秒與 validUntil 兩者中的較早值，到期或格式不合法回 503。建立當次認證及執行簽核守衛時均檢查 snapshot 的有效期限。簽核與加簽在異動前再查身分、console、task act 與該流程核決權。中途調職或資格失效會拒絕本次異動。選用的政策是凍結原任務，保留 assignment 與歷程，讓操作人在資格恢復後以新請求處理。
+
+| 異動 | 真正受到影響的資料 |
+|---|---|
+| 調職 | directory 的 deptId／orgObjectIds 改變，下一請求以新 org subjects 查 AuthZ。候選群組來自本次 grant、alias 及組織。已指派的 assignee 仍須持有當次核決 grant。 |
+| 撤權／停權 | AuthZ SDK 對個人與組織主體聯集查直接權限、有效期內的直接角色、群組角色與 ABAC。合法 deny 回 403，錯誤／中斷回 503。INACTIVE 的有效 JWT 回 403。 |
+| Redis 與失效事件 | 正式模式的 OrgService／BpmPermissionService 略過 Redis 讀寫。舊 org:manager、manager-chain、dept、dept-members、substitute，以及個人權限、全域與部門持有人查詢仍屬舊模式。閘道的 org／perm invalidation 只處理那些 key。BPM 正式判斷不依賴 AuthZ outbox 通知抵達。 |
+| 指名代理 | `delegate` 在交付前、受派人在讀取待辦／任務表單與異動時，按 Flowable 保存的 owner、delegate 查有效期間。到期從代理人待辦移除，直接操作回 403。來源無法確認則 503。原 owner 具備當次權限時可 resolve 收回。已完成歷史案件沿既有參與者／稽核政策讀取。 |
+
+新增身分橋接消費端 `POST {STAFF_IDENTITY_URL}/delegations/check`，請求為 `{owner, delegate}`。回應須回顯兩個 ID、status、observedAt、validUntil，ACTIVE 另需 startsAt、endsAt。使用 UTC、起點含、終點不含。具時效的 INACTIVE 回 403；逾時、歧義或來源故障回 `503 BPM_ROUTING_UNAVAILABLE`。這個查核只驗證指定的一對人。自動尋找替代人、主管鏈與批次重派，仍需另外的權威來源。

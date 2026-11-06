@@ -69,7 +69,7 @@ import java.util.Map;
 public abstract class IntegrationTestBase {
 
     // 與 docker-compose.yml 同一個 image tag，避免「測試過了但 dev 壞掉」的版本落差。
-    private static final MSSQLServerContainer<?> MSSQL =
+    protected static final MSSQLServerContainer<?> MSSQL =
             new MSSQLServerContainer<>(DockerImageName.parse("mcr.microsoft.com/mssql/server:2022-latest"))
                     .acceptLicense();
 

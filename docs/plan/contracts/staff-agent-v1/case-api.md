@@ -35,7 +35,7 @@
 }
 ```
 
-此例只說明已有前端契約；AGENT 不可使用 TALENT route，以上版本／hash 也不是正式送件資料。prepare 仍僅凍結資料，不等於送 BPM。v1 AGENT transport 不承接 TALENT payload；禁止 BFF 為了接線把 actor type 改掉。
+此例只說明已有前端契約；AGENT 不可使用 TALENT route，以上版本／hash 也不是正式送件資料。prepare 仍僅凍結資料，不等於送 BPM。v1.1 的本人流程由 recruitment 保存 TALENT 命令，再經 agent 私有入口投遞。
 
 新增摘要查詢的五個 path 欄位皆必填，大小寫精確；domain 只接受註冊值，applicationId/submissionId 由 owning service 保存。核心先確認「該使用者可看此案件」及 submission 屬於 application，失敗或跨人一律 404。權限來源故障回 503，不能當成案件不存在。BFF 再讀對應的 process，不能將 path 當作任意 BPM 查詢。
 
@@ -65,7 +65,7 @@
 | workflowCode | 是，1..64 `[a-z0-9._-]` | server 註冊的業務流程代碼，非任意 BPMN key |
 | bindingVersion | 是，正整數 | 案件送件時凍結的 workflow binding 版本 |
 | caseRef | 是，CaseRef | 核心已保存的案件／submission，不從瀏覽器自由構造 |
-| actor | 是，AgentActor | 核心先驗證來源、目前外勤資格與案件操作權；BFF 僅接受授權服務的投遞意圖 |
+| actor | 是，AgentActor 或 TalentActor | 核心先驗證來源、目前外勤資格與案件操作權；BFF 僅接受授權服務的投遞意圖 |
 | processDefinitionId | 是，1..128 string | 精確部署版本；與 bindingVersion、allowedProcessKeys 一致 |
 | formData | 是，FormData 或 null | 有主表必填 object；無主表必須 null，不省略 |
 | variables | 是，object | 技術流程的已登錄業務變數；主表欄位由 dataJson 提供，不得重複 |
@@ -90,9 +90,11 @@ FormData：`formDefinitionId`（UUID）、`formVersion`（正整數）、`dataJs
 }
 ```
 
+TALENT actor 四欄為 `type="TALENT"`、`agentCode=null`、受允許的 HTTPS issuer 及本人 subject。agent 私有 wire 對應 `agent_code=null`。BPM 以 `bpm.external.cases.talent-workflow-issuers[workflowCode]` 指定該流程專屬 TALENT issuer；agent 在對應 owner 的 `talent-workflow-issuers` 做相同檢查。其他流程沿用 AGENT。BPM 保存 actor JSON、原 requestId 與服務發起者，首關仍派給內勤。
+
 ### Workflow binding
 
-binding 是 server 配置／儲存資料，不是瀏覽器 API。固定記錄 `workflowCode`、`bindingVersion`、`domain`、`workflowRole`、`allowedCallerServices`、`allowedActorTypes=["AGENT"]`、`processDefinitionId`、`processDefinitionKey`、`formDefinitionId`／`formVersion`（同時 null 或有值）、`initialRoutingRule`、`approvalPermission`、`enabled`。initialRoutingRule 是受控規則 ID，不能是呼叫者提交的 EL。
+binding 是 server 配置／儲存資料，不是瀏覽器 API。固定記錄 `workflowCode`、`bindingVersion`、`domain`、`workflowRole`、`allowedCallerServices`、每個 workflowCode 的 actor 類型與 issuer、`processDefinitionId`、`processDefinitionKey`、`formDefinitionId`／`formVersion`（同時 null 或有值）、`initialRoutingRule`、`approvalPermission`、`enabled`。initialRoutingRule 是受控規則 ID，不能是呼叫者提交的 EL。
 
 首次執行時 binding 必須 enabled；binding 存在但已停用、版本與請求不一致，或定義已刪除，回 `BPM_DEFINITION_VERSION_MISMATCH`。新部署不會改寫既有 binding，也不能把 request 裡的舊 ID 靜默替換為 latest。已成功的相同 requestId 重放仍回原 receipt，不受後來停用影響，但服務／案件查詢授權必須仍有效。
 

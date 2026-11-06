@@ -129,6 +129,7 @@ import java.util.Map;
             }
         } else {
             accessGuard.requireReadAccess(task.getProcessInstanceId(), callerId);
+            holderGuard.requireActiveDelegation(task, callerId);
         }
 
         String formKey = task.getFormKey();

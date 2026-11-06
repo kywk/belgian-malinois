@@ -13,7 +13,7 @@ public record StaffIdentitySnapshot(String userId, String displayName, String us
                 || !text(sourceRevision, 128) || orgObjectIds == null || orgObjectIds.isEmpty()
                 || orgObjectIds.stream().anyMatch(id -> !text(id, 64))
                 || observedAt == null || validUntil == null || observedAt.isAfter(now)
-                || observedAt.isBefore(now.minusSeconds(60)) || !validUntil.isAfter(now)
+                || !observedAt.isAfter(now.minusSeconds(60)) || !validUntil.isAfter(now)
                 || !validUntil.isAfter(observedAt)) throw StaffFailure.unavailable("IDENTITY");
         if (!"STAFF".equals(userType))
             throw new StaffFailure("BPM_STAFF_REQUIRED", 403, "BPM 後台僅供內勤人員使用");

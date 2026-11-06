@@ -1,5 +1,5 @@
 {
-  "contractVersion": "1.0.0",
+  "contractVersion": "1.1.0",
   "scope": "SCHEMA_EXAMPLES_ONLY",
   "cases": [
     {
@@ -1699,6 +1699,66 @@
         ],
         "expiresAt": "2026-02-30T02:00:00Z",
         "authorizationCheckedAt": "2026-11-05T02:00:00Z"
+      }
+    },
+    {
+      "id": "talent-start",
+      "schema": "BpmStartRequest",
+      "expectValid": true,
+      "data": {
+        "requestId": "10000000-0000-4000-8000-000000000001",
+        "workflowCode": "recruitment.credit",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "recruitment",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "actor": {
+          "type": "TALENT",
+          "agentCode": null,
+          "issuer": "https://talent.example.invalid",
+          "subject": "candidate-one"
+        },
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "formData": {
+          "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+          "formVersion": 1,
+          "dataJson": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {}
+      }
+    },
+    {
+      "id": "talent-private-start",
+      "schema": "AgentStartRequest",
+      "expectValid": true,
+      "data": {
+        "request_id": "10000000-0000-4000-8000-000000000001",
+        "workflow_code": "recruitment.credit",
+        "binding_version": 1,
+        "case_ref": {
+          "domain": "recruitment",
+          "application_id": "app-a",
+          "submission_id": "sub-a1",
+          "workflow_role": "review",
+          "submission_revision": 1
+        },
+        "actor": {
+          "type": "TALENT",
+          "agent_code": null,
+          "issuer": "https://talent.example.invalid",
+          "subject": "candidate-one"
+        },
+        "process_definition_id": "bff-contract-review:1:fixture",
+        "form_data": {
+          "form_definition_id": "20000000-0000-4000-8000-000000000001",
+          "form_version": 1,
+          "data_json": "{\"requestReason\":\"合成契約驗收\"}"
+        },
+        "variables": {}
       }
     }
   ]

@@ -90,7 +90,9 @@ class CaseLauncher {
             throw ROUTING_UNAVAILABLE.fail();
         audit.publish(new AuditEvent("EXTERNAL_API_CALL", initiator, id, null,
                 Map.of("action", "start_process", "requestId", c.requestId(), "businessKey", row.businessKey(),
-                        "agentCode", c.actor().agentCode(), "traceId", trace)));
+                        "actorType", c.actor().type(), "actorIssuer", c.actor().issuer(),
+                        "TALENT".equals(c.actor().type()) ? "subject" : "agentCode",
+                        "TALENT".equals(c.actor().type()) ? c.actor().subject() : c.actor().agentCode(), "traceId", trace)));
         if (data != null) {
             data.setProcessInstanceId(id);
             data.setSubmittedBy(initiator);

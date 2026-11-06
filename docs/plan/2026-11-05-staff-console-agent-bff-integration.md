@@ -122,6 +122,8 @@ v1 契約先固定 AGENT transport 與內勤簽核；recruitment TALENT 本人�
 
 ## 具體實作順序與驗收
 
+2026-11-06 第 5 項已實作。依新增決定，準增員本人可用 TALENT actor 啟動指定流程。recruitment 的 worker 驗收、正式來源缺口與三庫重跑方式見[撤權與同步交接](../handoff/2026-11-06-revocation-sync.md)。
+
 2026-11-05 第 2 項實作：批次 1／2 的 BPM 消費端與內勤垂直流程已接線，見 [內勤整合指南](../api/staff-sso-integration.md)。正式身分橋接、IdP／AuthZ 設定與主管／代理等來源能力尚待提供；不以本機合約 provider 測試宣稱正式環境整合完成。
 
 | 批次 | 修改範圍與交付物 | 完成門檻 |

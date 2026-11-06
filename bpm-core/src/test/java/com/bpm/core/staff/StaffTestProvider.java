@@ -23,7 +23,9 @@ public class StaffTestProvider implements AutoCloseable {
     public static final JsonMapper JSON = JsonMapper.builder().build();
     public final Set<String> denied = ConcurrentHashMap.newKeySet();
     public volatile String userType = "STAFF", status = "ACTIVE", dept = "50310001", identityResult = "FOUND";
-    public volatile String inactiveUserId;
+    public volatile String inactiveUserId, approvalOrg;
+    public volatile Instant delegationEnd;
+    public volatile boolean expiredSnapshot;
     public volatile String callbackUrl = "http://127.0.0.1:31999/";
     public volatile String authzCode = "0000";
     public volatile boolean malformedAllowed, staleIdentity, failIdentity;
@@ -44,7 +46,7 @@ public class StaffTestProvider implements AutoCloseable {
     }
     public String url() { return "http://127.0.0.1:" + server.getAddress().getPort(); }
     public void reset() {
-        inactiveUserId = null; denied.clear(); userType = "STAFF"; status = "ACTIVE"; dept = "50310001"; identityResult = "FOUND";
+        inactiveUserId = null; approvalOrg = null; delegationEnd = null; expiredSnapshot = false; denied.clear(); userType = "STAFF"; status = "ACTIVE"; dept = "50310001"; identityResult = "FOUND";
         authzCode = "0000"; malformedAllowed = staleIdentity = failIdentity = false;
     }
     public String token(String subject) { return token(subject, Map.of()); }
@@ -94,8 +96,14 @@ public class StaffTestProvider implements AutoCloseable {
                 if ("missing".equals(subject) || "NOT_FOUND".equals(identityResult)) { reply(exchange, 200, Map.of("result", "NOT_FOUND")); return; }
                 Instant now = Instant.now();
                 var snapshot = new StaffIdentitySnapshot(userId, "內勤測試員", userType, userId.equals(inactiveUserId) ? "INACTIVE" : status, dept,
-                        List.of(dept), "test-revision", now.minusSeconds(staleIdentity ? 120 : 1), now.plusSeconds(60));
+                        List.of(dept), "test-revision", now.minusSeconds(staleIdentity ? 120 : 1), now.plusSeconds(expiredSnapshot ? -1 : 60));
                 reply(exchange, 200, Map.of("result", identityResult, "snapshot", snapshot)); return;
+            }
+            if (path.equals("/delegations/check") && delegationEnd != null) {
+                Instant now = Instant.now();
+                reply(exchange, 200, new StaffDirectoryClient.Delegation(input.get("owner").asString(),
+                        input.get("delegate").asString(), "ACTIVE", now, now.plusSeconds(60), now.minusSeconds(300), delegationEnd));
+                return;
             }
             if (path.equals("/api/v1/sdk/permissions/check")) {
                 if (!input.has("subject_ids") || input.has("effective_subject_ids")
@@ -104,7 +112,7 @@ public class StaffTestProvider implements AutoCloseable {
                     throw new IllegalArgumentException("Wrong AuthZ contract");
                 var subjects = new ArrayList<String>(); input.path("subject_ids").forEach(v -> subjects.add(v.asString())); lastSubjects = subjects;
                 String permission = input.path("permissions").get(0).asString();
-                Object allowed = malformedAllowed ? "true" : !denied.contains(permission);
+                Object allowed = malformedAllowed ? "true" : !denied.contains(permission) && (!APPROVE.equals(permission) || approvalOrg == null || subjects.contains(approvalOrg));
                 reply(exchange, 200, Map.of("code", authzCode, "data", Map.of("allowed", allowed))); return;
             }
             reply(exchange, 404, Map.of());

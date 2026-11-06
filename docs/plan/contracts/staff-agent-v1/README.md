@@ -1,6 +1,6 @@
 # BPM 內勤與 agent BFF 契約 v1
 
-實作進度（2026-11-06）：BPM 內勤 SSO／組織／AuthZ 消費端及四個 external v1 案件端點已實作。agent BFF 與業務 outbox 接線仍待第 4 項。環境前置條件與驗證範圍見[內勤指南](../../../api/staff-sso-integration.md)及[外部案件交接](../../../handoff/2026-11-06-external-cases.md)。
+2026-11-06 更新至 v1.1。第 5 項加入準增員本人送件與 recruitment 持久對帳。測試資料、來源界線與部署條件見[第 5 項交接](../../../handoff/2026-11-06-revocation-sync.md)。
 
 上位邊界見 [架構規劃](../../2026-11-05-staff-console-agent-bff-integration.md)：BPM 後台只供內勤；外勤經 agent BFF；業務服務保留案件、快照與 outbox。本文取代上位文件中未定的欄位名稱與權限映射，但不改變服務責任。
 
@@ -26,7 +26,7 @@
 
 首批合成驗收流程固定為 `bff-contract-review`，workflowCode=`contract.staff-review`，domain=`contract-fixture`，actor type=`AGENT`。這是測試定義，**不得部署為正式業務流程**。正式流程用相同契約綁定經核准的流程／表單版本。
 
-既有 recruitment 的 AGENT 管理入口、TALENT 本人入口與 prepare 語意保持不變。v1 的外勤 actor 只接受 AGENT；TALENT 不得轉成 AGENT。recruitment 的本人正式 BPM adapter 仍待獨立的 TALENT 契約擴充，不因本文件完成便啟用。recruitment 可先接「AGENT 有權閱讀的審核摘要」；未被業務授權的代本人送件繼續拒絕。
+recruitment 的 TALENT 走本人 submit／supplement，經保存的命令以原 issuer＋subject 投遞。AGENT 的 prepare 保存快照，案件查詢依當前管理歸屬。agent 與 BPM 必須為本人流程綁定允許的 TALENT issuer。
 
 既有後台 API 的成功 DTO 保持原樣。新增 `GET /api/me/session` 供正式內勤 session 初始化；原 `GET /api/me/permissions` 保留舊 DTO，正式模式的資料來源改為已驗證 AuthZ 結果，不再讀 JWT roles 授權。細節見身分文件。
 

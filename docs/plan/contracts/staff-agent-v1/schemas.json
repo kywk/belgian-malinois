@@ -148,7 +148,14 @@
           "$ref": "#/definitions/CaseRef"
         },
         "actor": {
-          "$ref": "#/definitions/AgentActor"
+          "oneOf": [
+            {
+              "$ref": "#/definitions/AgentActor"
+            },
+            {
+              "$ref": "#/definitions/TalentActor"
+            }
+          ]
         },
         "processDefinitionId": {
           "type": "string",
@@ -1849,7 +1856,14 @@
           "$ref": "#/definitions/AgentCaseRef"
         },
         "actor": {
-          "$ref": "#/definitions/AgentAgentActor"
+          "oneOf": [
+            {
+              "$ref": "#/definitions/AgentAgentActor"
+            },
+            {
+              "$ref": "#/definitions/AgentTalentActor"
+            }
+          ]
         },
         "process_definition_id": {
           "type": "string",
@@ -2077,6 +2091,66 @@
           "minLength": 1,
           "maxLength": 128,
           "pattern": "^[A-Za-z0-9._-]+$"
+        }
+      }
+    },
+    "TalentActor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "agentCode",
+        "issuer",
+        "subject"
+      ],
+      "properties": {
+        "type": {
+          "const": "TALENT"
+        },
+        "agentCode": {
+          "type": "null"
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^https://[^\\s]+$"
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^\\S(?:.*\\S)?$"
+        }
+      }
+    },
+    "AgentTalentActor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "agent_code",
+        "issuer",
+        "subject"
+      ],
+      "properties": {
+        "type": {
+          "const": "TALENT"
+        },
+        "agent_code": {
+          "type": "null"
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^https://[^\\s]+$"
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^\\S(?:.*\\S)?$"
         }
       }
     }

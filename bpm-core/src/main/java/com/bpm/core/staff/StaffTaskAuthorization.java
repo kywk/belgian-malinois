@@ -35,9 +35,23 @@ public class StaffTaskAuthorization {
         if (permission == null || permission.isBlank())
             throw new StaffFailure("BPM_INTEGRATION_NOT_CONFIGURED", 503, "此流程尚未設定核決權限對照");
         // Fresh checks at the mutation boundary: do not authorize using a previous page/session response.
-        if (!authz.allowed(staff.staff(), StaffPermissions.ACT) || !authz.allowed(staff.staff(), permission))
+        var token = staff.getToken();
+        var identity = directory.resolve(token.getIssuer().toString(), token.getSubject());
+        // The holder guard used the request snapshot; a changed mapping needs a fresh holder decision.
+        if (!identity.userId().equals(staff.getName()) || !identity.deptId().equals(staff.staff().deptId())
+                || !identity.subjectIds().equals(staff.staff().subjectIds())) throw StaffFailure.denied();
+        if (!authz.allowed(identity, StaffPermissions.CONSOLE) || !authz.allowed(identity, StaffPermissions.ACT) || !authz.allowed(identity, permission))
             throw StaffFailure.denied();
         if (request != null && request.assignee() != null) directory.byUserId(request.assignee());
-        if (request != null && request.delegateUser() != null) directory.byUserId(request.delegateUser());
+        if (request != null && request.delegateUser() != null) {
+            directory.byUserId(request.delegateUser());
+            if ("delegate".equals(request.action())) directory.requireDelegation(
+                    task.getOwner() == null ? task.getAssignee() : task.getOwner(), request.delegateUser());
+        }
+        if (task.getDelegationState() == org.flowable.task.api.DelegationState.PENDING
+                && !identity.userId().equals(task.getAssignee())
+                && !("resolve".equals(request == null ? null : request.action()) && identity.userId().equals(task.getOwner())))
+            directory.requireDelegation(task.getOwner(), task.getAssignee());
+        identity.validated(java.time.Instant.now());
     }
 }

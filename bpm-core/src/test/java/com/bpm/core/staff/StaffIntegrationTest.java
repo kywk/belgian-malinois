@@ -14,7 +14,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @TestPropertySource(properties = {"bpm.staff.enabled=true", "bpm.security.jwt.dev-secret=",
         "bpm.security.jwt.issuer-uri=https://staff-sso.example.test", "bpm.staff.gateway-deploy-user-id=ci-test",
         "bpm.staff.gateway-deploy-subject-id=service-bpm-ci", "bpm.security.gateway.enabled=true",
-        "bpm.external.cases.actor-issuers[0]=https://agent.test", "bpm.external.cases.staff-routes.review-team=W9000001",
+        "bpm.external.cases.actor-issuers[0]=https://agent.test",
+        "bpm.external.cases.talent-workflow-issuers[recruitment.credit]=https://talent.test", "bpm.external.cases.staff-routes.review-team=W9000001",
         "bpm.staff.approval-permissions.bff-contract-review=bpm:approval:bff_contract_review:approve"})
 @org.springframework.context.annotation.Import(StaffIntegrationTest.RandomPortConfiguration.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -148,6 +149,54 @@ class StaffIntegrationTest extends IntegrationTestBase {
         assertThat(f.expect(f.post(invalid),500).get("outcome").asString()).isEqualTo("UNKNOWN");
         var uncertain = f.get(ExternalCaseFixture.REQUESTS+id);
         assertThat(runtime.createProcessInstanceQuery().processInstanceBusinessKey(uncertain.get("businessKey").asString()).count()).isZero();
+    }
+
+    @Test void talentSubmissionLocksActorAndCreatesExactlyOneStaffCase() {
+        var f = new ExternalCaseFixture(context, apiPort, true);
+        var command = f.command();
+        var ref = new HashMap<>((Map<String,Object>)command.get("caseRef"));
+        ref.put("domain", "recruitment"); command.put("caseRef", ref);
+        command.put("workflowCode","recruitment.credit");
+        command.put("formData",Map.of("formDefinitionId",f.form.getId(),"formVersion",1,"dataJson","{}"));
+        f.expect(f.post(command), 403); // An AGENT cannot submit to a TALENT-only workflow.
+        var actor = new HashMap<String,Object>();
+        actor.put("type","TALENT"); actor.put("subject","candidate-one"); actor.put("agentCode",null);
+        actor.put("issuer","https://agent.test"); command.put("actor",actor);
+        f.expect(f.post(command), 403);
+        actor.put("issuer","https://talent.test");
+        var receipt = f.expect(f.post(command), 201);
+        assertThat(f.expect(f.post(command), 200)).isEqualTo(receipt);
+        String pid = receipt.path("processInstanceId").asString();
+        assertThat(runtime.createProcessInstanceQuery().processInstanceBusinessKey(receipt.path("businessKey").asString()).count()).isOne();
+        assertThat(tasks.createTaskQuery().processInstanceId(pid).singleResult().getAssignee()).isEqualTo("W9000001");
+        assertThat(runtime.getVariable(pid,"initiator")).isEqualTo("system:agent-bff");
+        assertThat(f.db.queryForObject("SELECT actor_json FROM bpm_case_request WHERE request_id=?",String.class,command.get("requestId")))
+                .contains("TALENT","candidate-one","https://talent.test");
+    }
+
+    @Test
+    @org.junit.jupiter.api.condition.EnabledIfSystemProperty(named="talent.restart.script", matches=".+")
+    void restartTalentOwnerAfterBpmCommit() throws Exception {
+        var f = new ExternalCaseFixture(context, apiPort, true);
+        var log = java.nio.file.Path.of("target", "talent-worker-restart.log");
+        var child = new ProcessBuilder("python3", System.getProperty("talent.restart.script"))
+                .redirectErrorStream(true).redirectOutput(log.toFile()).start();
+        try {
+            try (var in = child.outputWriter()) {
+                in.write(ExternalCaseFixture.JSON.writeValueAsString(Map.of("base",f.base,"key",f.serviceKey+"agent-bff",
+                        "binding",f.version,"definition",f.definition,"form",f.form.getId(),"staff",bearer(),
+                        "provider",PROVIDER.url(),"container",MSSQL.getContainerId(),"port",MSSQL.getMappedPort(1433))));
+            }
+            assertThat(child.waitFor(4, java.util.concurrent.TimeUnit.MINUTES)).isTrue();
+            assertThat(child.exitValue()).as("see %s", log.toAbsolutePath()).isZero();
+            String key = java.nio.file.Files.readAllLines(log).getLast();
+            assertThat(runtime.createProcessInstanceQuery().processInstanceBusinessKey(key).count()).isZero();
+            assertThat(context.getBean(org.flowable.engine.HistoryService.class).createHistoricProcessInstanceQuery()
+                    .processInstanceBusinessKey(key).count()).isOne();
+            System.out.println("Recovered one completed TALENT case: " + key);
+        } finally {
+            child.descendants().forEach(ProcessHandle::destroyForcibly); child.destroyForcibly();
+        }
     }
 
     @Test void technicalWorkflowRequiresExplicitOutcomeAndDetectsUnlinkedLegacyProcesses() {
@@ -290,6 +339,44 @@ class StaffIntegrationTest extends IntegrationTestBase {
         assertThat(tasks.createTaskQuery().taskId(task).count()).isEqualTo(1);
         PROVIDER.denied.clear(); complete(task).andExpect(status().isOk());
         assertThat(tasks.createTaskQuery().taskId(task).count()).isZero();
+    }
+    @Test void transferredOrInactiveHolderCannotSignWithExistingToken() throws Exception {
+        String task = newTask("W9000001", null);
+        String token = bearer();
+        var sign = put("/api/tasks/" + task).header("Authorization", token)
+                .contentType("application/json").content("{\"action\":\"complete\"}");
+        PROVIDER.approvalOrg = "org-50310001";
+        mockMvc.perform(get("/api/me/session").header("Authorization", token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.permissions").value(org.hamcrest.Matchers.hasItem(StaffTestProvider.APPROVE)));
+        PROVIDER.dept = "50310002";
+        mockMvc.perform(sign).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("BPM_PERMISSION_DENIED"));
+        PROVIDER.status = "INACTIVE";
+        mockMvc.perform(sign).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("BPM_ACCOUNT_INACTIVE"));
+        assertThat(tasks.createTaskQuery().taskId(task).singleResult().getAssignee()).isEqualTo("W9000001");
+    }
+    @Test void expiredDelegationFreezesAssignedTaskEvenWithIndependentApprovalGrant() throws Exception {
+        String task = newTask("W9000001", null);
+        PROVIDER.delegationEnd = java.time.Instant.now().plusSeconds(60);
+        mockMvc.perform(put("/api/tasks/" + task).header("Authorization", bearer()).contentType("application/json")
+                .content("{\"action\":\"delegate\",\"delegateUser\":\"W9000002\"}")).andExpect(status().isOk());
+        String delegate = "Bearer " + PROVIDER.token("W9000002");
+        var attempt = put("/api/tasks/" + task).header("Authorization", delegate)
+                .contentType("application/json").content("{\"action\":\"resolve\"}");
+        PROVIDER.delegationEnd = java.time.Instant.now().minusSeconds(1);
+        mockMvc.perform(attempt).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("BPM_PERMISSION_DENIED"));
+        assertThat(mockMvc.perform(get("/api/tasks").header("Authorization", delegate)).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString()).doesNotContain(task);
+        mockMvc.perform(get("/api/tasks/" + task + "/form").header("Authorization", delegate)).andExpect(status().isForbidden());
+        PROVIDER.delegationEnd = null;
+        mockMvc.perform(attempt).andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.code").value("BPM_ROUTING_UNAVAILABLE"));
+        assertThat(tasks.createTaskQuery().taskId(task).singleResult().getAssignee()).isEqualTo("W9000002");
+    }
+    @Test void freshReadRejectsExpiredValidityOrStaleObservation() throws Exception {
+        PROVIDER.expiredSnapshot = true;
+        sessionError(503, "BPM_IDENTITY_UNAVAILABLE");
+        PROVIDER.expiredSnapshot = false;
+        PROVIDER.staleIdentity = true;
+        sessionError(503, "BPM_IDENTITY_UNAVAILABLE");
     }
     @Test void privilegeDoesNotBypassHolder() throws Exception {
         String otherTask = newTask("W9000002", null);

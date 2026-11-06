@@ -45,6 +45,8 @@ record CaseCommand(String requestId, String workflowCode, long bindingVersion, R
             fields(ref, "domain", "applicationId", "submissionId", "workflowRole", "submissionRevision");
             var actor = object(root.get("actor"));
             fields(actor, "type", "agentCode", "issuer", "subject");
+            String actorType = string(actor, "type", "AGENT|TALENT");
+            if ("TALENT".equals(actorType) && actor.get("agentCode") != null) throw VALIDATION_ERROR.fail();
             var vars = object(root.get("variables"));
             if (vars.keySet().stream().anyMatch(k -> !k.matches("[A-Za-z][A-Za-z0-9_]*") || reserved(k)))
                 throw VALIDATION_ERROR.fail();
@@ -65,7 +67,7 @@ record CaseCommand(String requestId, String workflowCode, long bindingVersion, R
                             string(ref, "applicationId", "[A-Za-z0-9_-]{1,64}"),
                             string(ref, "submissionId", "[A-Za-z0-9_-]{1,64}"),
                             string(ref, "workflowRole", "[a-z0-9_-]{1,32}"), positive(ref, "submissionRevision")),
-                    new Actor(string(actor, "type", "AGENT"), string(actor, "agentCode", "(?U)\\S{1,64}"),
+                    new Actor(actorType, "TALENT".equals(actorType) ? null : string(actor, "agentCode", "(?U)\\S{1,64}"),
                             string(actor, "issuer", "(?U)(?=.{1,500}$)https://\\S+"),
                             string(actor, "subject", "(?U)(?=.{1,256}$)\\S(?:.*\\S)?")),
                     string(root, "processDefinitionId", "(?s).{1,128}"), form, vars);

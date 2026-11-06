@@ -33,6 +33,11 @@ class ExternalCaseFixture {
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
     ExternalCaseFixture(ApplicationContext ctx, int port) {
+        this(ctx, port, false);
+    }
+    ExternalCaseFixture(ApplicationContext ctx, int port, boolean talent) {
+        String workflow = talent ? "recruitment.credit" : "contract.staff-review";
+        String domain = talent ? "recruitment" : "contract-fixture";
         base = "http://127.0.0.1:" + port;
         db = new JdbcTemplate(ctx.getBean("primaryDataSource", DataSource.class));
         var systems = ctx.getBean(ExternalSystemRepository.class);
@@ -57,7 +62,7 @@ class ExternalCaseFixture {
         form.setStatus("published");
         form.setSchemaJson(JSON.writeValueAsString(Map.of("$uniform", "1.0", "key", formKey, "title",
                 Map.of("zh-TW", "案件"), "requires", Map.of("core", "^1.0"), "root",
-                List.of(Map.of("id", "n_note", "type", "textarea", "key", "note", "label", "說明")))));
+                List.of(Map.of("id", "n_note", "type", "textarea", "key", talent ? "submissionId" : "note", "label", "說明")))));
         ctx.getBean(FormDefinitionRepository.class).saveAndFlush(form);
         var nextForm = new FormDefinition();
         nextForm.setFormKey(formKey);
@@ -72,10 +77,10 @@ class ExternalCaseFixture {
         deploy(repository, formKey);
         db.update("""
                 INSERT INTO bpm_case_binding (workflow_code,binding_version,caller_system,domain,workflow_role,
-                definition_key,definition_id,form_id,form_version,routing_rule,approval_permission,enabled,approved_end)
-                VALUES ('contract.staff-review',?,'agent-bff','contract-fixture','review','bff-contract-review',?,?,1,
-                'review-team',?,1,'endApproved')
-                """, version, definition, form.getId(), StaffTestProvider.APPROVE);
+                definition_key,definition_id,form_id,form_version,routing_rule,approval_permission,enabled,approved_end,returned_node)
+                VALUES (?,?,'agent-bff',?,'review','bff-contract-review',?,?,1,
+                'review-team',?,1,'endApproved',?)
+                """, workflow, version, domain, definition, form.getId(), StaffTestProvider.APPROVE, talent ? "review" : null);
     }
     String deploy(RepositoryService repository, String key) {
         var model = new BpmnModel();

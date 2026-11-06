@@ -119,7 +119,7 @@ public class StaffIntegrationConfig {
             var candidates = new LinkedHashSet<>(StaffPermissions.CATALOG);
             candidates.addAll(p.approvalPermissions().values());
             var permissions = candidates.stream().filter(code -> authz.allowed(identity, code)).toList();
-            return new StaffAuthentication(jwt, identity, permissions);
+            return new StaffAuthentication(jwt, identity.validated(Instant.now()), permissions);
         })).authenticationEntryPoint((req, res, e) -> StaffErrorWriter.write(req, res,
                 e instanceof StaffFailure f ? f : new StaffFailure("BPM_AUTH_INVALID", 401, "登入憑證無效或已逾期"))));
         http.addFilterAfter(new OncePerRequestFilter() {

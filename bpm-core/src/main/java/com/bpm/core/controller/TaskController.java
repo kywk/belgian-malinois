@@ -273,6 +273,7 @@ import java.util.stream.Stream;
         // 完整的政策說明見 OnBehalfOfLookup 的類別註解。
         //
         // ⚠️ 一次查詢：逐個任務查變數是 N+1（收件匣可有數十筆）。
+        if (staffAuthorization != null) taskMap.values().removeIf(task -> !holderGuard.visibleInInbox(task, self));
         Set<String> processIds = taskMap.values().stream()
                 .map(Task::getProcessInstanceId)
                 .filter(Objects::nonNull)

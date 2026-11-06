@@ -99,7 +99,7 @@ fixture 是測試資料，不能當正式種子帳號。以下是行為驗收清
 | BF-05 | 私有合法 service 呼叫別的 domain/workflow | 403 SERVICE_FORBIDDEN／WORKFLOW_NOT_ALLOWED；未呼叫 BPM |
 | BF-06 | agent 專用 key 請求內勤任務 complete、管理或部署 | 拒絕；既有內勤任務狀態完全不變 |
 | BF-07 | 下游 API key 過期 | public 503 UPSTREAM_UNAVAILABLE；不要求使用者重新登入 |
-| BF-08 | AGENT 使用既有 TALENT submit，或 TALENT 送 AGENT transport | 拒絕；不新增 outbox、不改 actor type |
+| BF-08 | AGENT 使用既有 TALENT submit，或 TALENT 送僅允許 AGENT 的 workflow | 拒絕；不新增 outbox、不改 actor type |
 
 ## 鎖版與可靠投遞驗收
 

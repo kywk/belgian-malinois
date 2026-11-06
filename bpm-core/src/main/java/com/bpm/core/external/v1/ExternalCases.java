@@ -43,7 +43,7 @@ class ExternalCases {
         String system = sys.getSystemId();
         if (!"agent-bff".equals(system))
             throw SERVICE_FORBIDDEN.fail();
-        routing.checkActor(c.actor());
+        routing.checkActor(c);
         String hash = c.hash();
         var old = store.byRequest(system, c.requestId());
         if (old.isPresent())

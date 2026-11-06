@@ -14,9 +14,10 @@ import org.springframework.stereotype.Component;
 @EnableConfigurationProperties(CaseRouting.Settings.class)
 class CaseRouting {
     @ConfigurationProperties("bpm.external.cases")
-    record Settings(Set<String> actorIssuers, Map<String, String> staffRoutes) {
+    record Settings(Set<String> actorIssuers, Map<String, String> staffRoutes, Map<String, String> talentWorkflowIssuers) {
         Settings {
             actorIssuers = actorIssuers == null ? Set.of() : Set.copyOf(actorIssuers);
+            talentWorkflowIssuers = talentWorkflowIssuers == null ? Map.of() : Map.copyOf(talentWorkflowIssuers);
             staffRoutes = staffRoutes == null ? Map.of() : Map.copyOf(staffRoutes);
         }
     }
@@ -31,7 +32,13 @@ class CaseRouting {
         this.authz = authz;
         this.staff = staff;
     }
-    void checkActor(CaseCommand.Actor actor) {
+    void checkActor(CaseCommand command) {
+        var actor = command.actor();
+        String talentIssuer = settings.talentWorkflowIssuers().get(command.workflowCode());
+        if (talentIssuer != null || "TALENT".equals(actor.type())) {
+            if (!"TALENT".equals(actor.type()) || !actor.issuer().equals(talentIssuer)) throw SERVICE_FORBIDDEN.fail();
+            return;
+        }
         if (settings.actorIssuers().isEmpty())
             throw INTEGRATION_NOT_CONFIGURED.fail();
         if (!settings.actorIssuers().contains(actor.issuer()))
