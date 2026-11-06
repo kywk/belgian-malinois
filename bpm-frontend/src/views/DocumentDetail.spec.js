@@ -346,3 +346,87 @@ it('核閱取得含當版關聯的圖片，關閉後釋放預覽', async () => {
     vi.unstubAllGlobals()
   }
 })
+
+it('同一任務轉派後回到分頁會撤銷預覽、清除檔名與核決操作', async () => {
+  const file = new Blob(['photo'], { type: 'image/png' })
+  const revoke = vi.fn()
+  vi.stubGlobal('URL', class extends URL {
+    static createObjectURL() { return 'blob:old-holder' }
+    static revokeObjectURL = revoke
+  })
+  let page
+  try {
+    mockLoad({
+      task: { ...TASK, reviewEvidenceAvailable: true }, form: envelope('view', {}), documentBlob: file,
+      evidence: { applicationId: 'a', submissionId: 's2', revision: 2, documents: [
+        { documentId: 'd2', fileName: '附件.png', sizeBytes: file.size, contentType: file.type },
+      ] },
+    })
+    page = mountPage()
+    await flush()
+    await buttonWithText(page, '核閱附件').trigger('click')
+    await flush()
+    expect(page.get('img').attributes('src')).toBe('blob:old-holder')
+    http.get.mockRejectedValue(Object.assign(new Error('任務已轉派'), { response: { status: 404 } }))
+    window.dispatchEvent(new Event('focus'))
+    await flush()
+    expect(page.find('img').exists()).toBe(false)
+    expect(page.text()).not.toContain('附件.png')
+    expect(revoke).toHaveBeenCalledWith('blob:old-holder')
+    expect(buttonWithText(page, '同意')).toBeFalsy()
+  } finally {
+    page?.unmount()
+    vi.unstubAllGlobals()
+  }
+})
+
+it('附件來源缺少快照時仍可處理本人持有的任務', async () => {
+  localStorage.setItem('token', 'x.' + btoa(JSON.stringify({ sub: TASK.assignee })) + '.x')
+  try {
+    mockLoad({ task: { ...TASK, reviewEvidenceAvailable: true }, form: envelope('view', {}) })
+    const get = http.get.getMockImplementation()
+    http.get.mockImplementation((url, ...args) => url.endsWith('/review-evidence')
+      ? Promise.reject(Object.assign(new Error('無快照'), { response: { status: 404 } }))
+      : get(url, ...args))
+    const wrapper = mountPage()
+    await flush()
+    await flush()
+    expect(wrapper.text()).toContain('送件附件目前無法取得')
+    expect(buttonWithText(wrapper, '同意')).toBeTruthy()
+    expect(pushMock).not.toHaveBeenCalled()
+  } finally {
+    localStorage.removeItem('token')
+  }
+})
+
+it('轉派後才抵達的舊下載無法重建預覽', async () => {
+  const file = new Blob(['photo'], { type: 'image/png' })
+  const create = vi.fn(() => 'blob:late')
+  vi.stubGlobal('URL', class extends URL {
+    static createObjectURL = create
+    static revokeObjectURL = vi.fn()
+  })
+  try {
+    mockLoad({
+      task: { ...TASK, reviewEvidenceAvailable: true }, form: envelope('view', {}),
+      evidence: { applicationId: 'a', submissionId: 's2', revision: 2, documents: [
+        { documentId: 'd2', fileName: '舊下載.png', sizeBytes: file.size, contentType: file.type },
+      ] },
+    })
+    const page = mountPage()
+    await flush()
+    let deliver
+    http.get.mockImplementationOnce(() => new Promise(resolve => { deliver = resolve }))
+    await buttonWithText(page, '核閱附件').trigger('click')
+    http.get.mockRejectedValue(Object.assign(new Error('任務已轉派'), { response: { status: 404 } }))
+    window.dispatchEvent(new Event('focus'))
+    await flush()
+    deliver({ data: file })
+    await flush()
+    expect(create).not.toHaveBeenCalled()
+    expect(page.text()).not.toContain('舊下載.png')
+    expect(buttonWithText(page, '同意')).toBeFalsy()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})

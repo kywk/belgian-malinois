@@ -18,6 +18,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.DynamicPropertyRegistrar;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /** Boots both portal UIs, the agent servlet and the owner against the real BPM/Flowable HTTP server. */
@@ -108,6 +109,7 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
                 "contentHash", hash, "purpose", "CREDIT_REPORT", "fileName", "credit.pdf", "contentType", "application/pdf",
                 "sizeBytes", bytes.length, "source", "MOCK")));
         var hits = new java.util.concurrent.atomic.AtomicInteger();
+        var beforeFileResponse = new java.util.concurrent.atomic.AtomicReference<Runnable>();
         var documentType = new java.util.concurrent.atomic.AtomicReference<>("application/pdf");
         var documentBytes = new java.util.concurrent.atomic.AtomicReference<>(bytes);
         var owner = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", EVIDENCE_PORT), 0);
@@ -123,6 +125,8 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
                     request.sendResponseHeaders(404, -1); return;
                 }
                 hits.incrementAndGet();
+                var callback = download ? beforeFileResponse.getAndSet(null) : null;
+                if (callback != null) callback.run();
                 byte[] body = download ? documentBytes.get() : ExternalCaseFixture.JSON.writeValueAsBytes(metadata);
                 request.getResponseHeaders().add("Content-Type", download ? documentType.get() : "application/json");
                 request.sendResponseHeaders(200, body.length);
@@ -160,6 +164,20 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
             PROVIDER.denied.add(StaffTestProvider.APPROVE);
             mockMvc.perform(get(content).header("Authorization", reviewer)).andExpect(status().isForbidden());
             PROVIDER.denied.remove(StaffTestProvider.APPROVE);
+            // Old request has already passed the first holder check when the owner receives the file GET.
+            beforeFileResponse.set(() -> {
+                try {
+                    reassign(task.getId(), reviewer, "W9000002");
+                } catch (Exception failure) {
+                    throw new IllegalStateException(failure);
+                }
+            });
+            var refused = mockMvc.perform(get(content).header("Authorization", reviewer))
+                    .andExpect(status().isNotFound()).andReturn().getResponse();
+            assertThat(refused.getContentAsString()).doesNotContain("%PDF");
+            mockMvc.perform(get(content).header("Authorization", other)).andExpect(status().isOk())
+                    .andExpect(content().bytes(bytes));
+            reassign(task.getId(), other, "W9000001");
             tasks.delegateTask(task.getId(), "W9000002");
             mockMvc.perform(get(content).header("Authorization", other)).andExpect(status().isNotFound());
             tasks.resolveTask(task.getId());
@@ -167,6 +185,13 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
             mockMvc.perform(get(taskPath).header("Authorization", reviewer)).andExpect(status().isNotFound());
             mockMvc.perform(get(content).header("Authorization", reviewer)).andExpect(status().isNotFound());
         } finally { owner.stop(0); }
+    }
+
+    private void reassign(String taskId, String bearer, String target) throws Exception {
+        mockMvc.perform(put("/api/tasks/" + taskId).header("Authorization", bearer)
+                .contentType("application/json")
+                .content(ExternalCaseFixture.JSON.writeValueAsBytes(Map.of("action", "reassign", "assignee", target))))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.taskId").value(taskId));
     }
 
     private void runCutover(String type, String workflow, String processKey, String logName) throws Exception {

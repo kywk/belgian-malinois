@@ -3,47 +3,87 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import http from '../services/http.js'
 
 const props = defineProps({ taskId: { type: String, required: true } })
+const emit = defineEmits(['access-lost'])
 const evidence = ref(null)
 const preview = ref(null)
 const error = ref('')
 const loading = ref(false)
 const abort = new AbortController()
+let download
+let checking = false
+let timer
 const hasPdfViewer = navigator.pdfViewerEnabled !== false
 const base = '/api/tasks/' + encodeURIComponent(props.taskId) + '/review-evidence'
 
 function closePreview() {
+  download?.abort()
   if (preview.value) URL.revokeObjectURL(preview.value.url)
   preview.value = null
 }
 
-onMounted(async () => {
+function unavailable(cause) {
+  closePreview()
+  evidence.value = null
+  error.value = '此任務的送件附件目前無法取得。'
+  if ([401, 403, 404].includes(cause.response?.status)) emit('access-lost', cause.response.status)
+}
+
+async function refresh() {
+  if (checking || document.hidden || abort.signal.aborted) return
+  checking = true
   try {
-    evidence.value = (await http.get(base, { signal: abort.signal })).data
-  } catch {
-    if (!abort.signal.aborted) error.value = '此任務的送件附件目前無法取得。'
-  }
+    const { data } = await http.get(base, { signal: abort.signal })
+    if (!abort.signal.aborted && !document.hidden) {
+      evidence.value = data
+      error.value = ''
+    }
+  } catch (cause) {
+    if (!abort.signal.aborted) unavailable(cause)
+  } finally { checking = false }
+}
+
+function visibilityChanged() {
+  if (document.hidden) {
+    closePreview()
+    evidence.value = null
+  } else refresh()
+}
+
+onMounted(() => {
+  refresh()
+  window.addEventListener('focus', refresh)
+  document.addEventListener('visibilitychange', visibilityChanged)
+  // A different session can reassign the same task while this page stays visible.
+  timer = window.setInterval(refresh, 5000)
 })
 onBeforeUnmount(() => {
+  window.clearInterval(timer)
+  window.removeEventListener('focus', refresh)
+  document.removeEventListener('visibilitychange', visibilityChanged)
   abort.abort()
   closePreview()
 })
 
 async function openDocument(doc) {
-  if (loading.value) return
+  if (loading.value || !evidence.value) return
   closePreview()
+  download = new AbortController()
+  const { signal } = download
   error.value = ''
   loading.value = true
   const { applicationId, submissionId, revision } = evidence.value
   try {
     const { data } = await http.get(base + '/documents/' + encodeURIComponent(doc.documentId), {
-      params: { applicationId, submissionId, revision }, responseType: 'blob', signal: abort.signal,
+      params: { applicationId, submissionId, revision }, responseType: 'blob', signal,
     })
-    if (abort.signal.aborted) return
+    if (signal.aborted) return
     if (!(data instanceof Blob) || data.size !== doc.sizeBytes || data.type !== doc.contentType ||
         !['image/jpeg', 'image/png', 'application/pdf'].includes(data.type)) throw new Error()
     preview.value = { url: URL.createObjectURL(data), fileName: doc.fileName, type: data.type }
-  } catch {
-    if (!abort.signal.aborted) error.value = '附件無法開啟，請重新進入待辦確認任務與版本。'
+  } catch (cause) {
+    if (signal.aborted) return
+    if ([401, 403, 404].includes(cause.response?.status)) unavailable(cause)
+    else error.value = '附件無法開啟，請重新進入待辦確認任務與版本。'
   } finally { loading.value = false }
 }
 </script>

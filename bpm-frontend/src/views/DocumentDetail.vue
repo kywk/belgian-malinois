@@ -37,7 +37,7 @@
           </template>
         </el-card>
         <TaskReviewEvidence v-if="task?.reviewEvidenceAvailable && task.assignee && !isCountersign && !isDelegated"
-          :key="taskId" :task-id="taskId" />
+          :key="taskId" :task-id="taskId" @access-lost="checkTaskAccess" />
       </el-col>
       <el-col :span="8">
         <ProcessDiagram v-if="task?.processInstanceId" :process-instance-id="task.processInstanceId"
@@ -161,6 +161,22 @@ function openAction(action) {
   actionVisible.value = true
 }
 
+async function checkTaskAccess(status) {
+  // The owner also returns 404 when a still-assigned task has no reviewable snapshot.
+  if (status === 404) {
+    try {
+      const assigned = await getTasks({ assignee: auth.userId })
+      if (assigned.some(t => t.taskId === taskId && t.assignee === auth.userId)) return
+    } catch { /* Cannot establish ownership. Close this detail. */ }
+  }
+  if (route.params.taskId !== taskId) return
+  task.value = null
+  envelope.value = null
+  actionVisible.value = false
+  csVisible.value = false
+  router.push('/tasks')
+}
+
 function onActionDone() {
   actionVisible.value = false
   router.push('/tasks')
@@ -175,6 +191,7 @@ async function loadForm() {
     // Envelope 是後端產物，但載入路徑可能遇到代理錯誤／舊快取；UfRenderer
     // 假定 envelope.data 存在（SDK 契約），缺件時在 setup 就拋錯 —— 這裡先擋，
     // 讓畫面顯示明確原因而不是破圖。
+    if (!task.value) return
     if (!env || typeof env !== 'object' || !env.schemaRef || env.data === undefined) {
       throw new Error('表單回應格式不正確')
     }
