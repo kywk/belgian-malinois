@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /** Ephemeral loopback identity/AuthZ/SAML contract provider; never part of the application. */
 public class StaffTestProvider implements AutoCloseable {
+    static final String INTERVIEW_APPROVE = "bpm:approval:recruitment_interview_review:approve";
     public static final String APPROVE = "bpm:approval:bff_contract_review:approve";
     public static final String ISSUER = "https://staff-sso.example.test";
     public static final String AUDIENCE = "bpm-test";
@@ -68,11 +69,13 @@ public class StaffTestProvider implements AutoCloseable {
         try {
             String path = exchange.getRequestURI().getPath();
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            if (path.equals("/testing/deny")) {
-                denied.add(APPROVE); reply(exchange, 200, Map.of()); return;
+            if (path.equals("/testing/deny") || path.equals("/testing/deny-interview")) {
+                denied.add(path.equals("/testing/deny-interview") ? INTERVIEW_APPROVE : APPROVE);
+                reply(exchange, 200, Map.of()); return;
             }
-            if (path.equals("/testing/regrant")) {
-                denied.clear(); reply(exchange, 200, Map.of()); return;
+            if (path.equals("/testing/regrant") || path.equals("/testing/regrant-interview")) {
+                denied.remove(path.equals("/testing/regrant-interview") ? INTERVIEW_APPROVE : APPROVE);
+                reply(exchange, 200, Map.of()); return;
             }
             if (path.equals("/saml/v1/get-jwt")) {
                 String callback = params(exchange.getRequestURI().getRawQuery()).get("returnUrl");

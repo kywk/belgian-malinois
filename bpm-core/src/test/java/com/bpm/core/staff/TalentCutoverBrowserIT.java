@@ -15,6 +15,9 @@ import org.springframework.test.context.DynamicPropertyRegistrar;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Boots both portal UIs, the agent servlet and the owner against the real BPM/Flowable HTTP server. */
+@org.springframework.test.context.TestPropertySource(properties = {
+        "bpm.external.cases.talent-workflow-issuers[recruitment.interview]=https://talent.test",
+        "bpm.staff.approval-permissions.recruitment-interview-review=" + StaffTestProvider.INTERVIEW_APPROVE})
 @Import(TalentCutoverBrowserIT.CutoverSources.class)
 class TalentCutoverBrowserIT extends StaffIntegrationTest {
     private static final String HOOK_SECRET = UUID.randomUUID().toString();
@@ -39,12 +42,20 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
     }
 
     @Test void talentSubmitStaffApproveAndManagerReadDuringDrain() throws Exception {
+        runCutover("CREDIT_CHECK", "recruitment.credit", "talent-cutover.log");
+    }
+
+    @Test void interviewSubmitStaffApproveAndManagerRead() throws Exception {
+        runCutover("INTERVIEW", "recruitment.interview", "interview-cutover.log");
+    }
+
+    private void runCutover(String type, String workflow, String logName) throws Exception {
         PROVIDER.denied.addAll(java.util.List.of(StaffPermissions.MANAGE, StaffPermissions.DESIGN,
                 StaffPermissions.AUDIT, StaffPermissions.DEPLOY));
         int relayPort = freePort();
-        var external = new ExternalCaseFixture(context, apiPort, true,
+        var external = new ExternalCaseFixture(context, apiPort, workflow,
                 "http://localhost:" + relayPort + "/internal/bpm/v1/webhook");
-        var log = Path.of("target", "talent-cutover.log");
+        var log = Path.of("target", logName);
         var script = Path.of("../../recruitment/scripts/validation/talent-cutover-browser.py");
         var child = new ProcessBuilder("python3", script.toString())
                 .redirectErrorStream(true).redirectOutput(log.toFile()).start();
@@ -52,6 +63,7 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
             try (var input = child.outputWriter()) {
                 input.write(ExternalCaseFixture.JSON.writeValueAsString(Map.ofEntries(
                         Map.entry("base", external.base), Map.entry("key", external.serviceKey + "agent-bff"),
+                        Map.entry("applicationType", type), Map.entry("workflow", workflow),
                         Map.entry("hook", HOOK_SECRET), Map.entry("binding", external.version),
                         Map.entry("definition", external.definition), Map.entry("form", external.form.getId()),
                         Map.entry("container", MSSQL.getContainerId()), Map.entry("port", MSSQL.getMappedPort(1433)),
@@ -64,13 +76,16 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
             var process = context.getBean(HistoryService.class).createHistoricProcessInstanceQuery()
                     .processInstanceBusinessKey(key).singleResult();
             assertThat(process.getEndTime()).isNotNull();
+            assertThat(process.getProcessDefinitionId()).isEqualTo(external.definition);
             var submission = key.split("/")[2];
             var receipt = external.db.queryForMap("""
-                    SELECT request_id, trace_id, JSON_VALUE(actor_json, '$.type') AS actor_type,
+                    SELECT request_id, trace_id, workflow_code, definition_id, form_id, form_version, JSON_VALUE(actor_json, '$.type') AS actor_type,
                         JSON_VALUE(actor_json, '$.issuer') AS issuer, JSON_VALUE(actor_json, '$.subject') AS subject
                     FROM bpm_case_request WHERE system_id='agent-bff' AND business_key=? AND process_id=?
                     """, key, process.getId());
             assertThat(receipt).containsEntry("request_id", submission).containsEntry("trace_id", submission)
+                    .containsEntry("workflow_code", workflow).containsEntry("definition_id", external.definition)
+                    .containsEntry("form_id", external.form.getId()).containsEntry("form_version", 1)
                     .containsEntry("actor_type", "TALENT").containsEntry("issuer", "https://talent.test")
                     .containsEntry("subject", "talent-001");
             var status = external.get(ExternalCaseFixture.COLLECTION + "/" + process.getId());

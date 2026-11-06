@@ -30,16 +30,20 @@ class ExternalCaseFixture {
     final FormDefinition form;
     final String definition;
     final String base;
+    private final String processKey;
+    private final boolean interview;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
     ExternalCaseFixture(ApplicationContext ctx, int port) {
         this(ctx, port, false);
     }
     ExternalCaseFixture(ApplicationContext ctx, int port, boolean talent) {
-        this(ctx, port, talent, null);
+        this(ctx, port, talent ? "recruitment.credit" : "contract.staff-review", null);
     }
-    ExternalCaseFixture(ApplicationContext ctx, int port, boolean talent, String completionHook) {
-        String workflow = talent ? "recruitment.credit" : "contract.staff-review";
+    ExternalCaseFixture(ApplicationContext ctx, int port, String workflow, String completionHook) {
+        boolean talent = workflow.startsWith("recruitment.");
+        interview = workflow.equals("recruitment.interview");
+        processKey = interview ? "recruitment-interview-review" : "bff-contract-review";
         String domain = talent ? "recruitment" : "contract-fixture";
         base = "http://127.0.0.1:" + port;
         db = new JdbcTemplate(ctx.getBean("primaryDataSource", DataSource.class));
@@ -51,7 +55,7 @@ class ExternalCaseFixture {
             sys.setEnabled(true);
             sys.setApiKey(ctx.getBean(ApiKeyHasher.class).hash(serviceKey + name));
             sys.setAllowedActions("[\"start_process\",\"query_status\"]");
-            sys.setAllowedProcessKeys("[\"bff-contract-review\"]");
+            sys.setAllowedProcessKeys(JSON.writeValueAsString(List.of(processKey)));
             sys.setAllowedCandidateGroups("[]");
             sys.setAllowedWorkerTopics("[]");
             sys.setAllowOnBehalfOf(false);
@@ -59,13 +63,13 @@ class ExternalCaseFixture {
             systems.saveAndFlush(sys);
         }
         form = new FormDefinition();
-        String formKey = "case-" + UUID.randomUUID();
+        String formKey = (interview ? "interview-review-" : "case-") + UUID.randomUUID();
         form.setFormKey(formKey);
-        form.setName("外部送件驗收");
+        form.setName(interview ? "面談送審單" : "外部送件驗收");
         form.setStatus("published");
         form.setSchemaJson(JSON.writeValueAsString(Map.of("$uniform", "1.0", "key", formKey, "title",
-                Map.of("zh-TW", "案件"), "requires", Map.of("core", "^1.0"), "root",
-                List.of(Map.of("id", "n_note", "type", "textarea", "key", talent ? "submissionId" : "note", "label", "說明")))));
+                Map.of("zh-TW", interview ? "面談送審單" : "案件"), "requires", Map.of("core", "^1.0"), "root",
+                List.of(Map.of("id", "n_note", "type", "textarea", "key", talent ? "submissionId" : "note", "label", interview ? "面談送件編號" : "說明")))));
         ctx.getBean(FormDefinitionRepository.class).saveAndFlush(form);
         var nextForm = new FormDefinition();
         nextForm.setFormKey(formKey);
@@ -81,9 +85,11 @@ class ExternalCaseFixture {
         db.update("""
                 INSERT INTO bpm_case_binding (workflow_code,binding_version,caller_system,domain,workflow_role,
                 definition_key,definition_id,form_id,form_version,routing_rule,approval_permission,enabled,approved_end,returned_node)
-                VALUES (?,?,'agent-bff',?,'review','bff-contract-review',?,?,1,
+                VALUES (?,?,'agent-bff',?,'review',?,?,?,1,
                 'review-team',?,1,'endApproved',?)
-                """, workflow, version, domain, definition, form.getId(), StaffTestProvider.APPROVE, talent && completionHook == null ? "review" : null);
+                """, workflow, version, domain, processKey, definition, form.getId(),
+                interview ? StaffTestProvider.INTERVIEW_APPROVE : StaffTestProvider.APPROVE,
+                talent && completionHook == null ? "review" : null);
     }
     String deploy(RepositoryService repository, String key) {
         return deploy(repository, key, null);
@@ -91,7 +97,7 @@ class ExternalCaseFixture {
     private String deploy(RepositoryService repository, String key, String completionHook) {
         var model = new BpmnModel();
         var process = new org.flowable.bpmn.model.Process();
-        process.setId("bff-contract-review");
+        process.setId(processKey);
         if (completionHook != null) {
             var hooks = extension("webhooks");
             var hook = extension("webhook");
@@ -106,7 +112,7 @@ class ExternalCaseFixture {
         var task = new UserTask();
         task.setId("review");
         task.setFormKey(key);
-        task.setName("內勤案件審核");
+        task.setName(interview ? "準增員面談審核" : "內勤案件審核");
         task.setAssignee("${firstTaskAssignee}");
         var end = new EndEvent();
         end.setId("endApproved");

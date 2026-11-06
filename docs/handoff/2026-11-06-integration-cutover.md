@@ -13,7 +13,7 @@
 
 正式切換狀態為 **待環境驗收**。不可用本機 fixture 作為正式服務地址。環境 owner 在 SIT/UAT 以核准的測試帳號、資料與流程重走同一條完整路徑。應記錄 requestId、businessKey、processInstanceId、revision、授權結果與來源；憑證由 secret 管理提供。
 
-這次操作的是聯徵（CREDIT_CHECK）。面談（INTERVIEW）使用同一送件與對帳機制，正式切換前仍須以該類型自己的流程、表單、文件與效期規則驗收。SMTP 使用 MailHog，BPM 的 Redis 使用測試容器；本次驗收的結案通知走 RabbitMQ 與 HTTP webhook。
+第 6 項原驗收操作聯徵（CREDIT_CHECK）；本輪追加面談（INTERVIEW）的專屬流程、送審表單與簽核權限。兩類案件正式切換前仍須各自完成環境驗收。SMTP 使用 MailHog，BPM 的 Redis 使用測試容器；本次驗收的結案通知走 RabbitMQ 與 HTTP webhook。
 
 ## 啟用與回退
 
@@ -62,10 +62,24 @@ export JAVA25_HOME
 (JAVA_HOME="$JAVA25_HOME" PATH="$JAVA25_HOME/bin:$PATH" mvn -o -ntp -B \
   '-Dtest=TalentProviderBoundaryTest,TalentPhase2IntegrationTest#persistenceVersionEvidenceAndLegacyIsolation+concurrentSubmitAndCreateAreIdempotent+missingAndMismatchedConsentOrUploadNeverSucceed+routesRejectSharingAndAgentActorsAndUnknownFields' test)
 (cd ../bpm/bpm-core && JAVA_HOME="$JAVA21_HOME" PATH="$JAVA21_HOME/bin:$PATH" mvn -o -ntp -B \
-  '-Dtest=TalentCutoverBrowserIT#talentSubmitStaffApproveAndManagerReadDuringDrain' test)
+  '-Dtest=TalentCutoverBrowserIT#talentSubmitStaffApproveAndManagerReadDuringDrain+interviewSubmitStaffApproveAndManagerRead' test)
 (cd ../bpm/bpm-core && JAVA_HOME="$JAVA21_HOME" PATH="$JAVA21_HOME/bin:$PATH" mvn -o -ntp -B \
   "-Dtalent.restart.script=$PWD/../../recruitment/scripts/validation/talent-workflow-restart.py" \
   '-Dtest=StaffIntegrationTest#talentSubmissionLocksActorAndCreatesExactlyOneStaffCase+restartTalentOwnerAfterBpmCommit' test)
 ```
 
-瀏覽器以三種身分分開操作。跨服務 IT 的輸出見 `bpm-core/target/talent-cutover.log` 及 Surefire 報告。第 5 項重啟案例只因共用啟動程式和驗章路徑有異動而定向重跑，其餘歷史紀錄沿用。
+瀏覽器以三種身分分開操作。跨服務 IT 的輸出見 `bpm-core/target/interview-cutover.log`（面談）、`bpm-core/target/talent-cutover.log`（聯徵） 及 Surefire 報告。第 5 項重啟案例只因共用啟動程式和驗章路徑有異動而定向重跑，其餘歷史紀錄沿用。
+
+## 面談追加驗收
+
+本輪自第 6 項 BPM `4d553f21`、agent `76b13983`、recruitment `e0a3e5a3` 開始。面談與聯徵分開執行，每個情境建立獨立 recruitment DB。agent 測試 servlet 只開放該情境的一個 workflow。
+
+- **本機實接**　Chromium 操作 Flashlight 的面談表單，填寫基本資料、10 題自評與 12 筆面試回答，保存 PNG 照片、接受面談同意書後送件。recruitment 以 SQL Server 保存送件快照、outbox 和對帳結果；agent 經 BPM v1 啟動 Flowable。BPM 內勤頁使用 SSO code 交換及 RS256 驗章。內勤核決後，由 RabbitMQ 送出實際 HMAC webhook；準增員本人與有效管理人分別讀回結果。
+- **測試來源**　兩個入口使用合成帳號及簽章金鑰；SAML、Org、AuthZ、本人／外勤資格對照、agent 的 Redis 公鑰讀取均為 fixture。面談快照使用 dev 表單、同意書及附件 provider。BPM 部署專屬驗收流程 `recruitment-interview-review`、面談送審單 v1 與 `bpm:approval:recruitment_interview_review:approve`。BPM 表單只帶 submissionId，完整問答和照片歸 recruitment 保存。
+- **正式環境缺口**　仍需權責單位提供核准的面談 BPMN／表單及權限映射、身分與組織來源、CMS 同意文件、ECM 儲存、面談效期政策與環境憑證。正式 UAT 與效期計算待這些來源就緒。
+
+本輪面談的 requestId／traceId 為 `1ff515d2-b8b9-4a52-85fc-aa14faa8c2c4`，businessKey 為 `recruitment/36a9c43a-8ee2-49a0-bbbb-8eb0c106340e/1ff515d2-b8b9-4a52-85fc-aa14faa8c2c4/review`，唯一已完成的 processInstanceId 為 `6ad790fd-a3ed-4dce-972f-43bd3d69ed5d`。內勤頁取得的 task/form 是面談 schema v1，顯示「面談送件編號」，回應內的 submissionId 與本人提交相同。只撤面談核決權時簽核回 403，恢復該權限後核准，兩端查到同一結果。
+
+**下波待修的通知欄位。** 面談 definitionId 是 UUID。結案 log 記錄的流程鍵為 `1df5c0dd-d9bc-11f1-a9bf-a2c37304dde7`。[ProcessCompletedListener](../../bpm-core/src/main/java/com/bpm/core/webhook/ProcessCompletedListener.java) 對不含冒號的 definitionId 直接回傳原值，並將其寫入 payload.processDefinitionKey 及 Rabbit routing key。本輪的 `bpm.webhook.#` 能收到通知，agent 也以 businessKey 與 processInstanceId 完成權威對帳。只訂閱 `bpm.webhook.recruitment-interview-review` 的消費端有漏收風險，應在正式切換前修正並驗證。
+
+本輪只執行 3 個相關 JUnit 案例，全部通過，失敗、錯誤、略過均為 0。新增面談 Chromium 1 個，共用 runner 的聯徵 Chromium 1 個，共用 owner 啟動設定及撤權 fixture 的 worker 強制重啟案例 1 個。聯徵 processInstanceId 為 `b37e667c-872c-4642-ab90-0b5aa53b1031`；重啟案例原 requestId 為 `387ce75f-904e-4a96-8891-9999acc16476`。沿用第 6 項其餘測試結果與兩份 Surefire classpath；本輪僅以 `mvn -o test-compile` 重編 agent 測試橋接程式。重跑這一輪時，使用前述雙 Chromium 選擇器，worker 部分只選 `StaffIntegrationTest#restartTalentOwnerAfterBpmCommit` 並傳入相同的 `talent.restart.script`。
