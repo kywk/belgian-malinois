@@ -11,6 +11,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
+import org.springframework.beans.factory.annotation.Autowired;
+import java.util.concurrent.TimeUnit;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.support.DefaultMessagePropertiesConverter;
 import org.springframework.http.HttpStatus;
@@ -99,12 +102,8 @@ import java.util.Map;
  * nack 本身也失敗時，訊息會停留在 unacked，連線關閉時由 broker 自動
  * requeue —— 不會遺失。
  *
- * <p>⚠️ <b>已知邊界：重投到「已不存在的綁定」會被靜默丟棄。</b>
- * 發布沒有開 mandatory 旗標（開了也要處理 basic.return 的非同步回呼，
- * 不在本輪範圍）。若原始 exchange／binding 已被刪除，訊息不會進到任何
- * 佇列，但這裡會照樣 ack —— 佇列不會無聲長大，但那一筆也就沒了。
- * 實務上這代表「重放前先確認原流程／原佇列還在」；要讓它變成可偵測的
- * 錯誤需要 publisher confirms，是後續工項。
+ * <p>重放以 mandatory 發布，等待同一筆訊息的 broker confirm；
+ * 收到 basic.return、nack 或等待逾時時保留原訊息。
  *
  * <h2>重放的 webhook 會再走一次 SSRF 閘門</h2>
  *
@@ -154,12 +153,19 @@ public class DlqReplayService {
     private final AuditEventPublisher auditPublisher;
     private final ObjectMapper objectMapper;
 
-    public DlqReplayService(ConnectionFactory connectionFactory,
+    @Autowired
+    public DlqReplayService(ConnectionFactory connectionFactory, AuditEventPublisher auditPublisher,
+                            ObjectMapper objectMapper) {
+        this(connectionFactory, new RabbitTemplate(connectionFactory), auditPublisher, objectMapper);
+    }
+
+    DlqReplayService(ConnectionFactory connectionFactory,
                             RabbitTemplate rabbitTemplate,
                             AuditEventPublisher auditPublisher,
                             ObjectMapper objectMapper) {
         this.connectionFactory = connectionFactory;
         this.rabbitTemplate = rabbitTemplate;
+        this.rabbitTemplate.setMandatory(true);
         this.auditPublisher = auditPublisher;
         this.objectMapper = objectMapper;
     }
@@ -222,7 +228,15 @@ public class DlqReplayService {
                     // 訊息上、但不再被更新；4.x 不再解讀）。重放的訊息在下游
                     // 看起來與「第一次發布」相同（這正是「重放」要的語意）；
                     // origin 標頭是 parking 的契約、對下游無意義，留著無害。
-                    rabbitTemplate.send(destination.exchange(), destination.routingKey(), message);
+                    if (!connectionFactory.isPublisherConfirms() || !connectionFactory.isPublisherReturns()) {
+                        throw new IllegalStateException("Replay requires correlated publisher confirms and returns");
+                    }
+                    var correlation = new CorrelationData();
+                    rabbitTemplate.send(destination.exchange(), destination.routingKey(), message, correlation);
+                    var confirm = correlation.getFuture().get(10, TimeUnit.SECONDS);
+                    if (!confirm.ack() || correlation.getReturned() != null) {
+                        throw new IllegalStateException("Broker rejected or returned the replay");
+                    }
                 } catch (Exception e) {
                     log.error("DLQ 重放失敗，訊息放回佇列並停止本輪。queue={} 目的地={}/{} 原因={}",
                             dlqQueue, destination.exchange(), destination.routingKey(), e.getMessage(), e);
@@ -230,6 +244,7 @@ public class DlqReplayService {
                     // 重投失敗 → 放回 DLQ。這不是「再試一次」，只是不把訊息吃掉；
                     // 下一輪由人決定（可能故障還沒修好）。
                     nackQuietly(channel, deliveryTag);
+                    if (e instanceof InterruptedException) Thread.currentThread().interrupt();
                     // 剛 nack 的這筆回到佇列，快照 +1；僅供參考。
                     remaining = remaining == null ? null : remaining + 1;
                     break;

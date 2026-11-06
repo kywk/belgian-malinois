@@ -104,6 +104,8 @@ spring:
         # 對應的既有欄位轉型見 db/migration 的 nvarchar_all_text_columns。
         use_nationalized_character_data: true
   rabbitmq:
+    publisher-confirm-type: correlated
+    publisher-returns: true
     host: localhost
     port: 5672
     username: bpm
