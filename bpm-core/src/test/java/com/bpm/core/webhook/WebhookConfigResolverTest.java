@@ -306,11 +306,26 @@ class WebhookConfigResolverTest {
         }
 
         @Test
+        void opaqueDefinitionIdSelectsTheCompletedProcessFromTheDeployment() {
+            String definitionId = "12345678-1234-1234-1234-123456789abc";
+            var model = modelWithProcessHook(hook("complete", "https://erp.example/leave", null, null));
+            var interview = new org.flowable.bpmn.model.Process();
+            interview.setId("interview");
+            addWebhooks(interview, hook("complete", "https://erp.example/interview", null, null));
+            model.addProcess(interview);
+            when(repositoryService.getBpmnModel(definitionId)).thenReturn(model);
+
+            assertThat(resolver.resolveForProcess(definitionId, "interview")).containsExactly(
+                    new WebhookConfig("complete", "https://erp.example/interview", "POST"));
+            assertThat(resolver.resolveForProcess(definitionId, "missing")).isEmpty();
+        }
+
+        @Test
         @DisplayName("讀 <process> 上的設定，event 預設 process.completed（不是 create）")
         void processLevelDefaults() {
             stubModel(modelWithProcessHook(hook(null, "https://erp.example/done", null, null)));
 
-            assertThat(resolver.resolveForProcess(DEF_ID)).containsExactly(new WebhookConfig(
+            assertThat(resolver.resolveForProcess(DEF_ID, "leave")).containsExactly(new WebhookConfig(
                     WebhookConfig.DEFAULT_PROCESS_EVENT, "https://erp.example/done", "POST", null));
         }
 
@@ -326,7 +341,7 @@ class WebhookConfigResolverTest {
             model.addProcess(process);
             stubModel(model);
 
-            assertThat(resolver.resolveForProcess(DEF_ID)).isEmpty();
+            assertThat(resolver.resolveForProcess(DEF_ID, "leave")).isEmpty();
         }
 
         @Test
@@ -340,18 +355,18 @@ class WebhookConfigResolverTest {
             model.addProcess(process);
             stubModel(model);
 
-            WebhookConfig config = resolver.resolveForProcess(DEF_ID).getFirst();
+            WebhookConfig config = resolver.resolveForProcess(DEF_ID, "leave").getFirst();
             assertThat(config.event()).isEqualTo(WebhookConfig.DEFAULT_PROCESS_EVENT);
         }
 
         @Test
         @DisplayName("null definition id → 空；repository 失敗 → 空且不拋")
         void boundaries() {
-            assertThat(resolver.resolveForProcess(null)).isEmpty();
+            assertThat(resolver.resolveForProcess(null, "leave")).isEmpty();
 
             when(repositoryService.getBpmnModel(DEF_ID)).thenThrow(new RuntimeException("boom"));
-            assertThatCode(() -> resolver.resolveForProcess(DEF_ID)).doesNotThrowAnyException();
-            assertThat(resolver.resolveForProcess(DEF_ID)).isEmpty();
+            assertThatCode(() -> resolver.resolveForProcess(DEF_ID, "leave")).doesNotThrowAnyException();
+            assertThat(resolver.resolveForProcess(DEF_ID, "leave")).isEmpty();
         }
     }
 

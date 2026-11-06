@@ -47,7 +47,7 @@ import static org.mockito.Mockito.when;
 class ProcessCompletedListenerTest {
 
     private static final String PROC_DEF =
-            "leave-approval:1:12345678-1234-1234-1234-123456789abc";
+            "12345678-1234-1234-1234-123456789abc";
 
     // ── 事件對應（單獨測 static 方法）────────────────────────────────
 
@@ -146,6 +146,7 @@ class ProcessCompletedListenerTest {
             ExecutionEntity exec = mock(ExecutionEntity.class);
             when(exec.getProcessInstanceId()).thenReturn("pi-1");
             when(exec.getProcessDefinitionId()).thenReturn(PROC_DEF);
+            when(exec.getProcessDefinitionKey()).thenReturn("leave-approval");
             when(exec.getBusinessKey()).thenReturn("BK-1");
 
             event = mock(FlowableEntityEventImpl.class);
@@ -159,7 +160,7 @@ class ProcessCompletedListenerTest {
             // 歷史查不到 → 退到 runtime；給一個 approved=true 讓 result 可判定。
             when(runtimeService.getVariables("pi-1")).thenReturn(Map.of("approved", true));
 
-            when(resolver.resolveForProcess(PROC_DEF)).thenReturn(configs);
+            when(resolver.resolveForProcess(PROC_DEF, "leave-approval")).thenReturn(configs);
         }
 
         @Test

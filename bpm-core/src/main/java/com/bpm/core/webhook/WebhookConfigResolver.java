@@ -22,7 +22,7 @@ import java.util.List;
  * <ul>
  *   <li><b>節點層</b> —— {@link #resolve(String, String)}，讀 {@code <userTask>} 等
  *       {@link FlowElement} 上的設定，未填 event 預設 {@code create}。</li>
- *   <li><b>流程層</b> —— {@link #resolveForProcess(String)}，讀 {@code <process>}
+ *   <li><b>流程層</b> —— {@link #resolveForProcess(String, String)}，讀 {@code <process>}
  *       上的設定，未填 event 預設 {@code process.completed}。</li>
  * </ul>
  * 兩層共用同一組私有解析方法，所以「格式優先順序」與「有元素就是權威」只寫一份。
@@ -177,16 +177,17 @@ public class WebhookConfigResolver {
      * 「有 {@code <flowable:webhooks>} 元素就是權威（即使內容是空的）」
      * 這條規則因此在兩層自動一致。
      *
-     * @param processDefinitionId 流程定義 id（{@code key:version:deploymentId}）
+     * @param processDefinitionId 實例綁定的部署定義 ID
+     * @param processDefinitionKey 該定義的流程鍵
      * @return 沒有設定時回空清單，<b>不</b>回 null
      */
-    public List<WebhookConfig> resolveForProcess(String processDefinitionId) {
-        if (processDefinitionId == null) return List.of();
+    public List<WebhookConfig> resolveForProcess(String processDefinitionId, String processDefinitionKey) {
+        if (processDefinitionId == null || processDefinitionKey == null) return List.of();
 
         Process process;
         try {
             BpmnModel model = repositoryService.getBpmnModel(processDefinitionId);
-            process = processOf(model, processDefinitionId);
+            process = model.getProcessById(processDefinitionKey);
         } catch (Exception e) {
             // 與節點層同樣的取捨：設定讀不到頂多是不投遞，不得讓結案失敗。
             log.warn("讀取流程 {} 的流程層 webhook 設定失敗，本次結案不投遞：{}",

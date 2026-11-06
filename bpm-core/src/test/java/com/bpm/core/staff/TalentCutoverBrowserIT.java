@@ -8,6 +8,10 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.flowable.engine.HistoryService;
 import org.junit.jupiter.api.Test;
+import org.springframework.amqp.core.AmqpAdmin;
+import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.TopicExchange;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
@@ -42,14 +46,14 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
     }
 
     @Test void talentSubmitStaffApproveAndManagerReadDuringDrain() throws Exception {
-        runCutover("CREDIT_CHECK", "recruitment.credit", "talent-cutover.log");
+        runCutover("CREDIT_CHECK", "recruitment.credit", "bff-contract-review", "talent-cutover.log");
     }
 
     @Test void interviewSubmitStaffApproveAndManagerRead() throws Exception {
-        runCutover("INTERVIEW", "recruitment.interview", "interview-cutover.log");
+        runCutover("INTERVIEW", "recruitment.interview", "recruitment-interview-review", "interview-cutover.log");
     }
 
-    private void runCutover(String type, String workflow, String logName) throws Exception {
+    private void runCutover(String type, String workflow, String processKey, String logName) throws Exception {
         PROVIDER.denied.addAll(java.util.List.of(StaffPermissions.MANAGE, StaffPermissions.DESIGN,
                 StaffPermissions.AUDIT, StaffPermissions.DEPLOY));
         int relayPort = freePort();
@@ -57,6 +61,11 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
                 "http://localhost:" + relayPort + "/internal/bpm/v1/webhook");
         var log = Path.of("target", logName);
         var script = Path.of("../../recruitment/scripts/validation/talent-cutover-browser.py");
+        var broker = context.getBean(AmqpAdmin.class);
+        var queue = broker.declareQueue();
+        String routingKey = "bpm.webhook." + processKey;
+        broker.declareBinding(BindingBuilder.bind(queue).to(context.getBean("bpmExchange", TopicExchange.class))
+                .with(routingKey));
         var child = new ProcessBuilder("python3", script.toString())
                 .redirectErrorStream(true).redirectOutput(log.toFile()).start();
         try {
@@ -77,6 +86,17 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
                     .processInstanceBusinessKey(key).singleResult();
             assertThat(process.getEndTime()).isNotNull();
             assertThat(process.getProcessDefinitionId()).isEqualTo(external.definition);
+            if ("INTERVIEW".equals(type)) {
+                assertThat(UUID.fromString(external.definition).toString()).isEqualTo(external.definition);
+            }
+            var message = context.getBean(RabbitTemplate.class).receive(queue.getName(), 5000);
+            assertThat(message).as("completion routed to %s", routingKey).isNotNull();
+            assertThat(message.getMessageProperties().getReceivedRoutingKey()).isEqualTo(routingKey);
+            var payload = ExternalCaseFixture.JSON.readTree(message.getBody());
+            assertThat(payload.path("event").asString()).isEqualTo("process.completed");
+            assertThat(payload.path("processDefinitionKey").asString()).isEqualTo(processKey);
+            assertThat(payload.path("businessKey").asString()).isEqualTo(key);
+            assertThat(payload.path("processInstanceId").asString()).isEqualTo(process.getId());
             var submission = key.split("/")[2];
             var receipt = external.db.queryForMap("""
                     SELECT request_id, trace_id, workflow_code, definition_id, form_id, form_version, JSON_VALUE(actor_json, '$.type') AS actor_type,
@@ -91,10 +111,12 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
             var status = external.get(ExternalCaseFixture.COLLECTION + "/" + process.getId());
             assertThat(status.get("outcome").asString()).isEqualTo("APPROVED");
             assertThat(status.get("sourceRevision").asLong()).isEqualTo(2);
-            System.out.println("Chromium cutover: " + key + " process=" + process.getId());
+            System.out.println("Chromium cutover: " + key + " process=" + process.getId()
+                    + " definition=" + external.definition + " routingKey=" + routingKey);
         } finally {
             child.descendants().forEach(ProcessHandle::destroyForcibly);
             child.destroyForcibly();
+            broker.deleteQueue(queue.getName());
         }
     }
 }

@@ -81,7 +81,7 @@ public class ProcessCompletedListener implements FlowableEventListener {
                 && entityEvent.getEntity() instanceof ExecutionEntity exec) {
 
             String processInstanceId = exec.getProcessInstanceId();
-            String processDefKey = extractKey(exec.getProcessDefinitionId());
+            String processDefKey = exec.getProcessDefinitionKey();
 
             // ⚠️ 這裡原本是正確性 bug（security-audit P2-1 最後一點）。
             //
@@ -162,7 +162,7 @@ public class ProcessCompletedListener implements FlowableEventListener {
             // ⚠️ 這一段在 auditPublisher.publish() 之後：稽核不該取決於
             // 外部系統是否可達（見上方註解）。沒有設定而提前 return，稽核仍已寫入。
             List<WebhookConfig> configs =
-                    configResolver.resolveForProcess(exec.getProcessDefinitionId());
+                    configResolver.resolveForProcess(exec.getProcessDefinitionId(), processDefKey);
             if (configs.isEmpty()) {
                 log.debug("流程 {} 沒有流程層 webhook 設定，結案不發送", processDefKey);
                 return;
@@ -304,11 +304,5 @@ public class ProcessCompletedListener implements FlowableEventListener {
         return "all".equalsIgnoreCase(want)
                 || WebhookConfig.DEFAULT_PROCESS_EVENT.equalsIgnoreCase(want)
                 || "complete".equalsIgnoreCase(want);
-    }
-
-    private String extractKey(String processDefinitionId) {
-        if (processDefinitionId == null) return "";
-        int idx = processDefinitionId.indexOf(':');
-        return idx > 0 ? processDefinitionId.substring(0, idx) : processDefinitionId;
     }
 }

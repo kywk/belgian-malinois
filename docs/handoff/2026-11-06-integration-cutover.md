@@ -80,6 +80,28 @@ export JAVA25_HOME
 
 本輪面談的 requestId／traceId 為 `1ff515d2-b8b9-4a52-85fc-aa14faa8c2c4`，businessKey 為 `recruitment/36a9c43a-8ee2-49a0-bbbb-8eb0c106340e/1ff515d2-b8b9-4a52-85fc-aa14faa8c2c4/review`，唯一已完成的 processInstanceId 為 `6ad790fd-a3ed-4dce-972f-43bd3d69ed5d`。內勤頁取得的 task/form 是面談 schema v1，顯示「面談送件編號」，回應內的 submissionId 與本人提交相同。只撤面談核決權時簽核回 403，恢復該權限後核准，兩端查到同一結果。
 
-**下波待修的通知欄位。** 面談 definitionId 是 UUID。結案 log 記錄的流程鍵為 `1df5c0dd-d9bc-11f1-a9bf-a2c37304dde7`。[ProcessCompletedListener](../../bpm-core/src/main/java/com/bpm/core/webhook/ProcessCompletedListener.java) 對不含冒號的 definitionId 直接回傳原值，並將其寫入 payload.processDefinitionKey 及 Rabbit routing key。本輪的 `bpm.webhook.#` 能收到通知，agent 也以 businessKey 與 processInstanceId 完成權威對帳。只訂閱 `bpm.webhook.recruitment-interview-review` 的消費端有漏收風險，應在正式切換前修正並驗證。
+**修正前的通知欄位（修正結果見下節）。** 面談 definitionId 是 UUID。結案 log 記錄的流程鍵為 `1df5c0dd-d9bc-11f1-a9bf-a2c37304dde7`。[ProcessCompletedListener](../../bpm-core/src/main/java/com/bpm/core/webhook/ProcessCompletedListener.java) 對不含冒號的 definitionId 直接回傳原值，並將其寫入 payload.processDefinitionKey 及 Rabbit routing key。本輪的 `bpm.webhook.#` 能收到通知，agent 也以 businessKey 與 processInstanceId 完成權威對帳。只訂閱 `bpm.webhook.recruitment-interview-review` 的消費端有漏收風險，應在正式切換前修正並驗證。
 
 本輪只執行 3 個相關 JUnit 案例，全部通過，失敗、錯誤、略過均為 0。新增面談 Chromium 1 個，共用 runner 的聯徵 Chromium 1 個，共用 owner 啟動設定及撤權 fixture 的 worker 強制重啟案例 1 個。聯徵 processInstanceId 為 `b37e667c-872c-4642-ab90-0b5aa53b1031`；重啟案例原 requestId 為 `387ce75f-904e-4a96-8891-9999acc16476`。沿用第 6 項其餘測試結果與兩份 Surefire classpath；本輪僅以 `mvn -o test-compile` 重編 agent 測試橋接程式。重跑這一輪時，使用前述雙 Chromium 選擇器，worker 部分只選 `StaffIntegrationTest#restartTalentOwnerAfterBpmCommit` 並傳入相同的 `talent.restart.script`。
+
+## 結案通知流程鍵修正
+
+本輪基線為 BPM `github/main 718fcb0c`、agent `origin/codex/recruitment 2bc05df6`、recruitment `origin/codex/recruitment 447ff75c`。在 BPM 基線用 UUID 執行 listener 的 `sendsContractFields`，攔到的 Rabbit routing key 是 `bpm.webhook.12345678-1234-1234-1234-123456789abc`，payload 的 `processDefinitionKey` 也是該 UUID。修正後從結案 execution 取得該部署定義的流程鍵，用於結案稽核、payload 與路由。依實例的 definitionId 載入 BPMN，再按該鍵選取對應流程的 webhook 設定。
+
+**本機實接。** 每案在送件前宣告獨立 RabbitMQ queue，只綁定表列 routing key。Chromium 核准後，由該 queue 取出 `process.completed`，逐欄核對 payload 的流程鍵、原 submission 的 businessKey、以及 Flowable 唯一已結案的 processInstanceId。另一份訊息由既有 WebhookConsumer 簽發，agent 用收到的原始 HTTP body 重算 HMAC-SHA256。兩案錯簽均回 401，原簽均回 204。在 SQL 輪詢已延後的條件下，原 submission 經通知喚醒對帳，管理人查得 `APPROVED@2`。
+
+| 案型 | 實收 routing key | 部署 definitionId | businessKey | processInstanceId |
+|---|---|---|---|---|
+| 面談 | `bpm.webhook.recruitment-interview-review` | `2ebdd70a-d9bf-11f1-8019-8e18c697c7b0` | `recruitment/3655ed2b-f903-406f-9274-331ab4870ecc/076d11ce-1030-406c-a67f-6ed9af36280d/review` | `62bd336a-a5e8-4d19-a527-331f4a549fba` |
+| 聯徵 | `bpm.webhook.bff-contract-review` | `bff-contract-review:1:5ffbe293-d9bf-11f1-8019-8e18c697c7b0` | `recruitment/1b8909e2-e94b-4e85-a929-2ec74ee1d0ea/dda0162b-9a65-44f6-b5e8-9d93f169f63f/review` | `3d1023f3-82a1-4462-bff4-a3fba083a4ef` |
+
+面談 payload 的流程鍵為 `recruitment-interview-review`，聯徵為 `bff-contract-review`。聯徵的 definitionId 仍是含版本的冒號格式，原有訂閱與 HMAC 接點均驗收通過。
+
+**Fixture 與適用範圍。** queue 綁定與部署的兩份 BPMN 為驗收設定，BPM 與 agent 使用測試 HMAC 金鑰，HTTP relay 額外送出錯簽副本。本人／管理人資格、SAML、Org、AuthZ、agent 的 Redis 公鑰讀取、表單與附件來源沿用上節 fixture。SQL Server、Flowable、RabbitMQ、agent 驗章與 recruitment 對帳均在本機實跑。正式切換仍待 SIT/UAT 的流程、身分來源與憑證驗收。
+
+**定向重跑。** 使用上節的雙 JDK、Node 與既有 Surefire classpath。在 BPM 的 `bpm-core` 執行以下選擇器。本輪 19 例通過，失敗、錯誤、略過皆為 0，涵蓋 listener 投遞 6 例、流程層設定單元測試 5 例、已部署設定讀取 6 例、跨服務 Chromium 2 例。瀏覽器案例的 Surefire 輸出含兩案識別碼及實收 routing key。
+
+```sh
+mvn -o -ntp -B \
+  '-Dtest=ProcessCompletedListenerTest$Wiring,WebhookConfigResolverTest$ProcessLevel,ProcessWebhookWiringTest$Resolution,TalentCutoverBrowserIT#interviewSubmitStaffApproveAndManagerRead+talentSubmitStaffApproveAndManagerReadDuringDrain' test
+```

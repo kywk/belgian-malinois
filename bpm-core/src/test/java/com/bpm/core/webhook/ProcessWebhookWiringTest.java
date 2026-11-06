@@ -176,7 +176,7 @@ class ProcessWebhookWiringTest extends IntegrationTestBase {
         var pd = repositoryService.createProcessDefinitionQuery()
                 .processDefinitionKey(processKey).latestVersion().singleResult();
         assertThat(pd).as("流程 %s 必須已部署", processKey).isNotNull();
-        return resolver.resolveForProcess(pd.getId());
+        return resolver.resolveForProcess(pd.getId(), pd.getKey());
     }
 
     // ── 端到端投遞 ──────────────────────────────────────────────────
@@ -361,8 +361,8 @@ class ProcessWebhookWiringTest extends IntegrationTestBase {
             deployProcess("pr-r5", "");
 
             assertThat(resolveForProcess("pr-r5")).isEmpty();
-            assertThat(resolver.resolveForProcess(null)).isEmpty();
-            assertThat(resolver.resolveForProcess("no-such-definition:1:999"))
+            assertThat(resolver.resolveForProcess(null, "pr-r5")).isEmpty();
+            assertThat(resolver.resolveForProcess("no-such-definition:1:999", "no-such-definition"))
                     .as("查不到流程定義時不得讓結案失敗")
                     .isEmpty();
         }
