@@ -28,6 +28,7 @@ public class WebhookConsumer {
 
     private final WebhookUrlPolicy urlPolicy;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public WebhookConsumer(ObjectMapper objectMapper,
                            WebhookUrlPolicy urlPolicy,
                            // ⚠️ 不得在此加回 @Value fallback（2026-10-02 裁決）：
@@ -38,16 +39,22 @@ public class WebhookConsumer {
                            @Value("${bpm.webhook.hmac-secret}") String hmacSecret,
                            @Value("${bpm.webhook.connect-timeout-ms:2000}") long connectTimeoutMs,
                            @Value("${bpm.webhook.read-timeout-ms:5000}") long readTimeoutMs) {
+        this(objectMapper, urlPolicy, hmacSecret, SafeRestClients.create(connectTimeoutMs, readTimeoutMs));
+    }
+
+    WebhookConsumer(ObjectMapper objectMapper, WebhookUrlPolicy urlPolicy, String hmacSecret,
+                    RestClient restClient) {
         this.objectMapper = objectMapper;
         this.urlPolicy = urlPolicy;
         this.hmacSecret = hmacSecret;
-        // 逾時與「不跟隨 3xx」都集中在 SafeRestClients（規則只有一份；
-        // 為什麼逾時不可省略、為什麼重導是 SSRF 缺口，見該類別註解）。
-        this.restClient = SafeRestClients.create(connectTimeoutMs, readTimeoutMs);
+        this.restClient = restClient;
     }
 
     @RabbitListener(queues = "bpm.webhook.queue")
     public void handle(Map<String, Object> payload) {
+        // Retry advice may invoke this listener again with the same converted mutable Map.
+        // Keep the broker envelope intact so a failed attempt can still resolve its URL/method.
+        payload = new java.util.HashMap<>(payload);
         // For now, log the webhook payload. In production, webhook URLs come from
         // BPMN extensionElements or a webhook config table.
         // This consumer handles the actual HTTP delivery.

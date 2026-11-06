@@ -23,6 +23,8 @@ public class StaffTestProvider implements AutoCloseable {
     public static final String KID = "test-key";
     public static final JsonMapper JSON = JsonMapper.builder().build();
     public final Set<String> denied = ConcurrentHashMap.newKeySet();
+    /** Synthetic test-only principals granted MANAGE so the wave can exercise DLQ replay authorization. */
+    public final Set<String> dlqReplayAdmins = ConcurrentHashMap.newKeySet();
     public volatile String userType = "STAFF", status = "ACTIVE", dept = "50310001", identityResult = "FOUND";
     public volatile String inactiveUserId, approvalOrg;
     public volatile Instant delegationEnd;
@@ -115,11 +117,19 @@ public class StaffTestProvider implements AutoCloseable {
                     throw new IllegalArgumentException("Wrong AuthZ contract");
                 var subjects = new ArrayList<String>(); input.path("subject_ids").forEach(v -> subjects.add(v.asString())); lastSubjects = subjects;
                 String permission = input.path("permissions").get(0).asString();
-                Object allowed = malformedAllowed ? "true" : !denied.contains(permission) && (!APPROVE.equals(permission) || approvalOrg == null || subjects.contains(approvalOrg));
+                Object allowed = malformedAllowed ? "true" :
+                        canReplayDlq(subjects, permission, dlqReplayAdmins)
+                                || !denied.contains(permission)
+                                && (!APPROVE.equals(permission) || approvalOrg == null || subjects.contains(approvalOrg));
                 reply(exchange, 200, Map.of("code", authzCode, "data", Map.of("allowed", allowed))); return;
             }
             reply(exchange, 404, Map.of());
         } catch (Exception e) { reply(exchange, 500, Map.of("error", "fixture failure")); }
+    }
+    static boolean canReplayDlq(List<String> subjects, String permission, Set<String> principals) {
+        return StaffPermissions.MANAGE.equals(permission) && principals.stream()
+                .map(id -> "staff-" + id.toLowerCase(Locale.ROOT))
+                .anyMatch(subjects::contains);
     }
     private static Map<String, String> params(String query) {
         var out = new HashMap<String, String>();
