@@ -267,6 +267,11 @@ public class FormSubmissionService {
         return slash >= 0 ? path.substring(slash + 1) : path;
     }
 
+    /** Used at external start to keep workflow variables from bypassing field access and validation. */
+    public Set<String> declaredFieldKeys(FormDefinition definition) {
+        return declaredKeys(parseSchema(definition).get("root"));
+    }
+
     /**
      * DSL 內所有節點的 key 集合（含 layout 子節點與 repeater 子欄位）。
      *

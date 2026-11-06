@@ -1,6 +1,6 @@
 # agent BFF 與 BPM 案件 API
 
-狀態：v1 固定契約，以下標「新增」的路由尚未存在。目前 ExternalApiAuthFilter 會拒絕未知路徑；實作時須同步加入明確 method/path/action 規則，不能放寬整段 prefix。
+狀態（2026-11-06）：四個 BPM external v1 入口已實作；agent 公開與私有入口列為第 4 項。BPM 依明列的 method/path/action 進行授權。
 
 ## 入口與認證
 
@@ -10,10 +10,10 @@
 | 業務服務→agent | POST `/internal/bpm/v1/requests` | 專用 `X-Service-Id`＋`X-Service-Key`，與 service/domain/workflow allowlist 綁定 | 新增，私有網路；不是瀏覽器入口 |
 | 業務服務→agent | GET `/internal/bpm/v1/requests/{requestId}` | 同上；查核 request 所屬業務服務，不能只因持有 key 就讀所有 domain | 新增，投遞對帳 |
 | 業務服務→agent | GET `/internal/bpm/v1/cases/{domain}/{applicationId}/submissions/{submissionId}/{workflowRole}` | 同上；由 server-owned reference 解析 BPM process ID | 新增，狀態對帳 |
-| agent→BPM | POST `/api/external/v1/process-instances` | `X-System-Id: agent-bff`＋`X-API-Key`；start_process、流程 binding 白名單 | 新增，鎖版與防重啟動 |
-| agent→BPM | GET `/api/external/v1/requests/{requestId}` | 同上，query_status；request 的 system owner | 新增，取得投遞 receipt |
-| agent→BPM | GET `/api/external/v1/process-instances/{id}` | 同上，query_status；process 的 system owner 及 allowedProcessKeys | 新增，權威流程狀態 |
-| agent→BPM | GET `/api/external/v1/process-instances?businessKey=...` | 同上；exact businessKey 與 system owner | 新增，回 `{items: ProcessStatus[]}`，v1 唯一鍵保證 0 或 1 筆 |
+| agent→BPM | POST `/api/external/v1/process-instances` | `X-System-Id: agent-bff`＋`X-API-Key`；start_process、流程 binding 白名單 | BPM 已實作，鎖版與防重啟動 |
+| agent→BPM | GET `/api/external/v1/requests/{requestId}` | 同上，query_status；request 的 system owner | BPM 已實作，取得投遞 receipt |
+| agent→BPM | GET `/api/external/v1/process-instances/{id}` | 同上，query_status；process 的 system owner 及 allowedProcessKeys | BPM 已實作，權威流程狀態 |
+| agent→BPM | GET `/api/external/v1/process-instances?businessKey=...` | 同上；exact businessKey 與 system owner | BPM 已實作，回 `{items: ProcessStatus[]}`，v1 唯一鍵保證 0 或 1 筆 |
 
 三種 key 不可互換；API key 不進瀏覽器、日誌或 payload。內部服務憑證由 agent 的 server 配置驗證，不以請求的 service 名稱自證身分。agent 出站固定取 server 配置的 systemId/key，忽略／拒絕客戶端同名標頭，不轉送外勤 Bearer。每層使用 `X-Trace-Id`；無值由服務產生，限制 1..128 個 `[A-Za-z0-9._-]` 字元。
 

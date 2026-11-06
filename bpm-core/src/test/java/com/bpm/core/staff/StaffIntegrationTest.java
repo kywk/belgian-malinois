@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @TestPropertySource(properties = {"bpm.staff.enabled=true", "bpm.security.jwt.dev-secret=",
         "bpm.security.jwt.issuer-uri=https://staff-sso.example.test", "bpm.staff.gateway-deploy-user-id=ci-test",
         "bpm.staff.gateway-deploy-subject-id=service-bpm-ci", "bpm.security.gateway.enabled=true",
+        "bpm.external.cases.actor-issuers[0]=https://agent.test", "bpm.external.cases.staff-routes.review-team=W9000001",
         "bpm.staff.approval-permissions.bff-contract-review=bpm:approval:bff_contract_review:approve"})
 @org.springframework.context.annotation.Import(StaffIntegrationTest.RandomPortConfiguration.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -46,6 +47,175 @@ class StaffIntegrationTest extends IntegrationTestBase {
         r.add("bpm.staff.identity-token", () -> "Bearer fixture-service");
         r.add("bpm.staff.authz-token", () -> "Bearer fixture-service");
     }
+    @Autowired org.springframework.context.ApplicationContext context;
+    @org.springframework.beans.factory.annotation.Value("${local.server.port}") int apiPort;
+    ExternalCaseFixture caseFixture() { return new ExternalCaseFixture(context,apiPort); }
+
+    @Test void simultaneousExternalDeliveryAndReconciliation() throws Exception {
+        var f = caseFixture();
+        var command = f.command();
+        var post = f.post(command);
+        var go = new java.util.concurrent.CountDownLatch(1);
+        try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var calls = java.util.stream.IntStream.range(0,20).mapToObj(i -> pool.submit(() -> {
+                go.await();
+                return f.send(post);
+            })).toList();
+            go.countDown();
+            var statuses = new ArrayList<Integer>();
+            for (var call : calls) {
+                var response = call.get();
+                assertThat(response.statusCode()).as(response.body()).isIn(200,201,202);
+                statuses.add(response.statusCode());
+            }
+            assertThat(statuses).containsOnlyOnce(201);
+        }
+        String requestPath = ExternalCaseFixture.REQUESTS + command.get("requestId");
+        var receipt = f.get(requestPath);
+        String id = receipt.get("processInstanceId").asString();
+        String path = ExternalCaseFixture.COLLECTION + "/" + id;
+        String key = receipt.get("businessKey").asString();
+        assertThat(runtime.createProcessInstanceQuery().processInstanceBusinessKey(key).count()).isEqualTo(1);
+        assertThat(runtime.getVariable(id,"initiator")).isEqualTo("system:agent-bff");
+        assertThat(runtime.getVariable(id,"_formVersions")).isEqualTo(Map.of(f.form.getFormKey(),1));
+        assertThat(f.get(path).get("processDefinitionId").asString()).isEqualTo(f.definition);
+        assertThat(f.get(path).get("sourceRevision").asLong()).isEqualTo(1);
+        String lookup = ExternalCaseFixture.COLLECTION + "?businessKey=" + key;
+        assertThat(f.get(lookup).get("items").get(0)).isEqualTo(f.get(path));
+        for (String other : List.of(requestPath,path,lookup))
+            assertThat(f.expect(f.req("case-other",other,null),404).get("code").asString()).isEqualTo("BPM_NOT_FOUND");
+        f.expect(f.req("agent-bff","/api/external/process-instances","{}"),403);
+        var changed = new HashMap<>(command); changed.put("requestId",UUID.randomUUID().toString());
+        assertThat(f.expect(f.post(changed),409).get("code").asString()).isEqualTo("BPM_CASE_ALREADY_STARTED");
+        changed = new HashMap<>(command); changed.put("processDefinitionId","different");
+        assertThat(f.expect(f.post(changed),409).get("code").asString()).isEqualTo("BPM_IDEMPOTENCY_CONFLICT");
+
+        runtime.deleteProcessInstance(id,"cancelled-by-test");
+        var cancelled = f.get(path);
+        assertThat(cancelled.get("engineState").asString()).isEqualTo("CANCELLED");
+        assertThat(cancelled.get("outcome").asString()).isEqualTo("UNKNOWN");
+        assertThat(cancelled.get("sourceRevision").asLong()).isEqualTo(2);
+        f.db.update("UPDATE bpm_case_binding SET enabled=0 WHERE binding_version=?", f.version);
+        var replay = f.send(post);
+        assertThat(replay.statusCode()).isEqualTo(200);
+        assertThat(replay.headers().firstValue("Idempotency-Replayed")).contains("true");
+        var disabled = f.command();
+        assertThat(f.expect(f.post(disabled),409).get("code").asString()).isEqualTo("BPM_DEFINITION_VERSION_MISMATCH");
+        assertThat(f.get(ExternalCaseFixture.REQUESTS+disabled.get("requestId")).get("state").asString()).isEqualTo("REJECTED");
+        assertThat(f.send(f.post(disabled)).headers().firstValue("Idempotency-Replayed")).contains("true");
+    }
+
+    @Test void externalRejectedInputAndUncertainRecovery() {
+        var f = caseFixture();
+        var command = f.command();
+        var mixed = java.net.http.HttpRequest.newBuilder(f.post(command), (name,value) -> true)
+                .header("Authorization", "Bearer forwarded-token").build();
+        assertThat(f.expect(mixed,401).get("code").asString()).isEqualTo("BPM_SERVICE_AUTH_INVALID");
+        var invalid = new HashMap<>(command);
+        invalid.put("actor",Map.of("type","AGENT","agentCode","AG1","subject","shared","issuer","https://untrusted.test"));
+        f.expect(f.post(invalid),403);
+        f.expect(f.req("agent-bff",ExternalCaseFixture.REQUESTS+command.get("requestId"),null),404);
+        invalid.put("actor",Map.of("type","TALENT","agentCode","AG1","subject","shared","issuer","https://agent.test"));
+        f.expect(f.post(invalid),400);
+        f.expect(f.req("agent-bff",ExternalCaseFixture.COLLECTION," ".repeat(1024*1024+1)),413);
+        invalid = new HashMap<>(command); invalid.put("formData",null);
+        assertThat(f.expect(f.post(invalid),409).get("code").asString()).isEqualTo("BPM_FORM_VERSION_MISMATCH");
+        invalid = new HashMap<>(f.command());
+        invalid.put("formData",Map.of("formDefinitionId",f.form.getId(),"formVersion",1,"dataJson","{\"unknown\":1}"));
+        assertThat(f.expect(f.post(invalid),422).get("code").asString()).isEqualTo("BPM_FORM_VALIDATION_FAILED");
+
+        // A registered workflow variable still cannot smuggle an omitted DSL field past UniForm.
+        var specs = context.getBean(com.bpm.core.repository.ProcessVariableSpecRepository.class);
+        var spec = new com.bpm.core.model.ProcessVariableSpec();
+        spec.setProcessDefinitionKey("bff-contract-review"); spec.setVariableName("note"); spec.setVariableType("string");
+        specs.saveAndFlush(spec);
+        try {
+            var shadow = f.command();
+            shadow.put("variables",Map.of("note","skip-validation"));
+            shadow.put("formData",Map.of("formDefinitionId",f.form.getId(),"formVersion",1,"dataJson","{}"));
+            assertThat(f.expect(f.post(shadow),400).get("code").asString()).isEqualTo("BPM_VALIDATION_ERROR");
+            f.expect(f.req("agent-bff",ExternalCaseFixture.REQUESTS+shadow.get("requestId"),null),404);
+        } finally { specs.delete(spec); }
+
+        // Simulate the persistent boundary left by a crashed worker before primary commit.
+        String id = invalid.get("requestId").toString();
+        f.db.update("UPDATE bpm_case_request SET state='PROCESSING',error_code=NULL WHERE request_id=?",id);
+        var processing = f.send(f.post(invalid));
+        assertThat(processing.statusCode()).isEqualTo(202);
+        assertThat(processing.headers().firstValue("Retry-After")).contains("2");
+        f.db.update("UPDATE bpm_case_request SET reserved_at=DATEADD(minute,-6,SYSUTCDATETIME()) WHERE request_id=?",id);
+        assertThat(f.get(ExternalCaseFixture.REQUESTS+id).get("state").asString()).isEqualTo("UNCERTAIN");
+        assertThat(f.expect(f.post(invalid),500).get("outcome").asString()).isEqualTo("UNKNOWN");
+        var uncertain = f.get(ExternalCaseFixture.REQUESTS+id);
+        assertThat(runtime.createProcessInstanceQuery().processInstanceBusinessKey(uncertain.get("businessKey").asString()).count()).isZero();
+    }
+
+    @Test void technicalWorkflowRequiresExplicitOutcomeAndDetectsUnlinkedLegacyProcesses() {
+        var f = caseFixture();
+        String technical = f.deploy(repository,null);
+        // Register a separate immutable version with no form and no terminal outcome mapping.
+        long version = f.version + 1;
+        f.db.update("""
+                INSERT INTO bpm_case_binding (workflow_code,binding_version,caller_system,domain,workflow_role,
+                  definition_key,definition_id,routing_rule,approval_permission,enabled)
+                VALUES ('contract.staff-review',?,'agent-bff','contract-fixture','review','bff-contract-review',
+                  ?,'review-team',?,1)
+                """,version,technical,StaffTestProvider.APPROVE);
+        var command = f.command();
+        command.put("bindingVersion",version); command.put("processDefinitionId",technical); command.put("formData",null);
+        var receipt = f.expect(f.post(command),201);
+        String pid = receipt.get("processInstanceId").asString();
+        tasks.complete(tasks.createTaskQuery().processInstanceId(pid).singleResult().getId());
+        var status = f.get(ExternalCaseFixture.COLLECTION+"/"+pid);
+        assertThat(status.get("sourceRevision").asLong()).isEqualTo(2);
+        assertThat(status.get("outcome").asString()).isEqualTo("UNKNOWN");
+        assertThat(status.get("reasonCode").asString()).isEqualTo("RESULT_MAPPING_UNAVAILABLE");
+        assertThat(status.get("formVersion").isNull()).isTrue();
+
+        command = f.command();
+        String key = "contract-fixture/app-A/"+command.get("requestId")+"/review";
+        for (int n=0; n<2; n++)
+            runtime.startProcessInstanceById(technical,key,Map.of("_externalSystemId","agent-bff","firstTaskAssignee","W9000001"));
+        assertThat(f.expect(f.post(command),500).get("code").asString()).isEqualTo("BPM_OPERATION_UNCERTAIN");
+        assertThat(f.get(ExternalCaseFixture.REQUESTS+command.get("requestId")).get("state").asString()).isEqualTo("UNCERTAIN");
+        f.expect(f.req("agent-bff",ExternalCaseFixture.COLLECTION+"?businessKey="+key,null),500);
+        assertThat(runtime.createProcessInstanceQuery().processInstanceBusinessKey(key).count()).isEqualTo(2);
+    }
+
+    @Test void compensationFailureRetainsAttemptForOperatorReconciliation() {
+        var f = caseFixture();
+        var command = f.command();
+        var requestId = UUID.fromString(command.get("requestId").toString());
+        var formId = UUID.fromString(f.form.getId());
+        var formDb = new org.springframework.jdbc.core.JdbcTemplate(context.getBean("formDataSource", javax.sql.DataSource.class));
+        // Fail the core confirmation after the separate form transaction commits.
+        // Both triggers apply only to this fixture's identifiers and are removed in finally.
+        try {
+            f.db.execute("""
+                    CREATE TRIGGER case_test_reject_confirm ON bpm_case_request AFTER UPDATE AS
+                    IF EXISTS (SELECT 1 FROM inserted WHERE request_id='%s' AND state='CONFIRMED')
+                        THROW 51001,'fixture core commit failure',1
+                    """.formatted(requestId));
+            formDb.execute("""
+                    CREATE TRIGGER case_test_reject_delete ON bpm_form_data AFTER DELETE AS
+                    IF EXISTS (SELECT 1 FROM deleted WHERE form_definition_id='%s')
+                        THROW 51002,'fixture compensation failure',1
+                    """.formatted(formId));
+            assertThat(f.expect(f.post(command),500).get("code").asString()).isEqualTo("BPM_OPERATION_UNCERTAIN");
+            var receipt = f.get(ExternalCaseFixture.REQUESTS + requestId);
+            assertThat(receipt.get("state").asString()).isEqualTo("UNCERTAIN");
+            String attempt = f.db.queryForObject("SELECT attempt_id FROM bpm_case_request WHERE request_id=?",String.class,requestId.toString());
+            assertThat(formDb.queryForObject("SELECT COUNT(*) FROM bpm_form_data WHERE process_instance_id=?",Integer.class,attempt)).isEqualTo(1);
+            assertThat(runtime.createProcessInstanceQuery().processInstanceId(attempt).count()).isZero();
+            f.expect(f.post(command),500);
+            command.put("requestId",UUID.randomUUID().toString());
+            assertThat(f.expect(f.post(command),409).get("code").asString()).isEqualTo("BPM_CASE_ALREADY_STARTED");
+        } finally {
+            f.db.execute("DROP TRIGGER IF EXISTS case_test_reject_confirm");
+            formDb.execute("DROP TRIGGER IF EXISTS case_test_reject_delete");
+        }
+    }
+
     @Autowired RepositoryService repository;
     @Autowired RuntimeService runtime;
     @Autowired TaskService tasks;

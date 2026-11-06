@@ -1,7 +1,6 @@
 # BPM 內勤與 agent BFF 契約 v1
 
-實作進度（2026-11-05）：內勤 SSO／session／組織與 AuthZ 消費端已接線，見 [內勤整合指南](../../../api/staff-sso-integration.md)。本目錄的整體 PLANNED 標記仍涵蓋尚未實作的 external v1／agent BFF 案件路由；正式來源設定與身分橋接服務仍需補齊。
-2026-11-05 第 1 項固定欄位、身分與授權規則、錯誤碼和驗收案例；第 2 項的內勤實作進度以上述指南為準。external v1 新路由仍不可呼叫；尚未建立正式帳號、配置正式 grant 或切換正式環境。
+實作進度（2026-11-06）：BPM 內勤 SSO／組織／AuthZ 消費端及四個 external v1 案件端點已實作。agent BFF 與業務 outbox 接線仍待第 4 項。環境前置條件與驗證範圍見[內勤指南](../../../api/staff-sso-integration.md)及[外部案件交接](../../../handoff/2026-11-06-external-cases.md)。
 
 上位邊界見 [架構規劃](../../2026-11-05-staff-console-agent-bff-integration.md)：BPM 後台只供內勤；外勤經 agent BFF；業務服務保留案件、快照與 outbox。本文取代上位文件中未定的欄位名稱與權限映射，但不改變服務責任。
 
@@ -48,4 +47,4 @@ git diff --check
 
 schema 的 `utc-date-time` 限定真實 UTC 日期時間，格式為 `YYYY-MM-DDTHH:mm:ssZ` 或三位毫秒 `.SSSZ`；`json-object-string` 僅驗證可 parse 成 JSON object。重複 JSON key、來源真實性、跨欄位時效、防重 hash 與 UTF-8 body 位元組上限須在服務驗收另測，不能只靠 schema。
 
-2026-11-05 本輪結果：26 個 schema 編譯、47 組有效與 32 組無效範例、8 個權限碼、6 個角色樣板、25 個錯誤碼、15 個相對連結及 8 個文件 JSON 區塊通過檢查。43 項行為案例尚未執行；新增路由仍待實作。未修改服務程式、權限資料或部署設定，未 commit／push。
+2026-11-05 本輪結果：26 個 schema 編譯、47 組有效與 32 組無效範例、8 個權限碼、6 個角色樣板、25 個錯誤碼、15 個相對連結及 8 個文件 JSON 區塊通過檢查。此為第 1 項的歷史紀錄。服務行為的後續執行結果見上方交接。

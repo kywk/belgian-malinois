@@ -1,11 +1,6 @@
 package com.bpm.core.staff;
 
-import com.bpm.core.form.model.FormDefinition;
-import com.bpm.core.form.repository.FormDefinitionRepository;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-
-
 
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
@@ -15,21 +10,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 class StaffBrowserE2eIT extends StaffIntegrationTest {
     static final int UI_PORT = freePort();
     @org.springframework.beans.factory.annotation.Value("${local.server.port}") int port;
-    @Autowired FormDefinitionRepository forms;
-    @Autowired com.bpm.core.uniform.FormDefinitionValidator formValidator;
     static int freePort() { try (var socket = new java.net.ServerSocket(0)) { return socket.getLocalPort(); } catch (Exception e) { throw new IllegalStateException(e); } }
     static { PROVIDER.callbackUrl = "http://127.0.0.1:" + UI_PORT + "/"; }
     @Test void browserLoginTodoApproveAndRevoke() throws Exception {
         PROVIDER.denied.addAll(java.util.List.of(StaffPermissions.MANAGE, StaffPermissions.AUDIT,
                 StaffPermissions.DESIGN, StaffPermissions.DEPLOY));
-        FormDefinition form = new FormDefinition();
-        String formKey = "staff-browser-" + java.util.UUID.randomUUID();
-        form.setFormKey(formKey); form.setName("內勤契約驗證表"); form.setStatus("published");
-        form.setSchemaJson("{\"$uniform\":\"1.0\",\"key\":\"" + formKey + "\",\"title\":{\"zh-TW\":\"內勤契約驗證表\"},\"requires\":{\"core\":\"^1.0\"},\"root\":[{\"id\":\"n_note\",\"type\":\"textarea\",\"key\":\"note\",\"label\":\"說明\"}]}");
-        formValidator.validate(form.getSchemaJson(), formKey);
-        forms.saveAndFlush(form);
-        String first = newTask("W9000001", null, formKey);
-        String second = newTask("W9000001", null, formKey);
+        var external = caseFixture();
+        String processId = external.start();
+        String first = tasks.createTaskQuery().processInstanceId(processId).singleResult().getId();
+        String second = newTask("W9000001", null, external.form.getFormKey());
+        assertThat(external.get(ExternalCaseFixture.COLLECTION + "/" + processId).get("reviewStatus").asString()).isEqualTo("RUNNING");
         var approvedTask = tasks.createTaskQuery().taskId(first).singleResult();
         approvedTask.setName("內勤契約簽核－成功"); tasks.saveTask(approvedTask);
         var revokedTask = tasks.createTaskQuery().taskId(second).singleResult();
@@ -51,6 +41,9 @@ class StaffBrowserE2eIT extends StaffIntegrationTest {
             assertThat(child.exitValue()).isZero();
             assertThat(tasks.createTaskQuery().taskId(first).count()).isZero();
             assertThat(tasks.createTaskQuery().taskId(second).count()).isEqualTo(1);
+            var status = external.get(ExternalCaseFixture.COLLECTION + "/" + processId);
+            assertThat(status.get("outcome").asString()).isEqualTo("APPROVED");
+            assertThat(status.get("sourceRevision").asLong()).isEqualTo(2);
         } finally {
             child.descendants().forEach(h -> { if (h.isAlive()) h.destroy(); });
             child.destroyForcibly();

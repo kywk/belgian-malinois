@@ -59,6 +59,15 @@ public class FormVersionLocker {
         }
         Map<String, Integer> versions = new HashMap<>();
         versions.put(mainForm.getFormKey(), mainForm.getVersion());
+        return resolveReferences(model, versions);
+    }
+
+    /** External v1 technical workflows have no main form, but may reference task forms. */
+    public Map<String, Integer> prepareTaskVersions(String definitionId) {
+        return resolveReferences(repositoryService.getBpmnModel(definitionId), new HashMap<>());
+    }
+
+    private Map<String, Integer> resolveReferences(BpmnModel model, Map<String, Integer> versions) {
         Set<String> keys = new LinkedHashSet<>();
         for (FlowElement element : ApplicationFormBinding.elements(model.getMainProcess().getFlowElements())) {
             String key = element instanceof UserTask task ? task.getFormKey()

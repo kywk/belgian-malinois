@@ -1,6 +1,7 @@
 package com.bpm.core.external;
 
 import com.bpm.core.audit.AuditEventPublisher;
+import com.bpm.core.external.v1.CaseError;
 import com.bpm.core.dto.AuditEvent;
 import com.bpm.core.model.ExternalSystem;
 import com.bpm.core.repository.ExternalSystemRepository;
@@ -53,7 +54,7 @@ public class ExternalApiAuthFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String uri = request.getRequestURI();
+        String uri = request.getRequestURI().substring(request.getContextPath().length());
         // 同時涵蓋不帶尾斜線的 "/api/external"，避免 prefix 檢查的常見破口
         // （目前該 URI 沒有對應 handler，但不應依賴這點）。
         return !uri.startsWith(PREFIX) && !uri.equals("/api/external");
@@ -65,6 +66,16 @@ public class ExternalApiAuthFilter extends OncePerRequestFilter {
         String apiKey = request.getHeader("X-API-Key");
         String systemId = request.getHeader("X-System-Id");
 
+        boolean cases = request.getRequestURI().substring(request.getContextPath().length()).startsWith(PREFIX + "v1/");
+        if (cases) {
+            response.setHeader("Cache-Control", "no-store");
+            response.setHeader("X-Trace-Id", CaseError.trace(request));
+        }
+        if (cases && (request.getHeader("Authorization") != null || request.getHeader("X-Gateway-Secret") != null
+                || request.getHeader("X-User-Id") != null)) {
+            reject(response, 401, "Use only external service credentials", systemId, request);
+            return;
+        }
         if (apiKey == null || systemId == null) {
             reject(response, 401, "Missing X-API-Key or X-System-Id", systemId, request);
             return;
@@ -130,6 +141,13 @@ public class ExternalApiAuthFilter extends OncePerRequestFilter {
         // 改動前未匹配的路徑會 fall through 成 "query_status"，等於未知端點
         // 自動取得查詢權限。
         String action = resolveAction(request);
+        // The BFF credential must never be usable on the unversioned start/task routes.
+        if (("agent-bff".equals(sys.getSystemId()) && !cases)
+                || (cases && (!sys.getSystemId().equals(systemId) || sys.getAllowedActions() == null
+                || sys.getAllowedActions().isBlank()))) {
+            reject(response, 403, "Endpoint not permitted for this service", systemId, request);
+            return;
+        }
         if (action == null) {
             reject(response, 403, "Unrecognised external API endpoint", systemId, request);
             return;
@@ -160,11 +178,17 @@ public class ExternalApiAuthFilter extends OncePerRequestFilter {
      * @return action 名稱，無法辨識時回傳 {@code null}
      */
     String resolveAction(HttpServletRequest request) {
-        String uri = request.getRequestURI();
+        String uri = request.getRequestURI().substring(request.getContextPath().length());
         if (!uri.startsWith(PREFIX)) return null;
 
         String method = request.getMethod();
         String path = uri.substring(PREFIX.length());
+        if (path.startsWith("v1/")) {
+            if (path.equals("v1/process-instances") && "POST".equals(method)) return "start_process";
+            if ("GET".equals(method) && (path.equals("v1/process-instances")
+                    || path.matches("v1/(requests|process-instances)/[^/]+"))) return "query_status";
+            return null;
+        }
         while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
 
         // POST /api/external/process-instances
@@ -267,6 +291,16 @@ public class ExternalApiAuthFilter extends OncePerRequestFilter {
         response.setContentType("application/json");
         if (retryAfterSeconds > 0) {
             response.setHeader("Retry-After", Long.toString(retryAfterSeconds));
+        }
+        if (request.getRequestURI().substring(request.getContextPath().length()).startsWith(PREFIX + "v1/")) {
+            CaseError error = switch (status) {
+                case 401 -> CaseError.SERVICE_AUTH_INVALID;
+                case 429 -> CaseError.RATE_LIMITED;
+                default -> CaseError.SERVICE_FORBIDDEN;
+            };
+            response.setCharacterEncoding("UTF-8");
+            response.getWriter().write(objectMapper.writeValueAsString(error.envelope(request)));
+            return;
         }
         response.getWriter().write(objectMapper.writeValueAsString(
                 Map.of("error", reason, "status", status)));

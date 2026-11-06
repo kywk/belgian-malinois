@@ -119,6 +119,21 @@ public class SecurityConfig {
         return filter;
     }
 
+    /** v1 machine routes authenticate exclusively through the external service filter. */
+    @Bean
+    @org.springframework.core.annotation.Order(0)
+    SecurityFilterChain externalCaseChain(HttpSecurity http,
+            com.bpm.core.external.ExternalApiAuthFilter external) throws Exception {
+        return http.securityMatcher("/api/external/v1/**")
+                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .csrf(csrf -> csrf.disable())
+                .addFilterBefore(external, org.springframework.security.web.authentication.AnonymousAuthenticationFilter.class)
+                .authorizeHttpRequests(auth -> auth.anyRequest().access((principal, context) ->
+                        new org.springframework.security.authorization.AuthorizationDecision(
+                                context.getRequest().getAttribute("externalSystem") instanceof com.bpm.core.model.ExternalSystem)))
+                .build();
+    }
+
     @Bean
     SecurityFilterChain filterChain(HttpSecurity http,
                                     GatewayAuthenticationFilter gatewayFilter,
