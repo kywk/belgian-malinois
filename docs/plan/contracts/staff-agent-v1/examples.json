@@ -1,5 +1,5 @@
 {
-  "contractVersion": "1.1.0",
+  "contractVersion": "1.2.0",
   "scope": "SCHEMA_EXAMPLES_ONLY",
   "cases": [
     {
@@ -1759,6 +1759,123 @@
           "data_json": "{\"requestReason\":\"合成契約驗收\"}"
         },
         "variables": {}
+      }
+    },
+    {
+      "id": "returned-applicant-reason",
+      "schema": "ProcessStatus",
+      "expectValid": true,
+      "data": {
+        "processInstanceId": "process-fixture-1",
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "processDefinitionKey": "bff-contract-review",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "businessKey": "contract-fixture/app-a/sub-a1/review",
+        "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+        "formVersion": 1,
+        "engineState": "RUNNING",
+        "reviewStatus": "RETURNED",
+        "outcome": "UNKNOWN",
+        "reasonCode": null,
+        "sourceRevision": 1,
+        "updatedAt": "2026-11-05T02:00:00Z",
+        "returnReason": "請補上最新月份的報告"
+      }
+    },
+    {
+      "id": "private-returned-applicant-reason",
+      "schema": "AgentStatusResponse",
+      "expectValid": true,
+      "data": {
+        "code": "0000",
+        "message": "success",
+        "data": {
+          "process_instance_id": "process-fixture-1",
+          "process_definition_id": "bff-contract-review:1:fixture",
+          "process_definition_key": "bff-contract-review",
+          "workflow_code": "contract.staff-review",
+          "binding_version": 1,
+          "case_ref": {
+            "domain": "contract-fixture",
+            "application_id": "app-a",
+            "submission_id": "sub-a1",
+            "workflow_role": "review",
+            "submission_revision": 1
+          },
+          "business_key": "contract-fixture/app-a/sub-a1/review",
+          "form_definition_id": "20000000-0000-4000-8000-000000000001",
+          "form_version": 1,
+          "engine_state": "RUNNING",
+          "review_status": "RETURNED",
+          "outcome": "UNKNOWN",
+          "reason_code": null,
+          "source_revision": 1,
+          "updated_at": "2026-11-05T02:00:00Z",
+          "return_reason": "請補上最新月份的報告"
+        },
+        "trace_id": "fixture-trace-1"
+      }
+    },
+    {
+      "id": "running-applicant-reason",
+      "schema": "ProcessStatus",
+      "expectValid": false,
+      "data": {
+        "processInstanceId": "process-fixture-1",
+        "processDefinitionId": "bff-contract-review:1:fixture",
+        "processDefinitionKey": "bff-contract-review",
+        "workflowCode": "contract.staff-review",
+        "bindingVersion": 1,
+        "caseRef": {
+          "domain": "contract-fixture",
+          "applicationId": "app-a",
+          "submissionId": "sub-a1",
+          "workflowRole": "review",
+          "submissionRevision": 1
+        },
+        "businessKey": "contract-fixture/app-a/sub-a1/review",
+        "formDefinitionId": "20000000-0000-4000-8000-000000000001",
+        "formVersion": 1,
+        "engineState": "RUNNING",
+        "reviewStatus": "RUNNING",
+        "outcome": "UNKNOWN",
+        "reasonCode": null,
+        "sourceRevision": 1,
+        "updatedAt": "2026-11-05T02:00:00Z",
+        "returnReason": "請補上最新月份的報告"
+      }
+    },
+    {
+      "id": "public-returned-applicant-reason-leak",
+      "schema": "PublicCaseResponse",
+      "expectValid": false,
+      "data": {
+        "code": "0000",
+        "message": "success",
+        "data": {
+          "application_id": "app-a",
+          "submission_id": "sub-a1",
+          "workflow_role": "review",
+          "delivery_status": "CONFIRMED",
+          "review_status": "RETURNED",
+          "outcome": "UNKNOWN",
+          "source_revision": 1,
+          "updated_at": "2026-11-05T02:00:00Z",
+          "capabilities": {
+            "can_view": true,
+            "can_supplement": false
+          },
+          "return_reason": "請補上最新月份的報告"
+        },
+        "trace_id": "fixture-trace-1"
       }
     }
   ]

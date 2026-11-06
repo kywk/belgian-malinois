@@ -579,6 +579,15 @@ import java.util.stream.Stream;
                     // 僅刪除已通過表單驗證的動態單選清除命令，與任務完成共用主交易。
                     runtimeService.removeVariables(task.getProcessInstanceId(), submission.clearedScalarFields());
                 }
+                if (req.applicantReturnReason() != null) {
+                    String reason = req.applicantReturnReason().strip();
+                    if (reason.isEmpty() || reason.length() > 500 || !Boolean.FALSE.equals(vars.get("approved"))
+                            || !Boolean.FALSE.equals(vars.get("rejected")))
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "退件原因須為 1 至 500 字且僅適用於退件");
+                    vars.put("_applicantReturnReason", reason);
+                } else {
+                    runtimeService.removeVariable(task.getProcessInstanceId(), "_applicantReturnReason");
+                }
                 taskService.complete(id, vars);
 
                 // ── uni-form：表單落地放在 complete 之後（計畫 §五 A5）────

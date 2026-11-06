@@ -53,6 +53,34 @@ class TalentCutoverBrowserIT extends StaffIntegrationTest {
         runCutover("INTERVIEW", "recruitment.interview", "recruitment-interview-review", "interview-cutover.log");
     }
 
+    @Test void creditReturnRoutesToSupplement() {
+        var result = completeCreditReturn();
+        assertThat(result.path("reviewStatus").asString()).isEqualTo("RETURNED");
+    }
+
+    @Test void mappedReturnCarriesDecisionReason() {
+        var result = completeCreditReturn();
+        assertThat(result.path("returnReason").asString("")).isEqualTo("請補上最新月份的報告");
+    }
+
+    private tools.jackson.databind.JsonNode completeCreditReturn() {
+        var f = new ExternalCaseFixture(context, apiPort, "recruitment.credit", null, UUID.randomUUID().toString(), true);
+        var command = f.command();
+        command.put("workflowCode", "recruitment.credit");
+        command.put("caseRef", Map.of("domain", "recruitment", "applicationId", "app-A",
+                "submissionId", command.get("requestId"), "workflowRole", "review", "submissionRevision", 1));
+        var actor = new java.util.HashMap<String,Object>(Map.of("type","TALENT", "subject","candidate", "issuer","https://talent.test"));
+        actor.put("agentCode", null);
+        command.put("actor", actor);
+        command.put("formData", Map.of("formDefinitionId", f.form.getId(), "formVersion",1, "dataJson","{}"));
+        var receipt = f.expect(f.post(command), 201);
+        var pid = receipt.path("processInstanceId").asString();
+        var task = tasks.createTaskQuery().processInstanceId(pid).singleResult();
+        tasks.complete(task.getId(), Map.of("approved", false, "rejected", false,
+                "_applicantReturnReason", "請補上最新月份的報告"));
+        return f.get(ExternalCaseFixture.COLLECTION + "/" + pid);
+    }
+
     private void runCutover(String type, String workflow, String processKey, String logName) throws Exception {
         PROVIDER.denied.addAll(java.util.List.of(StaffPermissions.MANAGE, StaffPermissions.DESIGN,
                 StaffPermissions.AUDIT, StaffPermissions.DEPLOY));

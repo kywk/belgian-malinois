@@ -10,6 +10,7 @@ public record TaskActionRequest(
         // #1 退回申請人：complete 專用的路由指示。只接受 "initiator"，
         // 由伺服器轉寫成流程變數（見 TaskController 的 complete 分支）。
         String returnTo,
+        String applicantReturnReason,
         List<VariableRequest> variables,
         // uni-form 重構（計畫 §五 A5）：complete 專用的表單資料。
         // 表單定義由任務的 BPMN formKey ＋ _formVersions 鎖定版本解析，

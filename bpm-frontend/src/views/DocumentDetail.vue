@@ -96,7 +96,7 @@
     </el-card>
 
     <ActionDialog v-model:visible="actionVisible" :action="currentAction"
-      :task-id="taskId" @done="onActionDone" />
+      :external-case="task?.businessKey?.startsWith('recruitment/')" :task-id="taskId" @done="onActionDone" />
     <CountersignDialog v-model="csVisible" :task-id="taskId" @done="loadSubtasks" />
   </div>
 </template>

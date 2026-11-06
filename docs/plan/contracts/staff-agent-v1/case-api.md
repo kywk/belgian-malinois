@@ -132,6 +132,12 @@ state 固定 PROCESSING／CONFIRMED／REJECTED／UNCERTAIN。CONFIRMED 必須有
 
 ProcessStatus 必填：`processInstanceId`、`processDefinitionId`、`processDefinitionKey`、`workflowCode`、`bindingVersion`、`caseRef`、`businessKey`、`formDefinitionId`／`formVersion`、`engineState`、`reviewStatus`、`outcome`、`reasonCode`、`sourceRevision`、`updatedAt`。無主表的兩欄明確 null。
 
+Staff 在準增員案件退件時，於同一筆 `PUT /api/tasks/{id}` 核決送出 `applicantReturnReason`。BPM 去除首尾空白，接受 1 至 500 個 UTF-16 碼元，欄位內容供申請人及獲授權的所屬主管閱讀。內勤一般審核意見另存。
+
+只有 `reviewStatus=RETURNED` 且有上述原因時，BPM 才回 `returnReason`，Agent 在私有狀態回應對應為 `return_reason`。其他回應及歷史上沒有填寫原因的退件均省略此欄。原因屬於該流程實例的狀態版本，補件後可從原送件版次回查。原有 `reasonCode` 繼續承載機器可讀狀態碼。
+
+Agent 公開 `/v4/workflow-cases/…` 只回前述摘要白名單。Recruitment 另行依本人或當前管理歸屬授權，在送件歷程的 `review.reason` 提供退件原因。舊版封閉 DTO 會拒絕新增欄位，應先更新 Recruitment 與 Agent 的讀取端，再啟用 BPM 退件原因。
+
 | 狀態 | engineState | reviewStatus | outcome |
 |---|---|---|---|
 | 內勤審核中 | RUNNING | RUNNING | UNKNOWN |

@@ -76,6 +76,8 @@ class CaseLauncher {
         var data = prepared.form();
         String initiator = ExternalActorIdentity.of(row.systemId());
         vars.put("initiator", initiator);
+        vars.put("_caseApplicationId", c.caseRef().applicationId());
+        vars.put("_caseSubmissionRevision", c.caseRef().submissionRevision());
         vars.put("_externalSystemId", row.systemId());
         vars.put(InitialAssigneeResolver.FIRST_ASSIGNEE_VAR, reviewer);
         String id = runtime.createProcessInstanceBuilder()

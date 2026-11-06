@@ -24,7 +24,7 @@ class ExternalCaseFixture {
     static final JsonMapper JSON = JsonMapper.builder().build();
     static final String COLLECTION = "/api/external/v1/process-instances";
     static final String REQUESTS = "/api/external/v1/requests/";
-    final String serviceKey = UUID.randomUUID().toString();
+    final String serviceKey;
     final long version = System.currentTimeMillis();
     final JdbcTemplate db;
     final FormDefinition form;
@@ -32,6 +32,7 @@ class ExternalCaseFixture {
     final String base;
     private final String processKey;
     private final boolean interview;
+    private final boolean routedReview;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 
     ExternalCaseFixture(ApplicationContext ctx, int port) {
@@ -41,6 +42,11 @@ class ExternalCaseFixture {
         this(ctx, port, talent ? "recruitment.credit" : "contract.staff-review", null);
     }
     ExternalCaseFixture(ApplicationContext ctx, int port, String workflow, String completionHook) {
+        this(ctx, port, workflow, completionHook, UUID.randomUUID().toString(), false);
+    }
+    ExternalCaseFixture(ApplicationContext ctx, int port, String workflow, String completionHook, String key, boolean sharedWave) {
+        serviceKey = key;
+        routedReview = sharedWave || completionHook != null;
         boolean talent = workflow.startsWith("recruitment.");
         interview = workflow.equals("recruitment.interview");
         processKey = interview ? "recruitment-interview-review" : "bff-contract-review";
@@ -55,7 +61,7 @@ class ExternalCaseFixture {
             sys.setEnabled(true);
             sys.setApiKey(ctx.getBean(ApiKeyHasher.class).hash(serviceKey + name));
             sys.setAllowedActions("[\"start_process\",\"query_status\"]");
-            sys.setAllowedProcessKeys(JSON.writeValueAsString(List.of(processKey)));
+            sys.setAllowedProcessKeys(JSON.writeValueAsString(sharedWave ? List.of("recruitment-interview-review", "bff-contract-review") : List.of(processKey)));
             sys.setAllowedCandidateGroups("[]");
             sys.setAllowedWorkerTopics("[]");
             sys.setAllowOnBehalfOf(false);
@@ -84,12 +90,13 @@ class ExternalCaseFixture {
         deploy(repository, formKey);
         db.update("""
                 INSERT INTO bpm_case_binding (workflow_code,binding_version,caller_system,domain,workflow_role,
-                definition_key,definition_id,form_id,form_version,routing_rule,approval_permission,enabled,approved_end,returned_node)
+                definition_key,definition_id,form_id,form_version,routing_rule,approval_permission,enabled,approved_end,returned_node,rejected_end)
                 VALUES (?,?,'agent-bff',?,'review',?,?,?,1,
-                'review-team',?,1,'endApproved',?)
+                'review-team',?,1,'endApproved',?,?)
                 """, workflow, version, domain, processKey, definition, form.getId(),
                 interview ? StaffTestProvider.INTERVIEW_APPROVE : StaffTestProvider.APPROVE,
-                talent && completionHook == null ? "review" : null);
+                routedReview ? "endReturned" : talent ? "review" : null,
+                routedReview ? "endRejected" : null);
     }
     String deploy(RepositoryService repository, String key) {
         return deploy(repository, key, null);
@@ -120,7 +127,27 @@ class ExternalCaseFixture {
         process.addFlowElement(task);
         process.addFlowElement(end);
         process.addFlowElement(new SequenceFlow("start", "review"));
-        process.addFlowElement(new SequenceFlow("review", "endApproved"));
+        if (!routedReview) {
+            process.addFlowElement(new SequenceFlow("review", "endApproved"));
+        } else {
+            task.setName((interview ? "準增員面談審核" : "內勤案件審核・聯徵")
+                    + " · ${_caseApplicationId} · 送件版本 ${_caseSubmissionRevision}");
+            var gateway = new ExclusiveGateway();
+            gateway.setId("decision");
+            process.addFlowElement(gateway);
+            process.addFlowElement(new SequenceFlow("review", "decision"));
+            for (var route : Map.of("endApproved", "${approved && !rejected}",
+                    "endReturned", "${!approved && !rejected}", "endRejected", "${rejected}").entrySet()) {
+                if (!route.getKey().equals(end.getId())) {
+                    var terminal = new EndEvent();
+                    terminal.setId(route.getKey());
+                    process.addFlowElement(terminal);
+                }
+                var flow = new SequenceFlow("decision", route.getKey());
+                flow.setConditionExpression(route.getValue());
+                process.addFlowElement(flow);
+            }
+        }
         model.addProcess(process);
         var deployed = repository.createDeployment().addBpmnModel("case.bpmn20.xml", model).deploy();
         return repository.createProcessDefinitionQuery().deploymentId(deployed.getId()).singleResult().getId();

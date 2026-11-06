@@ -1067,7 +1067,10 @@ import java.util.*;
         }
 
         byte[] xmlBytes = new org.flowable.bpmn.converter.BpmnXMLConverter().convertToXML(model);
-        List<String> activeIds = runtimeService.getActiveActivityIds(id);
-        return Map.of("xml", new String(xmlBytes), "activeIds", activeIds);
+        try {
+            return Map.of("xml", new String(xmlBytes), "activeIds", runtimeService.getActiveActivityIds(id));
+        } catch (org.flowable.common.engine.api.FlowableObjectNotFoundException completedDuringRead) {
+            return Map.of("xml", "", "activeIds", List.of());
+        }
     }
 }

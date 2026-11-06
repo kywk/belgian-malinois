@@ -748,6 +748,12 @@
         "updatedAt": {
           "type": "string",
           "format": "utc-date-time"
+        },
+        "returnReason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "\\S"
         }
       },
       "allOf": [
@@ -852,7 +858,16 @@
             }
           }
         }
-      ]
+      ],
+      "dependencies": {
+        "returnReason": {
+          "properties": {
+            "reviewStatus": {
+              "const": "RETURNED"
+            }
+          }
+        }
+      }
     },
     "ProcessList": {
       "type": "object",
@@ -1597,6 +1612,12 @@
         "updated_at": {
           "type": "string",
           "format": "utc-date-time"
+        },
+        "return_reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "\\S"
         }
       },
       "allOf": [
@@ -1701,7 +1722,16 @@
             }
           }
         }
-      ]
+      ],
+      "dependencies": {
+        "return_reason": {
+          "properties": {
+            "review_status": {
+              "const": "RETURNED"
+            }
+          }
+        }
+      }
     },
     "AgentBpmError": {
       "type": "object",

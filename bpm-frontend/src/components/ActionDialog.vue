@@ -10,8 +10,8 @@
 
     <!-- 退件 -->
     <template v-else-if="action === 'return'">
-      <el-form-item label="退件原因" required>
-        <el-input v-model="comment" type="textarea" placeholder="請輸入退件原因" :rows="3" />
+      <el-form-item :label="externalCase ? '退件原因（申請人與所屬主管可見）' : '退件原因'" required>
+        <el-input v-model="comment" type="textarea" placeholder="請輸入退件原因" :maxlength="externalCase ? 500 : undefined" :rows="3" />
       </el-form-item>
     </template>
 
@@ -44,6 +44,7 @@ import OrgSelector from './OrgSelector.vue'
 
 const props = defineProps({
   visible: Boolean,
+  externalCase: Boolean,
   action: { type: String, default: '' },
   taskId: { type: String, required: true }
 })
@@ -66,7 +67,7 @@ async function submit() {
   submitting.value = true
   try {
     // Add comment before completing task (task may not exist after complete)
-    if (comment.value && props.action !== 'delegate') {
+    if (comment.value && props.action !== 'delegate' && !(props.externalCase && props.action === 'return')) {
       await addTaskComment(props.taskId, { message: comment.value, userId: 'current_user' })
     }
 
@@ -78,6 +79,7 @@ async function submit() {
     } else if (props.action === 'return') {
       await updateTask(props.taskId, {
         action: 'complete',
+        ...(props.externalCase ? { applicantReturnReason: comment.value.trim() } : {}),
         variables: [{ name: 'approved', value: false }]
       })
     } else if (props.action === 'reject') {

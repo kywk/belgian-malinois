@@ -1,5 +1,5 @@
 {
-  "contractVersion": "1.1.0",
+  "contractVersion": "1.2.0",
   "implementationStatus": "PLANNED",
   "systemCode": "bpm",
   "externalSystemId": "agent-bff",

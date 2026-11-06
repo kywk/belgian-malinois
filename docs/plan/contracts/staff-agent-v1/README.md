@@ -1,6 +1,6 @@
 # BPM 內勤與 agent BFF 契約 v1
 
-2026-11-06 更新至 v1.1。第 5 項加入準增員本人送件與 recruitment 持久對帳。測試資料、來源界線與部署條件見[第 5 項交接](../../../handoff/2026-11-06-revocation-sync.md)。
+2026-11-06 的 v1.2 增加供申請人閱讀的退件原因。私有狀態讀者須先支援選填欄位，再啟用會回傳原因的 Staff 流程。v1.1 已加入準增員本人送件與 Recruitment 持久對帳。測試資料、來源界線與部署條件見[第 5 項交接](../../../handoff/2026-11-06-revocation-sync.md)。
 
 上位邊界見 [架構規劃](../../2026-11-05-staff-console-agent-bff-integration.md)：BPM 後台只供內勤；外勤經 agent BFF；業務服務保留案件、快照與 outbox。本文取代上位文件中未定的欄位名稱與權限映射，但不改變服務責任。
 

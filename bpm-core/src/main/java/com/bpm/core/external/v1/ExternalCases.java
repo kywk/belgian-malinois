@@ -167,18 +167,31 @@ class ExternalCases {
     record Status(String processInstanceId, String processDefinitionId, String processDefinitionKey,
             String workflowCode, long bindingVersion, CaseCommand.Ref caseRef, String businessKey,
             String formDefinitionId, Integer formVersion, String engineState, String reviewStatus, String outcome,
-            String reasonCode, long sourceRevision, String updatedAt) {}
+            String reasonCode, @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            String returnReason, long sourceRevision, String updatedAt) {}
 
     private Status status(CaseStore.Delivery delivery) {
         return transaction.execute(tx -> {
             var row = store.locked(delivery.systemId(), delivery.requestId());
             Result result = result(row);
-            var observed = store.observe(row, result.signature());
+            String reason = returnReason(row, result);
+            String signature = result.signature();
+            if (reason != null) {
+                signature += "/" + org.springframework.util.DigestUtils.md5DigestAsHex(
+                        reason.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            var observed = store.observe(row, signature);
             return new Status(row.processId(), row.definitionId(), row.definitionKey(), row.workflowCode(),
                     row.bindingVersion(), row.ref(), row.businessKey(), row.formId(), row.formVersion(),
                     result.engineState(), result.reviewStatus(), result.outcome(), result.reasonCode(),
-                    observed.sourceRevision(), observed.updatedAt().toInstant(ZoneOffset.UTC).toString());
+                    reason, observed.sourceRevision(), observed.updatedAt().toInstant(ZoneOffset.UTC).toString());
         });
+    }
+    private String returnReason(CaseStore.Delivery row, Result result) {
+        if (!"RETURNED".equals(result.reviewStatus())) return null;
+        var variable = history.createHistoricVariableInstanceQuery().processInstanceId(row.processId())
+                .variableName("_applicantReturnReason").singleResult();
+        return variable != null && variable.getValue() instanceof String text ? text : null;
     }
     private Result result(CaseStore.Delivery row) {
         var instance = history.createHistoricProcessInstanceQuery().processInstanceId(row.processId()).singleResult();
