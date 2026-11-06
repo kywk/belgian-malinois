@@ -150,7 +150,9 @@ duplicate 可能是正在處理或尚未 commit 的佔位，**不代表流程必
 {"queue":"dlq.parking.bpm","replayed":1,"failed":0,"remaining":0}
 ```
 
-目的地先取 origin 標頭，再取最舊 x-death，最後由 queue 對照 fallback，且避免投回 DLX 迴圈。重投後才 ack 原訊息；send／ack 之間斷線可能重送。沒有 publisher confirms／mandatory 保證，replayed 計數不等於消費端已成功，更不能保證失去 binding 時未丟訊息。
+目的地先取 origin 標頭，再取最舊 x-death，最後由 queue 對照 fallback，且避免投回 DLX 迴圈。重放以 mandatory 發布。收到該筆的 broker confirm 且沒有 basic.return 後，服務才 ack parking 原件並累計 replayed。消費端是否已完成業務處理，須查消費端記錄。若目的地無匹配 binding，API 計入 failed 並把原件放回 parking。
+
+若目的 queue 已收到訊息，但 publisher confirm 在傳輸中遺失，API 等候 10 秒後計入 failed，將原件放回 parking，並停止該批。下一次重放可能在目的 queue 產生相同 messageId、相同 body 的第二份訊息。維運應先依穩定的業務鍵（例如 submission、process）對帳；來源有提供 messageId 時，一併核對，確認接收端可承受重複，再使用 max=1 重放。
 
 部分失敗可回 HTTP 200 的 failed 計數；remaining 是快照，取得不到可為 null。失敗會停止本輪，不要只看 HTTP 200 就整批再次 replay。400 修 queue/max；503 可表示開始連線失敗。發生 timeout 或非預期錯誤時先核對 parking queue、原目的 queue、消費者稽核及業務去重記錄，確定未完成範圍再重放；不要把 dead-letter 解讀為業務一定沒執行。
 
