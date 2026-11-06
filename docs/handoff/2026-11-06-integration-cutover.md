@@ -105,3 +105,58 @@ export JAVA25_HOME
 mvn -o -ntp -B \
   '-Dtest=ProcessCompletedListenerTest$Wiring,WebhookConfigResolverTest$ProcessLevel,ProcessWebhookWiringTest$Resolution,TalentCutoverBrowserIT#interviewSubmitStaffApproveAndManagerRead+talentSubmitStaffApproveAndManagerReadDuringDrain' test
 ```
+
+## 面談與聯徵 SIT/UAT 驗收清單
+
+**本機基線。** BPM `6898cf97` 已用 Chromium、SQL Server、Flowable、RabbitMQ、agent HMAC 驗章與 recruitment worker 跑通兩案。各案的精確 queue 都收到結案事件，原 submission 均對帳至 `APPROVED@2`。登入帳號與金鑰、權威資格與授權來源、CMS／ECM provider、驗收 BPMN 與 queue 綁定均使用測試配置。前節的鍵值與案件識別碼只供重現本機結果。
+
+**填寫方式。** 共用接線每環境驗一次；兩份 binding 分別核定，再逐案執行端到端驗收。負責單位按系統職責列示，由環境 owner 指定實際窗口。在 SIT、UAT 空格分別填入核定值或設定單連結、證據連結、執行人及結果；憑證僅填 secret 參照。未確認的值與尚未執行的結果留白。
+
+### 共用接線
+
+| 項目 | 負責單位 | 要取得的證據 | 通過條件 | SIT | UAT |
+|---|---|---|---|---|---|
+| 本人與外勤登入 | 登入平台、Flashlight、agent | 兩種身分的 issuer、audience、公鑰來源、瀏覽器 key 參照、API 模式建置與登入紀錄 | 本人與管理人能從環境入口登入；agent 以各自設定驗章，外勤 legacy 路徑可讀環境 Redis 公鑰；混用身分或錯 audience 遭拒。 | | |
+| 本人資格與管理歸屬 | IDM、外勤資格來源、recruitment | 含觀測時間與有效期限的資格回應、候選人當前管理歸屬及查詢結果 | TALENT 的 issuer/sub 對到本人 BP；AGENT 的 issuer/agentCode 對到有效管理帳號。停權或移轉後舊管理人無法讀取，來源中斷時回 503。 | | |
+| 同意文件與附件 | CMS、ECM、recruitment | 環境 adapter 部署紀錄、CMS 文件版本、ECM 上傳與讀回紀錄、submission 證據引用 | 本人看到並同意的版本可追溯；附件可依 BP、案件、用途、版本與雜湊驗回。缺少必要證據時送件遭拒。目前正式 adapter 與版本接線待實作。 | | |
+| 內勤登入 | SAML、STAFF 身分橋接、BPM | IdP issuer／audience／kid／公鑰參照、callback 白名單、一次性 code 交換及 STAFF 身分查詢紀錄 | 由 SSO 登入工作台，BPM 驗章並確認有效在職身分與 console 權限；停權回 403，權威來源不可用回 503。 | | |
+| 待辦與核決授權 | Org、AuthZ、BPM | 實際個人／組織 grants、受理人與任務持有人紀錄；流程使用主管或代理時，附主管鏈或有效代理紀錄 | 關閉 mock 後仍能按核准路由派件，寫入前重查任務持有及該流程核決權。依賴主管／代理的流程須能查到權威來源，或取得業務核准的明確受理人／群組。 | | |
+| 服務間呼叫 | recruitment、agent、BPM、網路維運 | 三方 domain／workflow 白名單、HTTPS 端點、分方向憑證參照、允許與拒絕的呼叫紀錄 | recruitment ↔ agent 可按方向驗證，agent-bff 對 BPM 僅能啟動與查詢核准流程；錯 key 或越權呼叫遭拒。 | | |
+| 結案通知通道 | BPM、RabbitMQ 維運、agent | webhook 目的地主機白名單、ACL、HMAC secret 參照、時鐘與 DLQ 告警演練紀錄 | BPM 可送達環境 agent，來源受 ACL 限制；agent 能對原始 body 驗章，測試死信可觸發維運告警。逐案 routing key 另於下表核對。 | | |
+
+### 面談 binding（INTERVIEW）
+
+本機驗證的 workflowCode 為 `recruitment.interview`。
+
+| 待核定項目 | 負責單位 | 要取得的證據 | 通過條件 | SIT 核定值／證據 | UAT 核定值／證據 |
+|---|---|---|---|---|---|
+| Workflow 與部署版本 | 面談業務、BPM、recruitment、agent | 核准 BPMN、workflowCode、bindingVersion、processDefinitionId、processDefinitionKey、本人 issuer | 三方允許面談 workflow；owner 凍結的啟動命令與 BPM 部署版本一致。 | | |
+| 面談表單、題庫與照片 | 面談業務、recruitment、BPM、ECM | 本人表單與題庫版本、照片用途、BPM 送審表單 ID／版本及欄位對照 | 面談快照可還原核准題目、回答與照片引用；內勤開到鎖版表單，submissionId 與本人送件相同。 | | |
+| 同意與效期 | 面談業務、CMS、recruitment | 面談同意文件 ID／版本、效期政策版本、起算點、到期邊界及核准範例 | 送件保存同意版本；以核准範例驗算面談有效性及到期日，結果吻合。 | | |
+| 受理與核決 | 面談業務、Org、AuthZ、BPM | 面談受理人／群組、流程鍵對應的 approval permission、核准結果映射 | 待辦送達核准對象；撤除面談核決權即拒簽，恢復後可完成同一任務。 | | |
+| 結案訂閱 | BPM、RabbitMQ 維運、agent | 部署版本的 process.completed webhook、目的地、queue 名稱及精確 routing key | queue 只綁 `bpm.webhook.<核准面談流程鍵>`，實收事件與該面談案件一致。 | | |
+
+### 聯徵 binding（CREDIT_CHECK）
+
+本機驗證的 workflowCode 為 `recruitment.credit`。
+
+| 待核定項目 | 負責單位 | 要取得的證據 | 通過條件 | SIT 核定值／證據 | UAT 核定值／證據 |
+|---|---|---|---|---|---|
+| Workflow 與部署版本 | 聯徵業務、BPM、recruitment、agent | 核准 BPMN、workflowCode、bindingVersion、processDefinitionId、processDefinitionKey、本人 issuer | 三方允許聯徵 workflow；owner 凍結的啟動命令與該環境部署版本一致。 | | |
+| 聯徵表單與報告 | 聯徵業務、recruitment、BPM、ECM | 正式申請欄位與表單版本、聯徵報告附件要求、BPM 送審表單 ID／版本 | 本人端依核准欄位收件；報告可從原 submission 核對；內勤開到鎖版聯徵表單並讀到同一 submissionId。 | | |
+| 同意與效期 | 聯徵業務、CMS、recruitment | 聯徵同意文件 ID／版本、聯徵效期政策版本、起算點、到期邊界及核准範例 | 送件保存聯徵同意版本；有效性及到期日符合該案核准範例。政策核定前保留未知效期。 | | |
+| 受理與核決 | 聯徵業務、Org、AuthZ、BPM | 聯徵受理人／群組、流程鍵對應的 approval permission、核准結果映射 | 待辦送達核准對象；撤除聯徵核決權即拒簽，恢復後可完成同一任務。 | | |
+| 結案訂閱 | BPM、RabbitMQ 維運、agent | 部署版本的 process.completed webhook、目的地、既有消費端的 queue 名稱及精確 routing key | 消費端以 `bpm.webhook.<核准聯徵流程鍵>` 收到該案通知，原 HMAC 接點驗章成功。 | | |
+
+### 下一輪執行與放行
+
+按順序執行。開始步驟 2 前先建好該案的精確 queue，步驟 3 核准前先延後測試案件的 SQL 輪詢。四個結果欄各自留存對應案件的證據。SIT 通過後，UAT 以該環境的核准帳號、資料與 binding 重走兩案。
+
+| 步驟 | 負責單位 | 要取得的證據 | 通過條件 | SIT 面談 | SIT 聯徵 | UAT 面談 | UAT 聯徵 |
+|---|---|---|---|---|---|---|---|
+| 1. 部署並暫停一般新件 | 環境維運、recruitment、BPM | 部署版本、migration 紀錄、各實例開關、草稿與送件回應、已受理案件的 receipt | 所有實例開啟 worker 並設 intake-paused；草稿可讀、can_submit=false、新命令回 503，重放已受理命令可取回原 receipt。 | | | | |
+| 2. 本人送件與重放 | 業務驗收、Flashlight、recruitment | 在受控入口或驗收時段建立的 submissionId、requestId、traceId、businessKey、快照版本、outbox、BPM receipt | 同一命令重放得到原 submission；依完整 businessKey 只查到一筆 Flowable 實例，receipt 與該案鎖版資料一致。 | | | | |
+| 3. 內勤撤權與恢復 | 業務驗收、AuthZ、BPM | task／form、持有人、撤權與恢復決策、同一任務兩次簽核回應 | 已開啟任務撤權後簽核回 403，原任務保留；恢復後由持有人在同一任務核准。 | | | | |
+| 4. 精確收件與驗章 | BPM、RabbitMQ 維運、agent | 送件前建立的精確 binding、實收 routing key 與 payload、Flowable 歷史實例、錯簽及原簽 HTTP 狀態 | process.completed 的流程鍵等於該案核准鍵，businessKey 與 processInstanceId 均對到原案；錯簽回 401、原簽回 204。 | | | | |
+| 5. 原件對帳與查閱 | recruitment、agent、業務驗收 | 延後輪詢及 webhook 喚醒紀錄、權威查詢回應、兩庫同案識別碼與 revision、本人及管理人頁面 | 核准案例由通知喚醒後重查 BPM，原 submission 更新為 APPROVED@2；本人與當前有權管理人讀回同一結果，跨人或已停權者無法讀取。 | | | | |
+| 6. 排空、復原與放行 | 環境維運、recruitment、BPM、兩案業務窗口 | 暫停與 worker 重啟紀錄、重複／亂序通知、UNCERTAIN 清點、兩庫複核清冊與逐案簽認 | 暫停期間舊件可結案；重啟沿用原鍵，舊事件不覆寫新狀態；UNCERTAIN 停止自動派送並按原鍵查證。兩案均簽認後才開放一般新件，觀察首件 receipt、結案與待對帳數量。 | | | | |
