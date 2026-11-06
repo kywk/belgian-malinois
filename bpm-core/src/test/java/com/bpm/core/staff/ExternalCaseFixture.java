@@ -36,6 +36,9 @@ class ExternalCaseFixture {
         this(ctx, port, false);
     }
     ExternalCaseFixture(ApplicationContext ctx, int port, boolean talent) {
+        this(ctx, port, talent, null);
+    }
+    ExternalCaseFixture(ApplicationContext ctx, int port, boolean talent, String completionHook) {
         String workflow = talent ? "recruitment.credit" : "contract.staff-review";
         String domain = talent ? "recruitment" : "contract-fixture";
         base = "http://127.0.0.1:" + port;
@@ -72,7 +75,7 @@ class ExternalCaseFixture {
         nextForm.setSchemaJson(form.getSchemaJson().replace("note", "vTwoField"));
         ctx.getBean(FormDefinitionRepository.class).saveAndFlush(nextForm);
         var repository = ctx.getBean(RepositoryService.class);
-        definition = deploy(repository, formKey);
+        definition = deploy(repository, formKey, completionHook);
         // Deploy again before POST: an implementation using latest would start the wrong version.
         deploy(repository, formKey);
         db.update("""
@@ -80,12 +83,23 @@ class ExternalCaseFixture {
                 definition_key,definition_id,form_id,form_version,routing_rule,approval_permission,enabled,approved_end,returned_node)
                 VALUES (?,?,'agent-bff',?,'review','bff-contract-review',?,?,1,
                 'review-team',?,1,'endApproved',?)
-                """, workflow, version, domain, definition, form.getId(), StaffTestProvider.APPROVE, talent ? "review" : null);
+                """, workflow, version, domain, definition, form.getId(), StaffTestProvider.APPROVE, talent && completionHook == null ? "review" : null);
     }
     String deploy(RepositoryService repository, String key) {
+        return deploy(repository, key, null);
+    }
+    private String deploy(RepositoryService repository, String key, String completionHook) {
         var model = new BpmnModel();
         var process = new org.flowable.bpmn.model.Process();
         process.setId("bff-contract-review");
+        if (completionHook != null) {
+            var hooks = extension("webhooks");
+            var hook = extension("webhook");
+            hook.addAttribute(new ExtensionAttribute("event", "process.completed"));
+            hook.addAttribute(new ExtensionAttribute("url", completionHook));
+            hooks.addChildElement(hook);
+            process.addExtensionElement(hooks);
+        }
         var start = new StartEvent();
         start.setId("start");
         start.setFormKey(key);
@@ -104,6 +118,13 @@ class ExternalCaseFixture {
         model.addProcess(process);
         var deployed = repository.createDeployment().addBpmnModel("case.bpmn20.xml", model).deploy();
         return repository.createProcessDefinitionQuery().deploymentId(deployed.getId()).singleResult().getId();
+    }
+    private static ExtensionElement extension(String name) {
+        var element = new ExtensionElement();
+        element.setNamespace("http://flowable.org/bpmn");
+        element.setNamespacePrefix("flowable");
+        element.setName(name);
+        return element;
     }
     Map<String, Object> command() {
         String id = UUID.randomUUID().toString();

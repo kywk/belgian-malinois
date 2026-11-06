@@ -1,8 +1,8 @@
 # BPM 內勤後台與 agent BFF 整合規劃
 
-日期：2026-11-05。狀態：契約盤點與施工規劃，尚未實作。
+日期：2026-11-05。實作與環境驗收進度見下方批次紀錄。
 
-第 1 項的具體規格已固定於 [內勤與 agent BFF 契約 v1](contracts/staff-agent-v1/README.md)，包含 API 欄位、權限碼、錯誤、schema 正反例與行為驗收案例。下文的整合施工仍未完成；欄位與映射以 v1 契約為準。
+第 1 項的具體規格已固定於 [內勤與 agent BFF 契約 v1](contracts/staff-agent-v1/README.md)，包含 API 欄位、權限碼、錯誤、schema 正反例與行為驗收案例。欄位與映射以 v1 契約為準。
 
 ## 目標與確定邊界
 
@@ -122,6 +122,8 @@ v1 契約先固定 AGENT transport 與內勤簽核；recruitment TALENT 本人�
 
 ## 具體實作順序與驗收
 
+2026-11-06 第 6 項的跨服務瀏覽器驗收、故障矩陣、依環境切換與回退順序見[整合驗收與切換](../handoff/2026-11-06-integration-cutover.md)。正式放行須補齊手冊中的權威來源。
+
 2026-11-06 第 5 項已實作。依新增決定，準增員本人可用 TALENT actor 啟動指定流程。recruitment 的 worker 驗收、正式來源缺口與三庫重跑方式見[撤權與同步交接](../handoff/2026-11-06-revocation-sync.md)。
 
 2026-11-05 第 2 項實作：批次 1／2 的 BPM 消費端與內勤垂直流程已接線，見 [內勤整合指南](../api/staff-sso-integration.md)。正式身分橋接、IdP／AuthZ 設定與主管／代理等來源能力尚待提供；不以本機合約 provider 測試宣稱正式環境整合完成。
@@ -152,6 +154,6 @@ agent 新程式沿用 `Controller → UseCase → Port → Adapter`，對瀏覽�
 4. 首支業務流程的確切定義／表單版本、內勤受理規則、外勤允許動作與可揭露結果。已派發任務遇撤權／離職時要重派或凍結，由 BPM 規則明定。
 5. agent→BPM 專用服務設定、私有投遞入口的呼叫者白名單與 webhook 目的地。所有投遞／查詢須能追到 businessKey、submission、requestId 與實際 actor。
 
-## 本次交付範圍
+## 2026-11-05 初版交付範圍
 
 本次只建立架構與實作計畫，並更新計畫索引；未修改服務程式、資料庫、憑證或部署設定。文件核對來源、相對連結與 Git whitespace，不重跑程式測試；真實 SSO、AuthZ、組織來源與跨服務 E2E 留在上述批次驗收。未建立新 commit，未 push。
