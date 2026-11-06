@@ -397,7 +397,7 @@ import java.util.stream.Stream;
         // 因此 complete／reassign／delegate 都不會改動任何資料。
         // 未認證 → 401。判斷規則見 TaskHolderGuard（與待辦清單同一份）。
         holderGuard.requireHolder(task, callerId);
-        if (staffAuthorization != null) staffAuthorization.require(task, req);
+        if (staffAuthorization != null) staffAuthorization.requireForUpdate(task, req);
 
         // ── #1：returnTo 只對 complete 有意義 ─────────────────────────
         //

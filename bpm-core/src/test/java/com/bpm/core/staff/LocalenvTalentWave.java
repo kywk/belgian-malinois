@@ -23,6 +23,7 @@ public final class LocalenvTalentWave {
             staff.callbackUrl = "http://127.0.0.1:" + env.get("E2E_UI_PORT") + "/";
             staff.denied.addAll(List.of(StaffPermissions.MANAGE, StaffPermissions.DESIGN, StaffPermissions.AUDIT, StaffPermissions.DEPLOY));
             var app = new SpringApplication(BpmCoreApplication.class);
+            if (env.containsKey("WAVE_RACE_DIR")) app.addPrimarySources(Set.of(WaveRaceConfig.class));
             try (var ctx = app.run("--server.address=127.0.0.1", "--spring.profiles.active=test",
                     "--bpm.staff.enabled=true", "--bpm.security.gateway.enabled=false", "--bpm.security.jwt.dev-secret=",
                     "--bpm.security.jwt.issuer-uri=" + StaffTestProvider.ISSUER,

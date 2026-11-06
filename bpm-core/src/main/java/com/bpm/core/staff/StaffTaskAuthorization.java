@@ -1,7 +1,13 @@
 package com.bpm.core.staff;
 
 import com.bpm.core.dto.TaskActionRequest;
+import javax.sql.DataSource;
+import org.flowable.common.engine.impl.db.HasRevision;
 import org.flowable.engine.RepositoryService;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.server.ResponseStatusException;
 import org.flowable.task.api.Task;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -14,10 +20,25 @@ public class StaffTaskAuthorization {
     private final StaffDirectoryClient directory;
     private final RepositoryService repository;
     private final org.flowable.engine.TaskService tasks;
+    private final JdbcTemplate db;
+
     public StaffTaskAuthorization(StaffIntegrationProperties properties, StaffAuthzClient authz,
-            StaffDirectoryClient directory, RepositoryService repository, org.flowable.engine.TaskService tasks) {
+            StaffDirectoryClient directory, RepositoryService repository, org.flowable.engine.TaskService tasks,
+            @Qualifier("primaryDataSource") DataSource source) {
+        this.db = new JdbcTemplate(source);
         this.properties = properties; this.authz = authz; this.directory = directory; this.repository = repository; this.tasks = tasks;
     }
+    /** Keep the authorized task revision stable until the enclosing primary transaction commits. */
+    public void requireForUpdate(Task task, TaskActionRequest request) {
+        require(task, request);
+        var revisions = db.queryForList(
+                "SELECT REV_ FROM ACT_RU_TASK WITH (UPDLOCK, ROWLOCK) WHERE ID_ = ?",
+                Integer.class, task.getId());
+        if (revisions.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "任務已結束");
+        if (revisions.getFirst() != ((HasRevision) task).getRevision())
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "任務已異動，請重新查詢待辦");
+    }
+
     /** Called after holder guard and before any task mutation, including resolve/reassign. */
     public void require(Task task, TaskActionRequest request) {
         var staff = StaffAuthentication.current();
